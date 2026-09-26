@@ -11,7 +11,7 @@ dependencies = [
 
 [project.optional-dependencies]
 import = ["lxml"]
-dev = ["pytest", "playwright", "lxml"]
+dev = ["pytest", "playwright", "lxml", "pillow"]
 
 [project.scripts]
 svgdeck = "svgdeck.cli:main"
