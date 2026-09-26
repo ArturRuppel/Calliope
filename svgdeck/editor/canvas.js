@@ -1308,13 +1308,12 @@ export class SlideEditor {
       const released = [];
       for (const g of groups) {
         const T = localMatrix(g);
-        const probe = document.createElementNS(SVGNS, "g");
-        g.after(probe);
-        const groupStyle = getComputedStyle(g), neutralStyle = getComputedStyle(probe);
+        // Compare with the actual new parent. A sibling <g> probe would also
+        // match group-specific CSS and hide styles lost when removing a group.
+        const groupStyle = getComputedStyle(g), parentStyle = getComputedStyle(g.parentNode);
         const inherited = Array.from(INHERITED_PRESENTATION)
           .map((p) => [p, groupStyle.getPropertyValue(p)])
-          .filter(([p, value]) => value && value !== neutralStyle.getPropertyValue(p));
-        probe.remove();
+          .filter(([p, value]) => value && value !== parentStyle.getPropertyValue(p));
         for (const child of Array.from(g.children)) {
           if (child.nodeType === 1 && !SKIP.has(child.localName)) {
             const computed = getComputedStyle(child);

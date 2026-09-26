@@ -79,7 +79,8 @@ def test_media_worker_does_not_block_reads_or_saves(tmp_path, monkeypatch):
             assert not first.done() and not second.done()
         finally:
             release.set()
-            results = await asyncio.gather(first, *([second] if second else []))
+            results = await asyncio.wait_for(
+                asyncio.gather(first, *([second] if second else [])), 5)
         assert all(status == 200 for status, _ in results)
 
     asyncio.run(scenario())

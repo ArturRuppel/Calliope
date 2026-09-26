@@ -40,7 +40,9 @@ H.264 mp4 on upload so every browser can play them).
   proportions; Shift frees them) or rotate. Drag on empty space to select
   several, or turn on *Select several* in the toolbar so taps add to (or take
   out of) the selection. Several objects can be grouped, aligned and spaced
-  evenly from the panel; a single object aligns with the slide.
+  evenly from the panel; a single object aligns with the slide. Movies must
+  stay outside groups; grouping them or pasting them into a group is refused
+  so they remain playable.
 - The grid button snaps moves, resizes, line ends and new shapes to a grid.
   The spacing (and showing the grid) is set in the panel with nothing
   selected.

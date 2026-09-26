@@ -199,3 +199,20 @@ def test_ungroup_refuses_computed_filter(page):
       return {groupPresent: g.isConnected, filter: getComputedStyle(g).filter};
     }""")
     assert result == {"groupPresent": True, "filter": "blur(2px)"}
+
+
+def test_ungroup_preserves_styles_from_group_element_selector(page):
+    result = page.evaluate("""() => {
+      const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      const style = document.createElementNS(ns, 'style');
+      style.textContent = 'g { fill: rgb(12,34,56); font-size: 2em; }';
+      const g = document.createElementNS(ns, 'g');
+      const text = document.createElementNS(ns, 'text');
+      text.textContent = 'Keep this style';
+      g.append(text); e.svg.append(style,g);
+      const before = [getComputedStyle(text).fill, getComputedStyle(text).fontSize];
+      e.select([g]); e.ungroup();
+      const after = [getComputedStyle(text).fill, getComputedStyle(text).fontSize];
+      return {before,after};
+    }""")
+    assert result['after'] == result['before']
