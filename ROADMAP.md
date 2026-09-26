@@ -105,8 +105,7 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Stacking order, undo/redo, autosave to the service.
 - Also done: group/ungroup, lock, copy/paste across slides, pinch zoom,
   font upload, save-conflict detection, service on sancho.
-- Known limits: strokes of freehand paths scale when resized; no
-  snapping yet.
+- Known limits: strokes of freehand paths scale when resized.
 
 ### 3. Editor, second pass
 - Done 2026-09-26: rich text (editing keeps formatting; bold, italic,
