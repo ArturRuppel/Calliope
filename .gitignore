@@ -1,0 +1,9 @@
+# Font files are licensed; they belong with the private decks, never here.
+*.otf
+*.ttf
+*.woff
+*.woff2
+
+__pycache__/
+.venv/
+node_modules/
