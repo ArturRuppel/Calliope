@@ -61,6 +61,8 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .ov-group { fill: none; stroke: #9aa5b1; stroke-dasharray: 6 4; }
 .ov-marquee { fill: rgba(47, 111, 219, .08); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
+/* Line ends: hollow rings, so arrowheads under them stay visible. */
+.ov-end { fill: rgba(47, 111, 219, .12); stroke: var(--accent); }
 .text-edit { position: absolute; z-index: 5; margin: 0; padding: 2px 4px; border: 1.5px solid var(--accent); border-radius: 3px;
   background: rgba(255, 255, 255, .92); outline: none; resize: none; overflow: hidden; white-space: pre;
   -webkit-user-select: text; user-select: text; }

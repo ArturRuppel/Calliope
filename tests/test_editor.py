@@ -1,4 +1,5 @@
 """The editor, end to end: a real server, headless Chromium, mouse gestures."""
+import os
 import re
 import socket
 import threading
@@ -11,6 +12,7 @@ from svgdeck.server import create_app
 from svgdeck.store import Store
 
 playwright = pytest.importorskip("playwright.sync_api")
+BROWSER = os.environ.get("SVGDECK_BROWSER", "chromium")  # webkit = the iPad's engine
 
 
 @pytest.fixture
@@ -33,7 +35,7 @@ def server(tmp_path):
 def page(server):
     url, _ = server
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = getattr(p, BROWSER).launch()
         page = browser.new_page(viewport={"width": 1400, "height": 900})
         errors = []
         page.on("pageerror", lambda e: errors.append(e))
@@ -66,31 +68,35 @@ def saved_slide(page, server):
     return (data / "decks" / "talk" / "slides" / f"{sid}.svg").read_text()
 
 
+def attrs(tag):
+    return {k: float(v) for k, v in re.findall(r'\b(x|y|width|height)="([-\d.]+)"', tag)}
+
+
+def main_rect(svg):
+    return re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
+
+
 def test_draw_move_resize_undo(page, server):
     page.keyboard.press("r")
     drag(page, (200, 200), (600, 400))
-    svg = saved_slide(page, server)
-    rect = re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
-    assert 'x="200"' in rect and 'width="400"' in rect
+    a = attrs(main_rect(saved_slide(page, server)))
+    assert a == pytest.approx({"x": 200, "y": 200, "width": 400, "height": 200}, abs=2)
 
     # Move it: geometry changes, no transform (baked).
     drag(page, (400, 300), (500, 350))
-    svg = saved_slide(page, server)
-    rect = re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
-    assert 'x="300"' in rect and 'y="250"' in rect and "transform" not in rect
+    rect = main_rect(saved_slide(page, server))
+    assert attrs(rect) == pytest.approx({"x": 300, "y": 250, "width": 400, "height": 200}, abs=2)
+    assert "transform" not in rect
 
     # Resize from the bottom-right handle (corner keeps aspect ratio).
-    drag(page, (700, 450), (900, 550))
-    svg = saved_slide(page, server)
-    rect = re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
-    assert 'width="600"' in rect and 'height="300"' in rect
+    right, bottom = a["x"] + 100 + a["width"], a["y"] + 50 + a["height"]
+    drag(page, (right, bottom), (right + 200, bottom + 100))
+    assert attrs(main_rect(saved_slide(page, server))) == pytest.approx({"x": 300, "y": 250, "width": 600, "height": 300}, abs=5)
 
     page.keyboard.press("Control+z")
-    svg = saved_slide(page, server)
-    assert 'width="400"' in re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
+    assert attrs(main_rect(saved_slide(page, server)))["width"] == pytest.approx(400, abs=2)
     page.keyboard.press("Control+Shift+z")
-    svg = saved_slide(page, server)
-    assert 'width="600"' in re.search(r"<rect [^>]*style=\"fill[^>]*>", svg).group(0)
+    assert attrs(main_rect(saved_slide(page, server)))["width"] == pytest.approx(600, abs=5)
 
 
 def test_background_is_not_selectable(page):
@@ -164,7 +170,7 @@ def test_upload_image(page, server, tmp_path):
     svg = saved_slide(page, server)
     href = re.search(r'<image [^>]*href="([^"]+)"', svg).group(1)
     assert href.startswith("../media/photo-") and href.endswith(".png")
-    assert 'width="400"' in re.search(r"<image [^>]*>", svg).group(0)
+    assert attrs(re.search(r"<image [^>]*>", svg).group(0))["width"] == 400
 
 
 def test_copy_paste(page, server):
@@ -194,3 +200,171 @@ def test_conflicting_save_is_refused(page, server):
     drag(page, (100, 100), (300, 300))
     page.wait_for_function("document.getElementById('status').textContent.includes('Conflict')")
     assert "#fefefe" in path.read_text() and "<rect x" not in path.read_text()
+
+
+# --- bugs reported from the iPad (2026-09-26) ------------------------------------------
+def dark_pixels(page, x, y, r=40):
+    """Dark pixels in a square around a slide point (what is actually drawn)."""
+    from io import BytesIO
+    from PIL import Image
+    sx, sy = to_screen(page, x, y)
+    zoom = page.evaluate("svgdeckEditor.editor.zoom")
+    half = max(4, r * zoom)
+    png = page.screenshot(clip={"x": sx - half, "y": sy - half, "width": 2 * half, "height": 2 * half})
+    im = Image.open(BytesIO(png)).convert("L")
+    return sum(1 for v in im.getdata() if v < 100)
+
+
+def panel_button(page, label):
+    page.locator("#panel button", has_text=label).first.click()
+
+
+def test_single_arrowhead_appears(page, server):
+    page.keyboard.press("l")
+    drag(page, (300, 500), (1300, 500))
+    plain = dark_pixels(page, 1300, 500)  # with the selection showing, as on the iPad
+    panel_button(page, "End")
+    page.wait_for_timeout(100)
+    assert dark_pixels(page, 1300, 500) > plain * 1.5, "end arrowhead not drawn"
+    assert dark_pixels(page, 300, 500) <= plain * 1.2, "start got an arrowhead too"
+
+
+def test_arrowhead_follows_line_colour(page, server):
+    page.keyboard.press("a")
+    drag(page, (300, 500), (1300, 500))
+    page.locator("#panel .swatch[title='#d62728']").nth(1).click()  # second colour row: the line
+    svg = saved_slide(page, server)
+    marker = re.search(r'marker-end: url\(&quot;#([^&]+)&quot;\)|marker-end: ?url\(#([^)]+)\)', svg)
+    mid = marker.group(1) or marker.group(2)
+    tip = re.search(rf'<marker id="{mid}"[^>]*>.*?</marker>', svg, re.S).group(0)
+    assert re.search(r'fill="(#d62728|rgb\(214, 39, 40\))"', tip)
+
+
+def test_fill_colour_changes(page, server):
+    page.keyboard.press("r")
+    drag(page, (200, 200), (600, 400))
+    page.locator("#panel .swatch[title='#d62728']").first.click()
+    assert page.evaluate("getComputedStyle(svgdeckEditor.editor.selection[0]).fill") == "rgb(214, 39, 40)"
+    # The panel shows the new colour as chosen.
+    assert page.locator("#panel .swatch.on").first.get_attribute("title") == "#d62728"
+
+
+def test_imported_text_colour_changes(page, server):
+    # Like the Inkscape import: the text element says white, the spans say black.
+    page.evaluate("""(() => { const e = svgdeckEditor.editor;
+      e.change(() => {
+        const ns = 'http://www.w3.org/2000/svg', t = document.createElementNS(ns, 'text');
+        t.setAttribute('style', 'font-size:40px;fill:#ffffff');
+        const line = document.createElementNS(ns, 'tspan'); line.setAttribute('x', '200'); line.setAttribute('y', '300');
+        const a = document.createElementNS(ns, 'tspan'); a.setAttribute('style', 'fill:#000000'); a.textContent = 'Mostly ';
+        const b = document.createElementNS(ns, 'tspan'); b.setAttribute('style', 'fill:#000000;font-weight:700'); b.textContent = 'bold';
+        line.append(a, b); t.append(line); e.svg.append(t); e.selection = [t];
+      }); })()""")
+    page.evaluate("svgdeckEditor.editor.select(svgdeckEditor.editor.selection)")
+    assert page.locator("#panel .swatch.on").first.get_attribute("title") == "#000000"
+    page.locator("#panel .swatch[title='#d62728']").first.click()
+    fills = page.evaluate("Array.from(svgdeckEditor.editor.svg.querySelectorAll('text tspan tspan')).map(s => getComputedStyle(s).fill)")
+    assert fills == ["rgb(214, 39, 40)", "rgb(214, 39, 40)"]
+
+
+def test_alignment_keeps_the_text_box_in_place(page, server):
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 400, 300))
+    page.keyboard.type("A much longer first line")
+    page.keyboard.press("Enter")
+    page.keyboard.type("short")
+    page.keyboard.press("Escape")
+    box = lambda: page.evaluate("(() => { const b = svgdeckEditor.editor.selection[0].getBBox(); return [b.x, b.width]; })()")
+    # Screen position (WebKit has no getBBox for tspans).
+    short_left = lambda: page.evaluate("svgdeckEditor.editor.selection[0].querySelectorAll('tspan')[1].getBoundingClientRect().left / svgdeckEditor.editor.zoom")
+    x0, w0 = box()
+    left0 = short_left()
+    for label, expect in (("Centre", x0 + w0 / 2), ("Right", x0 + w0), ("Left", x0)):
+        panel_button(page, label)
+        x, w = box()
+        assert x == pytest.approx(x0, abs=2) and w == pytest.approx(w0, abs=2), f"{label} moved the text box"
+    panel_button(page, "Centre")
+    assert short_left() > left0 + 50, "short line not centred under the long one"
+
+
+def add_scaled_group(page):
+    """A group scaled 2x and moved, like much of the imported talk."""
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const g = document.createElementNS(ns, 'g'); g.setAttribute('transform', 'matrix(2,0,0,2,100,50)');
+        const r = document.createElementNS(ns, 'rect');
+        for (const [k, v] of Object.entries({x: 50, y: 50, width: 100, height: 50, fill: '#888', stroke: '#000', 'stroke-width': 1}))
+          r.setAttribute(k, v);
+        g.append(r); e.svg.append(g); e.selection = [g];
+      }); })()""")
+
+
+def test_drawing_inside_a_scaled_group_lands_where_drawn(page, server):
+    add_scaled_group(page)
+    page.evaluate("svgdeckEditor.editor.enterGroup(svgdeckEditor.editor.selection[0])")
+    page.keyboard.press("r")
+    drag(page, (800, 600), (1000, 700))
+    box = page.evaluate("""(() => { const e = svgdeckEditor.editor, el = e.selection[0];
+      const r = el.getBoundingClientRect(), p = e.page.getBoundingClientRect();
+      return [(r.left - p.left) / e.zoom, (r.top - p.top) / e.zoom, r.width / e.zoom, r.height / e.zoom,
+              el.parentNode.localName]; })()""")
+    assert box[4] == "g"
+    assert box[:4] == pytest.approx([800, 600, 200, 100], abs=6)  # includes the stroke
+
+
+def test_stroke_width_is_in_slide_pixels(page, server):
+    add_scaled_group(page)
+    page.evaluate("svgdeckEditor.editor.enterGroup(svgdeckEditor.editor.selection[0])")
+    page.evaluate("svgdeckEditor.editor.select([svgdeckEditor.editor.context.querySelector('rect')])")
+    width = page.locator("#panel .row", has_text="Width").locator("input")
+    assert float(width.input_value()) == pytest.approx(2)  # 1 unit, drawn 2x
+    width.fill("8")
+    width.press("Enter")
+    assert page.evaluate("svgdeckEditor.editor.strokeWidthOf(svgdeckEditor.editor.selection[0])") == pytest.approx(8)
+
+
+def test_dragging_a_line_end(page, server):
+    page.keyboard.press("l")
+    drag(page, (300, 500), (900, 500))
+    drag(page, (900, 500), (900, 800))
+    svg = saved_slide(page, server)
+    line = re.search(r"<line [^>]*>", svg).group(0)
+    ends = {k: float(v) for k, v in re.findall(r'\b(x1|y1|x2|y2)="([-\d.]+)"', line)}
+    assert ends == pytest.approx({"x1": 300, "y1": 500, "x2": 900, "y2": 800}, abs=3)
+
+
+def test_copy_paste_buttons_across_slides(page, server):
+    page.keyboard.press("e")
+    drag(page, (100, 100), (300, 200))
+    panel_button(page, "Copy")
+    page.click("#slide-add")
+    page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2")
+    panel_button(page, "Paste")
+    assert "<ellipse" in saved_slide(page, server)
+
+
+def test_editing_imported_rich_text_keeps_its_font_and_size(page, server):
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const t = document.createElementNS(ns, 'text');
+        t.setAttribute('style', 'font-size:10px;font-family:serif;fill:#ffffff');
+        t.setAttribute('transform', 'matrix(4,0,0,4,0,0)');
+        const lines = [['Mostly ', 'imaging'], ['Second ', 'line']].map(([a, b], i) => {
+          const line = document.createElementNS(ns, 'tspan'); line.setAttribute('x', '50'); line.setAttribute('y', String(80 + i * 15));
+          const s1 = document.createElementNS(ns, 'tspan'); s1.setAttribute('style', 'font-family:monospace;font-size:12px;fill:#123456'); s1.textContent = a;
+          const s2 = document.createElementNS(ns, 'tspan'); s2.setAttribute('style', 'font-family:monospace;font-size:12px;font-weight:700;fill:#123456'); s2.textContent = b;
+          line.append(s1, s2); return line;
+        });
+        t.append(...lines); e.svg.append(t); e.selection = [t];
+      }); })()""")
+    page.once("dialog", lambda d: d.accept())
+    page.keyboard.press("Enter")  # edit the selected text
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("End")
+    page.keyboard.type(" data")
+    page.keyboard.press("Escape")
+    t = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), s = t.querySelector('tspan');
+      const cs = getComputedStyle(s);
+      return [cs.fontFamily, cs.fontSize, cs.fill, Array.from(t.querySelectorAll('tspan')).map(x => [x.textContent, x.getAttribute('y')])]; })()""")
+    assert t[0] == "monospace" and t[1] == "12px" and t[2] == "rgb(18, 52, 86)"
+    assert t[3] == [["Mostly imaging", "80"], ["Second line data", "95"]]  # line spacing kept

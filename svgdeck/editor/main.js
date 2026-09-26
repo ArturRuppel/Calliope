@@ -1,5 +1,5 @@
 // svgdeck editor: deck state, saving, undo, slide strip, toolbar, properties.
-import { SlideEditor } from "./canvas.js";
+import { SlideEditor, firstGlyphElement, cssFamily } from "./canvas.js";
 import { prefixIds, toHex } from "./geom.js";
 
 const DECK = document.body.dataset.deck;
@@ -115,6 +115,7 @@ function defaultFamily() {
 // --- saving ---------------------------------------------------------------------------
 function markDirty(id, text) {
   const rec = state.slides.get(id);
+  if (!rec) return;
   rec.text = text;
   rec.dirty = true;
   setStatus("Unsaved", "dirty");
@@ -125,7 +126,7 @@ function markDirty(id, text) {
 
 async function save(id) {
   const rec = state.slides.get(id);
-  if (!rec.dirty || rec.conflict) return;
+  if (!rec || !rec.dirty || rec.conflict) return;
   if (rec.saving) { rec.again = true; return; }
   rec.saving = true;
   const text = rec.text;
@@ -250,7 +251,9 @@ async function moveSlide(delta) {
   [slides[i], slides[j]] = [slides[j], slides[i]];
   await putDeck({ ...state.deck, slides });
   renderStrip();
-  await openSlide(state.current);
+  $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
+  history.replaceState(null, "", `#${index() + 1}`);
+  renderPanel();
 }
 
 async function deleteSlide() {
@@ -423,7 +426,8 @@ function renderPanel() {
     const bg = svg && (svg.querySelector('[data-label="background"]') || svg.querySelector("[data-locked='true']"));
     parts.push(section(`Slide ${index() + 1} of ${state.deck.slides.length}`,
       bg ? row("Background", colorControl(getComputedStyle(bg).fill, (c) => editor.setStyle("fill", c, [bg]), false)) : null,
-      buttonRow([["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()]])));
+      buttonRow([["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()],
+                 clipboardData() ? ["Paste", "Paste copied objects (Ctrl+V)", pasteClipboard] : null].filter(Boolean))));
     parts.push(section("New shapes",
       row("Fill", colorControl(state.prefs.fill, (c) => { state.prefs.fill = c; savePrefs(); renderPanel(); }, true)),
       row("Line", colorControl(state.prefs.stroke, (c) => { state.prefs.stroke = c; savePrefs(); renderPanel(); }, true)),
@@ -439,7 +443,7 @@ function renderPanel() {
   }
 
   const first = sel[0];
-  const cs = getComputedStyle(first);
+  const cs = getComputedStyle(lookOf(first));
   const kinds = new Set(sel.map((e) => e.localName));
   const isMovie = sel.length === 1 && first.hasAttribute("data-video");
   const texts = sel.filter((e) => e.localName === "text");
@@ -453,9 +457,9 @@ function renderPanel() {
       !texts.length || kinds.size > 1 ? row("Fill", colorControl(cs.fill, (c) => { editor.setStyle("fill", c); if (c !== "none") { state.prefs.fill = c; savePrefs(); } }, true)) : null,
       row(texts.length && kinds.size === 1 ? "Colour" : "Line", texts.length && kinds.size === 1
         ? colorControl(cs.fill, (c) => { editor.setStyle("fill", c); state.prefs.textFill = c; savePrefs(); }, false)
-        : colorControl(cs.stroke, (c) => { editor.setStyle("stroke", c); if (c !== "none") { state.prefs.stroke = c; savePrefs(); } }, true)),
-      !(texts.length && kinds.size === 1) ? row("Width", numberControl(parseFloat(cs.strokeWidth) || 0, { min: 0, max: 200, step: 0.5 },
-        (v) => { editor.setStyle("stroke-width", String(v)); state.prefs.strokeWidth = v; savePrefs(); })) : null,
+        : colorControl(cs.stroke, (c) => { setStroke(sel, c); if (c !== "none") { state.prefs.stroke = c; savePrefs(); } }, true)),
+      !(texts.length && kinds.size === 1) ? row("Width", numberControl(+editor.strokeWidthOf(lookOf(first)).toFixed(2), { min: 0, max: 200, step: 0.5 },
+        (v) => { setStrokeWidth(sel, v); state.prefs.strokeWidth = v; savePrefs(); })) : null,
       row("Opacity", numberControl(Math.round((parseFloat(cs.opacity) || 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else {
@@ -474,7 +478,7 @@ function renderPanel() {
     const famSelect = el("select", {}, [...new Set([family, ...fams])].map((f) => el("option", { value: f, selected: f === family }, f)));
     famSelect.addEventListener("change", async () => {
       await ensureFamily(famSelect.value);
-      editor.setStyle("font-family", `'${famSelect.value}'`, texts);
+      editor.setStyle("font-family", cssFamily(famSelect.value), texts);
       state.prefs.family = famSelect.value; savePrefs();
     });
     const weights = [...new Set(state.faces.filter((f) => f.family === family && f.style === "normal").map((f) => f.weight))].sort((a, b) => a - b);
@@ -490,9 +494,9 @@ function renderPanel() {
         editor.change(() => { for (const t of texts) editor.applyStyle(t, "font-size", `${+(v / editor.textScale(t)).toFixed(4)}px`); });
         state.prefs.size = v; savePrefs();
       })),
-      row("Align", buttonRow([["Left", "Align start", () => editor.setStyle("text-anchor", "start", texts), anchor === "start"],
-                              ["Centre", "Align middle", () => editor.setStyle("text-anchor", "middle", texts), anchor === "middle"],
-                              ["Right", "Align end", () => editor.setStyle("text-anchor", "end", texts), anchor === "end"]])),
+      row("Align", buttonRow([["Left", "Align lines left", () => editor.setAlign("start", texts), anchor === "start"],
+                              ["Centre", "Centre lines", () => editor.setAlign("middle", texts), anchor === "middle"],
+                              ["Right", "Align lines right", () => editor.setAlign("end", texts), anchor === "end"]])),
       buttonRow([["Edit text", "Or double-tap the text", () => editor.editText(texts[0], false)]])));
   }
 
@@ -519,6 +523,9 @@ function renderPanel() {
   parts.push(section("Arrange",
     buttonRow([["To front", "Bring to front", () => editor.order("front")], ["Forward", "Bring forward", () => editor.order("forward")],
                ["Backward", "Send backward", () => editor.order("backward")], ["To back", "Send to back", () => editor.order("back")]]),
+    buttonRow([["Copy", "Ctrl+C — paste on any slide", () => copySelection(false)],
+               ["Cut", "Ctrl+X", () => copySelection(true)],
+               clipboardData() ? ["Paste", "Ctrl+V", pasteClipboard] : null].filter(Boolean)),
     buttonRow([["Duplicate", "Ctrl+D", () => editor.duplicate()],
                sel.length > 1 ? ["Group", "Ctrl+G", () => editor.group()] : null,
                kinds.has("g") ? ["Ungroup", "Ctrl+Shift+G", () => editor.ungroup()] : null,
@@ -527,11 +534,35 @@ function renderPanel() {
   panel.replaceChildren(...parts);
 }
 
-function firstGlyphElement(t) {
-  const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT);
-  let n;
-  while ((n = walker.nextNode())) if (n.data.trim()) return n.parentNode;
-  return t;
+/** The element whose style shows an object's look: a text's first glyph, a
+ *  group's first drawn shape. */
+function lookOf(obj) {
+  if (obj.localName === "text") return firstGlyphElement(obj);
+  if (obj.localName === "g" || obj.localName === "a") {
+    return obj.querySelector("path, rect, ellipse, circle, line, polyline, polygon, text") || obj;
+  }
+  return obj;
+}
+
+/** Stroke width typed in slide pixels, stored in each object's own units. */
+function setStrokeWidth(sel, px) {
+  editor.change(() => {
+    for (const obj of sel) editor.applyStyle(obj, "stroke-width", String(+(px / editor.scaleOf(obj)).toFixed(4)));
+    editor.recolorMarkers(sel);
+  });
+}
+
+/** A stroke colour should be visible: give objects without a stroke width one. */
+function setStroke(sel, color) {
+  editor.change(() => {
+    for (const obj of sel) {
+      editor.applyStyle(obj, "stroke", color);
+      if (color !== "none" && editor.strokeWidthOf(obj) === 0) {
+        editor.applyStyle(obj, "stroke-width", String(+(state.prefs.strokeWidth / editor.scaleOf(obj)).toFixed(4)));
+      }
+    }
+    editor.recolorMarkers(sel);
+  });
 }
 
 function weightName(w) {
@@ -563,19 +594,11 @@ document.addEventListener("keydown", (e) => {
   if (mod && k === "g") { e.preventDefault(); (e.shiftKey ? editor.ungroup() : editor.group()); return; }
   if (mod && k === "a") { e.preventDefault(); editor.select(editor.children()); return; }
   if (mod && (k === "c" || k === "x")) {
-    const data = editor.copy();
-    if (data) {
-      e.preventDefault();
-      try { localStorage.setItem("svgdeck-clipboard", data); } catch (err) { state.clipboard = data; }
-      state.clipboard = data;
-      if (k === "x") editor.deleteSelection();
-    }
+    if (editor.selection.length) { e.preventDefault(); copySelection(k === "x"); }
     return;
   }
   if (mod && k === "v") {
-    let data = state.clipboard;
-    try { data = localStorage.getItem("svgdeck-clipboard") || data; } catch (err) { /* ignore */ }
-    if (data && editor.paste(data)) e.preventDefault();
+    if (clipboardData()) { e.preventDefault(); pasteClipboard(); }
     return;
   }
   if (mod) return;
@@ -597,6 +620,25 @@ document.addEventListener("keydown", (e) => {
   }
   if (KEYS[k]) setTool(KEYS[k]);
 });
+
+// The clipboard lives in localStorage, so it works across slides and decks.
+function copySelection(cut) {
+  const data = editor.copy();
+  if (!data) return;
+  state.clipboard = data;
+  try { localStorage.setItem("svgdeck-clipboard", data); } catch (err) { /* private mode: memory only */ }
+  if (cut) editor.deleteSelection();
+  else { toast(`Copied ${editor.selection.length} object${editor.selection.length === 1 ? "" : "s"}.`, 1500); renderPanel(); }
+}
+
+function clipboardData() {
+  try { return localStorage.getItem("svgdeck-clipboard") || state.clipboard; } catch (err) { return state.clipboard; }
+}
+
+function pasteClipboard() {
+  const data = clipboardData();
+  if (data) editor.paste(data);
+}
 
 function undo() {
   const rec = state.slides.get(state.current);
@@ -624,7 +666,12 @@ function wire() {
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
   $("zoom-out").onclick = () => editor.zoomBy(0.8);
   $("zoom-fit").onclick = () => editor.fit();
-  $("present").onclick = async () => { await flush(); window.open(`/d/${DECK}/#${index() + 1}`, "_blank"); };
+  $("present").onclick = async () => {
+    const url = `/d/${DECK}/#${index() + 1}`;
+    const win = window.open("about:blank", "_blank");
+    await flush();
+    if (win) win.location.href = url; else location.href = url;
+  };
   $("export").onclick = async (e) => {
     e.preventDefault();
     await flush();

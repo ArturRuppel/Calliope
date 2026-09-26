@@ -1,18 +1,29 @@
 // The slide canvas: shows one slide SVG and edits it in place.
 // Pointer events throughout, so mouse, finger and Apple Pencil share one path.
 import {
-  SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, simplify, smoothPath, polylinePath,
+  SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, simplify, smoothPath, polylinePath, toHex,
 } from "./geom.js";
 
-const HANDLE_PX = 16;          // handle hit radius, screen pixels
-const ROTATE_OFFSET_PX = 36;   // rotate handle distance above the box
-const TAP_PX = 6;              // movement below this is a tap
+const HANDLE_PX = { mouse: 12, pen: 14, touch: 24 };  // handle hit radius, screen pixels
+const ROTATE_OFFSET_PX = 40;   // rotate handle distance above the box
+const TAP_PX = { mouse: 5, pen: 8, touch: 14 };      // movement below this is a tap
 const DOUBLE_TAP_MS = 350;
 const BAKEABLE = new Set(["rect", "image", "ellipse", "circle", "line"]);
 const SKIP = new Set(["defs", "title", "desc", "metadata", "style", "script"]);
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 
 const num = (el, name) => parseFloat(el.getAttribute(name)) || 0;
+const GENERIC = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"]);
+/** A family name as CSS: generic names bare, real ones quoted. */
+export const cssFamily = (f) => (GENERIC.has(f) ? f : `'${f.replace(/'/g, "")}'`);
+
+/** The element holding a text's first visible character (where its look is). */
+export function firstGlyphElement(t) {
+  const walker = document.createTreeWalker(t, NodeFilter.SHOW_TEXT);
+  let n;
+  while ((n = walker.nextNode())) if (n.data.trim()) return n.parentNode;
+  return t;
+}
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 
 export class SlideEditor {
@@ -213,6 +224,17 @@ export class SlideEditor {
     return unionBox(this.selection.map((el) => rootBox(el, this.svg)));
   }
 
+  /** A single straight line is edited by its two ends, not a box. */
+  lineMode() {
+    return this.selection.length === 1 && this.selection[0].localName === "line" ? this.selection[0] : null;
+  }
+
+  lineEnds(line) {
+    const m = toRoot(line, this.svg);
+    return [m.transformPoint(new DOMPoint(num(line, "x1"), num(line, "y1"))),
+            m.transformPoint(new DOMPoint(num(line, "x2"), num(line, "y2")))];
+  }
+
   handlePositions(box) {
     const { x, y, width: w, height: h } = box;
     return {
@@ -222,14 +244,22 @@ export class SlideEditor {
     };
   }
 
-  hitHandle(p) {
+  hitHandle(p, pointerType = "mouse") {
     if (!this.selection.length || this.tool !== "select") return null;
+    const radius = HANDLE_PX[pointerType] || HANDLE_PX.mouse;
+    const line = this.lineMode();
+    if (line) {
+      const ends = this.lineEnds(line);
+      const d = ends.map((q) => Math.hypot(p.x - q.x, p.y - q.y));
+      const i = d[0] <= d[1] ? 0 : 1;
+      return d[i] <= radius / this.zoom ? (i ? "end2" : "end1") : null;
+    }
     const box = this.selectionBox();
     if (!box) return null;
     // Inside the object, handles only win right at their centre, so small
     // objects can still be dragged and double-tapped.
     const inside = p.x > box.x && p.x < box.x + box.width && p.y > box.y && p.y < box.y + box.height;
-    const r = (inside ? 7 : HANDLE_PX) / this.zoom;
+    const r = (inside ? 7 : radius) / this.zoom;
     const positions = this.handlePositions(box);
     let best = null, bestDist = Infinity;
     for (const name of ["rotate", ...HANDLES]) {
@@ -265,16 +295,23 @@ export class SlideEditor {
       const b = rootBox(el, this.svg);
       if (b) make("rect", { x: b.x, y: b.y, width: b.width, height: b.height, class: "ov-item", "stroke-width": px });
     }
+    const line = this.lineMode();
+    if (line && !this.textEdit) {
+      for (const q of this.lineEnds(line)) {
+        make("circle", { cx: q.x, cy: q.y, r: 11 * px, class: "ov-end", "stroke-width": 2 * px });
+      }
+      return;
+    }
     const box = this.selectionBox();
     if (!box || this.textEdit) return;
     make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px });
     if (this.tool !== "select") return;
     const pos = this.handlePositions(box);
     make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px });
-    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 7 * px, class: "ov-handle", "stroke-width": 1.5 * px });
+    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px });
     for (const name of HANDLES) {
       const [hx, hy] = pos[name];
-      make("rect", { x: hx - 6 * px, y: hy - 6 * px, width: 12 * px, height: 12 * px, rx: 2 * px,
+      make("rect", { x: hx - 7 * px, y: hy - 7 * px, width: 14 * px, height: 14 * px, rx: 3 * px,
         class: "ov-handle", "stroke-width": 1.5 * px });
     }
   }
@@ -350,6 +387,10 @@ export class SlideEditor {
     this.host.setPointerCapture(e.pointerId);
     e.preventDefault();
 
+    if (e.pointerType === "touch" && this.gesture && this.gesture.pointerType === "pen") {
+      this.pointers.delete(e.pointerId);  // a palm or finger while the Pencil is down
+      return;
+    }
     const touches = [...this.pointers.values()].filter((p) => p.type === "touch");
     if (touches.length === 2) {
       this.cancelGesture();
@@ -368,7 +409,8 @@ export class SlideEditor {
     }
     if (e.button !== 0 && e.pointerType === "mouse") return;
 
-    const base = { id: e.pointerId, start: p, now: p, client: { x: e.clientX, y: e.clientY }, moved: false, shift: e.shiftKey };
+    const base = { id: e.pointerId, pointerType: e.pointerType, start: p, now: p, client: { x: e.clientX, y: e.clientY },
+      moved: false, shift: e.shiftKey };
     switch (this.tool) {
       case "select": return this.downSelect(e, p, base);
       case "pen": return this.downPen(p, base);
@@ -378,7 +420,15 @@ export class SlideEditor {
   }
 
   downSelect(e, p, base) {
-    const handle = this.hitHandle(p);
+    const handle = this.hitHandle(p, e.pointerType);
+    if (handle === "end1" || handle === "end2") {
+      this.begin();
+      const line = this.lineMode();
+      const which = handle === "end1" ? 1 : 2;
+      this.gesture = { kind: "endpoint", ...base, line, which, inverse: toRoot(line, this.svg).inverse(),
+        original: [line.getAttribute(`x${which}`), line.getAttribute(`y${which}`)] };
+      return;
+    }
     if (handle) {
       this.begin();
       const box = this.selectionBox();
@@ -420,7 +470,7 @@ export class SlideEditor {
     path.setAttribute("stroke-linecap", "round");
     path.setAttribute("stroke-linejoin", "round");
     this.begin();
-    this.context.appendChild(path);
+    this.adopt(path);
     this.gesture = { kind: "draw", ...base, path, points: [[p.x, p.y]] };
     path.setAttribute("d", polylinePath(this.gesture.points));
   }
@@ -442,7 +492,8 @@ export class SlideEditor {
     }
     const p = this.point(e);
     g.now = p;
-    if (!g.moved && Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) < TAP_PX) return;
+    const tapPx = TAP_PX[e.pointerType] || TAP_PX.mouse;
+    if (!g.moved && Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) < tapPx) return;
     g.moved = true;
     switch (g.kind) {
       case "move": {
@@ -453,6 +504,19 @@ export class SlideEditor {
         break;
       }
       case "resize": this.moveResize(g, p, e.shiftKey); break;
+      case "endpoint": {
+        let q = p;
+        if (e.shiftKey) {
+          const other = this.lineEnds(g.line)[g.which === 1 ? 1 : 0];
+          const angle = Math.round(Math.atan2(p.y - other.y, p.x - other.x) / (Math.PI / 4)) * (Math.PI / 4);
+          const len = Math.hypot(p.x - other.x, p.y - other.y);
+          q = { x: other.x + Math.cos(angle) * len, y: other.y + Math.sin(angle) * len };
+        }
+        const local = g.inverse.transformPoint(new DOMPoint(q.x, q.y));
+        g.line.setAttribute(`x${g.which}`, String(+local.x.toFixed(2)));
+        g.line.setAttribute(`y${g.which}`, String(+local.y.toFixed(2)));
+        break;
+      }
       case "rotate": {
         const [cx, cy] = g.center;
         let deg = (Math.atan2(p.y - cy, p.x - cx) - Math.atan2(g.start.y - cy, g.start.x - cx)) * 180 / Math.PI;
@@ -499,10 +563,18 @@ export class SlideEditor {
   moveCreate(g, p, square) {
     if (!g.el) {
       this.begin();
-      g.el = this.newShape(g.shape);
-      this.context.appendChild(g.el);
+      g.el = this.adopt(this.newShape(g.shape));
     }
     this.shapeGeometry(g.el, g.shape, g.start, p, square);
+    if (g.shape === "arrow" && !g.arrowed) { g.arrowed = true; this.refreshArrows(g.el); }
+  }
+
+  /** Put a new object into the current group, keeping the slide coordinates
+   *  it was drawn in even if the group is moved or scaled. */
+  adopt(el) {
+    this.context.appendChild(el);
+    if (this.context !== this.svg) setTransform(el, toRoot(this.context, this.svg).inverse());
+    return el;
   }
 
   newShape(shape) {
@@ -513,7 +585,7 @@ export class SlideEditor {
       el.style.setProperty("stroke", style.stroke === "none" ? "#000000" : style.stroke);
       el.style.setProperty("stroke-width", style.strokeWidth);
       el.style.setProperty("stroke-linecap", "round");
-      if (shape === "arrow") el.style.setProperty("marker-end", `url(#${this.ensureMarker(el.style.stroke)})`);
+      if (shape === "arrow") el.style.setProperty("marker-end", "url(#arrow-pending)");
     } else {
       el.style.setProperty("fill", style.fill);
       el.style.setProperty("stroke", style.stroke);
@@ -557,7 +629,7 @@ export class SlideEditor {
     const p = this.point(e);
     switch (g.kind) {
       case "pan": return;
-      case "move": case "resize": case "rotate":
+      case "move": case "resize": case "rotate": case "endpoint":
         this.commit();
         if (g.kind === "move" && !g.moved) {
           if (this.selection.length > 1) this.select([g.target]);
@@ -582,12 +654,12 @@ export class SlideEditor {
         if (!g.el) {
           // A tap places a default-sized shape.
           this.begin();
-          g.el = this.newShape(g.shape);
-          this.context.appendChild(g.el);
+          g.el = this.adopt(this.newShape(g.shape));
           const size = g.shape === "rect" || g.shape === "ellipse" ? [240, 160] : [240, 0];
           this.shapeGeometry(g.el, g.shape, { x: p.x - size[0] / 2, y: p.y - size[1] / 2 },
             { x: p.x + size[0] / 2, y: p.y + size[1] / 2 }, false);
         }
+        if (g.shape === "arrow") this.refreshArrows(g.el);
         this.selection = [g.el];
         this.commit();
         this.hooks.toolDone?.();
@@ -631,6 +703,10 @@ export class SlideEditor {
     this.gesture = null;
     if (!g) return;
     if (g.snaps) this.applyDelta(g.snaps, new DOMMatrix());
+    if (g.kind === "endpoint") {
+      g.line.setAttribute(`x${g.which}`, g.original[0]);
+      g.line.setAttribute(`y${g.which}`, g.original[1]);
+    }
     if (g.kind === "draw") g.path.remove();
     if (g.kind === "create" && g.el) g.el.remove();
     this.before = null;
@@ -670,12 +746,12 @@ export class SlideEditor {
     const t = document.createElementNS(SVGNS, "text");
     t.setAttribute("x", p.x.toFixed(1));
     t.setAttribute("y", p.y.toFixed(1));
-    t.style.setProperty("font-family", `'${s.family}'`);
+    t.style.setProperty("font-family", cssFamily(s.family));
     t.style.setProperty("font-weight", String(s.weight));
     t.style.setProperty("font-size", `${s.size}px`);
     t.style.setProperty("fill", s.fill);
     t.style.setProperty("white-space", "pre");
-    this.context.appendChild(t);
+    this.adopt(t);
     this.hooks.ensureFont?.(s.family);
     return t;
   }
@@ -711,8 +787,7 @@ export class SlideEditor {
     }
     this.endTextEdit(true);
     this.begin();
-    const first = t.querySelector("tspan") || t;
-    const cs = getComputedStyle(first.firstChild && first.firstChild.nodeType === 3 ? first : (t.querySelector("tspan tspan") || first));
+    const cs = getComputedStyle(firstGlyphElement(t));
     const area = document.createElement("textarea");
     area.className = "text-edit";
     area.value = isNew ? "" : this.textLines(t).join("\n");
@@ -720,7 +795,8 @@ export class SlideEditor {
     this.page.appendChild(area);
     t.setAttribute("data-editing", "true");
     t.style.visibility = "hidden";
-    this.textEdit = { t, area, isNew, style: { family: cs.fontFamily, weight: cs.fontWeight, fontStyle: cs.fontStyle, fill: cs.fill } };
+    this.textEdit = { t, area, isNew, style: { family: cs.fontFamily, weight: cs.fontWeight, fontStyle: cs.fontStyle,
+      fill: cs.fill, size: parseFloat(cs.fontSize) || 16, letterSpacing: cs.letterSpacing }, pitch: this.linePitch(t) };
     area.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); this.endTextEdit(true); }
@@ -733,27 +809,39 @@ export class SlideEditor {
     this.drawOverlay();
   }
 
+  /** Distance between lines of a text, in its own units (null if one line). */
+  linePitch(t) {
+    const ys = this.lineSpans(t).map((l) => parseFloat(l.getAttribute("y"))).filter((y) => !Number.isNaN(y));
+    return ys.length > 1 ? (ys[ys.length - 1] - ys[0]) / (ys.length - 1) : null;
+  }
+
   positionTextEdit() {
     const te = this.textEdit;
     if (!te) return;
     const { t, area, style } = te;
     const m = toRoot(t, this.svg);
     const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) * this.zoom;
-    const cs = getComputedStyle(t);
-    const size = parseFloat(cs.fontSize) * scale;
-    const b = rootBox(t, this.svg);
-    const x0 = parseFloat(t.querySelector("tspan[x]")?.getAttribute("x") ?? t.getAttribute("x")) || 0;
-    const y0 = parseFloat(t.querySelector("tspan[y]")?.getAttribute("y") ?? t.getAttribute("y")) || 0;
+    const size = style.size * scale;
+    const pitch = te.pitch ? te.pitch * scale : size * 1.25;
+    const firstLine = this.lineSpans(t)[0];
+    const x0 = parseFloat(firstLine?.getAttribute("x") ?? t.getAttribute("x")) || 0;
+    const y0 = parseFloat(firstLine?.getAttribute("y") ?? t.getAttribute("y")) || 0;
     const anchor = m.transformPoint(new DOMPoint(x0, y0));
+    const align = getComputedStyle(firstGlyphElement(t)).textAnchor;
+    // Size the box to the text, measured in the text's own font.
+    const ctx = (this.measure ||= document.createElement("canvas").getContext("2d"));
+    ctx.font = `${style.fontStyle} ${style.weight} ${size}px ${style.family}`;
     const lines = area.value.split("\n");
+    const width = Math.max(size * 2, ...lines.map((l) => ctx.measureText(l).width)) + size * 0.6;
+    const ax = anchor.x * this.zoom;
+    const left = align === "middle" ? ax - width / 2 : align === "end" ? ax - width : ax;
     Object.assign(area.style, {
-      left: `${(b && b.width ? Math.min(b.x, anchor.x) : anchor.x) * this.zoom - 4}px`,
-      top: `${anchor.y * this.zoom - size * 1.05}px`,
+      left: `${left - 4}px`, top: `${anchor.y * this.zoom - size * 0.95 - 3}px`,
       fontFamily: style.family, fontWeight: style.weight, fontStyle: style.fontStyle,
-      fontSize: `${size}px`, lineHeight: "1.25", color: style.fill === "none" ? "#000" : style.fill,
-      textAlign: { middle: "center", end: "right" }[cs.textAnchor] || "left",
-      width: `${Math.max(size * 4, ...lines.map((l) => l.length * size * 0.62)) + 16}px`,
-      height: `${lines.length * size * 1.25 + 12}px`,
+      fontSize: `${size}px`, lineHeight: `${pitch}px`, letterSpacing: style.letterSpacing,
+      color: style.fill === "none" ? "#000" : style.fill,
+      textAlign: { middle: "center", end: "right" }[align] || "left",
+      width: `${width + 8}px`, height: `${lines.length * pitch + size * 0.3 + 6}px`,
     });
   }
 
@@ -775,28 +863,33 @@ export class SlideEditor {
       return;
     }
     if (!isNew && value === this.textLines(t).join("\n")) { this.commit(); return; }
-    this.setTextLines(t, value.split("\n"), style);
+    this.setTextLines(t, value.split("\n"), style, te.pitch);
     this.commit();
   }
 
-  setTextLines(t, lines, style) {
-    const firstLine = t.querySelector("tspan[x], tspan[y]");
+  setTextLines(t, lines, style, pitch) {
+    const firstLine = this.lineSpans(t)[0] || t.querySelector("tspan[x], tspan[y]");
     const x = firstLine?.getAttribute("x") ?? t.getAttribute("x") ?? "0";
-    const y = firstLine?.getAttribute("y") ?? t.getAttribute("y") ?? "0";
-    const rich = t.querySelector("tspan[style], tspan[fill]");
-    if (rich && style) {
-      // Keep the look of the first word for the whole text.
+    const y0 = parseFloat(firstLine?.getAttribute("y") ?? t.getAttribute("y") ?? "0") || 0;
+    const anchor = getComputedStyle(firstGlyphElement(t)).textAnchor;
+    if (style && t.querySelector("tspan")) {
+      // The spans carried the look (Inkscape puts font and colour there);
+      // move the first word's look onto the text itself.
+      t.style.setProperty("font-family", style.family);
+      t.style.setProperty("font-size", `${style.size}px`);
       t.style.setProperty("font-weight", style.weight);
       t.style.setProperty("font-style", style.fontStyle);
       if (style.fill && style.fill !== "none") t.style.setProperty("fill", style.fill);
+      t.style.setProperty("text-anchor", anchor);
     }
+    const step = pitch || (style ? style.size : parseFloat(getComputedStyle(t).fontSize) || 16) * 1.25;
     t.replaceChildren();
     t.setAttribute("x", x);
-    t.setAttribute("y", y);
+    t.setAttribute("y", String(y0));
     lines.forEach((line, i) => {
       const span = document.createElementNS(SVGNS, "tspan");
       span.setAttribute("x", x);
-      if (i === 0) span.setAttribute("y", y); else span.setAttribute("dy", "1.25em");
+      span.setAttribute("y", String(+(y0 + i * step).toFixed(3)));
       span.textContent = line || " ";
       t.appendChild(span);
     });
@@ -933,7 +1026,7 @@ export class SlideEditor {
     if (!elements.length) return;
     this.change(() => {
       for (const el of elements) this.applyStyle(el, prop, value);
-      if (prop === "stroke") this.recolorMarkers(elements, value);
+      if (prop === "stroke" || prop === "stroke-width") this.recolorMarkers(elements);
     });
   }
 
@@ -950,34 +1043,59 @@ export class SlideEditor {
     }
   }
 
-  ensureMarker(color) {
-    const hex = (color || "#000000").replace(/[^0-9a-z]/gi, "");
-    const id = `arrow-${hex}`;
+  /** Uniform scale of an element's user space on the slide. */
+  scaleOf(el) {
+    const m = toRoot(el, this.svg);
+    return Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
+  }
+
+  /** Stroke width as drawn on the slide, in slide pixels. */
+  strokeWidthOf(el) {
+    return (parseFloat(getComputedStyle(el).strokeWidth) || 0) * this.scaleOf(el);
+  }
+
+  /** Arrowhead marker for a colour and a size (as a multiple of the stroke
+   *  width). Thin lines get proportionally bigger heads so they stay visible. */
+  ensureMarker(color, ratio = 3.5) {
+    const hex = toHex(color) || "#000000";
+    const id = `arrow-${hex.slice(1)}-${String(ratio).replace(".", "_")}`;
     if (this.svg.querySelector(`#${CSS.escape(id)}`)) return id;
     let defs = this.svg.querySelector(":scope > defs");
     if (!defs) { defs = document.createElementNS(SVGNS, "defs"); this.svg.prepend(defs); }
     const marker = document.createElementNS(SVGNS, "marker");
-    for (const [k, v] of Object.entries({ id, viewBox: "0 0 10 10", refX: "7", refY: "5", markerWidth: "4",
-      markerHeight: "4", orient: "auto-start-reverse" })) marker.setAttribute(k, v);
+    for (const [k, v] of Object.entries({ id, viewBox: "0 0 10 10", refX: "6", refY: "5", markerWidth: String(ratio),
+      markerHeight: String(ratio), orient: "auto-start-reverse", "data-label": "arrowhead" })) marker.setAttribute(k, v);
     const tip = document.createElementNS(SVGNS, "path");
     tip.setAttribute("d", "M0,0 L10,5 L0,10 z");
-    tip.setAttribute("fill", color);
+    tip.setAttribute("fill", hex);
     marker.appendChild(tip);
     defs.appendChild(marker);
     return id;
   }
 
-  recolorMarkers(elements, color) {
-    for (const el of elements) {
-      for (const end of ["marker-start", "marker-end"]) {
-        const v = el.style.getPropertyValue(end);
-        if (v && v.includes("arrow-")) el.style.setProperty(end, `url(#${this.ensureMarker(color)})`);
-      }
+  arrowRatio(el) {
+    const w = this.strokeWidthOf(el) || 1;
+    const length = Math.max(3.5 * w, 16);  // slide pixels
+    return Math.min(16, Math.round((length / w) * 2) / 2);
+  }
+
+  /** Point the element's arrowheads at markers matching its colour and width. */
+  refreshArrows(el) {
+    for (const end of ["start", "end"]) {
+      const v = el.style.getPropertyValue(`marker-${end}`) || el.getAttribute(`marker-${end}`) || "";
+      if (!v.includes("arrow-")) continue;
+      el.removeAttribute(`marker-${end}`);
+      el.style.setProperty(`marker-${end}`, `url(#${this.ensureMarker(getComputedStyle(el).stroke, this.arrowRatio(el))})`);
     }
   }
 
+  recolorMarkers(elements) {
+    for (const el of elements) this.refreshArrows(el);
+  }
+
   hasArrow(el, end) {
-    return !!(el.style.getPropertyValue(`marker-${end}`) || el.getAttribute(`marker-${end}`));
+    const v = el.style.getPropertyValue(`marker-${end}`) || el.getAttribute(`marker-${end}`) || "";
+    return v !== "" && v !== "none";
   }
 
   setArrow(end, on) {
@@ -986,13 +1104,8 @@ export class SlideEditor {
     this.change(() => {
       for (const el of lines) {
         el.removeAttribute(`marker-${end}`);
-        if (on) {
-          const stroke = getComputedStyle(el).stroke;
-          const hex = /rgb/.test(stroke) ? "#" + stroke.match(/\d+/g).slice(0, 3).map((v) => (+v).toString(16).padStart(2, "0")).join("") : stroke;
-          el.style.setProperty(`marker-${end}`, `url(#${this.ensureMarker(hex)})`);
-        } else {
-          el.style.removeProperty(`marker-${end}`);
-        }
+        if (on) el.style.setProperty(`marker-${end}`, `url(#${this.ensureMarker(getComputedStyle(el).stroke, this.arrowRatio(el))})`);
+        else el.style.removeProperty(`marker-${end}`);
       }
     });
   }
@@ -1003,6 +1116,36 @@ export class SlideEditor {
         if (value === null) el.removeAttribute(name); else el.setAttribute(name, value);
       }
     });
+  }
+
+  /** Align the lines of each text inside its current box (left, centre or
+   *  right) without moving the box. */
+  setAlign(anchor, texts) {
+    this.change(() => {
+      for (const t of texts) {
+        let b;
+        try { b = t.getBBox(); } catch (e) { continue; }
+        if (!b.width && !b.height) continue;
+        const x = { start: b.x, middle: b.x + b.width / 2, end: b.x + b.width }[anchor];
+        for (const span of t.querySelectorAll("tspan")) {
+          span.style.removeProperty("text-anchor");
+          span.removeAttribute("text-anchor");
+        }
+        t.style.setProperty("text-anchor", anchor);
+        t.removeAttribute("text-anchor");
+        const lines = this.lineSpans(t);
+        for (const node of lines.length ? lines : [t]) {
+          node.setAttribute("x", String(+x.toFixed(3)));
+          node.removeAttribute("dx");
+        }
+        if (lines.length && t.hasAttribute("x")) t.setAttribute("x", String(+x.toFixed(3)));
+      }
+    });
+  }
+
+  /** The spans that start lines (they carry their own x). */
+  lineSpans(t) {
+    return Array.from(t.children).filter((c) => c.localName === "tspan" && c.hasAttribute("x"));
   }
 
   // --- inserting ---------------------------------------------------------------------

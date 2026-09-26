@@ -1,17 +1,21 @@
 """The player, driven in headless Chromium from a file:// export."""
+import os
+
 import pytest
 
+from conftest import MOVIES
 from svgdeck.deck import Deck
 from svgdeck.export import export
 
 playwright = pytest.importorskip("playwright.sync_api")
+BROWSER = os.environ.get("SVGDECK_BROWSER", "chromium")  # webkit = the iPad's engine
 
 
 @pytest.fixture
 def page(deck, tmp_path):
     out = export(Deck.load(deck), tmp_path / "out")
     with playwright.sync_playwright() as p:
-        browser = p.chromium.launch()
+        browser = getattr(p, BROWSER).launch()
         page = browser.new_page(viewport={"width": 960, "height": 540})
         errors = []
         page.on("pageerror", lambda e: errors.append(e))
@@ -62,6 +66,7 @@ def test_ids_are_unique_per_slide(page):
     assert fill == "url(#s2-bg)"
 
 
+@pytest.mark.skipif(not MOVIES, reason="no movies in headless WebKit; checked in Chromium")
 def test_movie_is_positioned_and_layered(page):
     page.keyboard.press("End")
     order = page.evaluate("""Array.from(document.querySelector('.svgdeck-current').children)
@@ -72,6 +77,7 @@ def test_movie_is_positioned_and_layered(page):
     assert box == pytest.approx([50, 50, 320, 240], abs=1)  # slide units at half scale
 
 
+@pytest.mark.skipif(not MOVIES, reason="no movies in headless WebKit; checked in Chromium and Brave")
 def test_sync_group_continues_across_slides(page):
     page.keyboard.press("ArrowRight")
     page.wait_for_function("document.querySelector('.svgdeck-current video').currentTime > 1.5")

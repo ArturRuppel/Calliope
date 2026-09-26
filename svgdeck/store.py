@@ -159,30 +159,39 @@ class Store:
         return version(data)
 
     # --- media -------------------------------------------------------------
-    def add_media(self, name: str, filename: str, data: bytes) -> dict:
+    def add_media(self, name: str, filename: str, upload: Path | bytes) -> dict:
+        """Add an uploaded file (a path, or bytes) to the deck's media."""
         media = self.deck_dir(name) / "media"
         media.mkdir(exist_ok=True)
+        if isinstance(upload, (bytes, bytearray)):
+            fd, tmp = tempfile.mkstemp(dir=media, prefix=".upload-")
+            with os.fdopen(fd, "wb") as f:
+                f.write(upload)
+            try:
+                return self.add_media(name, filename, Path(tmp))
+            finally:
+                Path(tmp).unlink(missing_ok=True)
         filename = safe_filename(filename)
         stem, ext = os.path.splitext(filename)
-        digest = hashlib.sha1(data).hexdigest()[:8]
+        digest = file_digest(upload)
         if ext in IMAGE_TYPES:
             if ext == ".svg":
-                check_svg(data)
+                check_svg(upload.read_bytes())
             target = media / f"{stem}-{digest}{ext}"
-            write_atomic(target, data)
+            shutil.copyfile(upload, target)
             info = {"kind": "image", "href": f"../media/{target.name}"}
             info.update(zip(("width", "height"), image_size(target)))
             return info
         if ext in VIDEO_TYPES:
             target = media / f"{stem}-{digest}.mp4"
             with tempfile.TemporaryDirectory(dir=media) as tmp:
-                upload = Path(tmp) / f"upload{ext}"
-                upload.write_bytes(data)
-                if ext == ".mp4" and probe_codec(upload) == "h264":
-                    shutil.move(upload, target)
+                source = Path(tmp) / f"upload{ext}"
+                shutil.copyfile(upload, source)
+                if ext == ".mp4" and probe_codec(source) == "h264":
+                    shutil.move(source, target)
                 else:
                     # H.264 mp4 plays everywhere (Chrome has no HEVC from iPhone .mov).
-                    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(upload), "-an",
+                    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(source), "-an",
                                     "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
                                     "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-movflags", "+faststart",
                                     str(target)], check=True)
@@ -236,6 +245,14 @@ class Store:
         data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
         write_atomic(path / "deck.json", data)
         return {"deck": meta, "version": version(data)}
+
+
+def file_digest(path: Path) -> str:
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        for block in iter(lambda: f.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()[:8]
 
 
 def face_info(path: Path) -> dict:

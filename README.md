@@ -65,5 +65,12 @@ screen. The address bar shows `#slide.step`.
   Chromium and diffs it against the old Inkscape PNGs.
 
 ```
-.venv/bin/python -m pytest tests
+.venv/bin/python -m pytest tests                      # Chromium
+SVGDECK_BROWSER=webkit .venv/bin/python -m pytest tests  # WebKit = the iPad's engine
 ```
+
+Playwright's WebKit does not run on Arch (sancho); it runs on rocinante
+(Ubuntu 24.04) after `playwright install webkit`, with `libavif16`,
+`libgav1-1` and `libyuv0` unpacked from `apt-get download` into the WebKit
+build's `minibrowser-wpe/lib/` (no sudo needed). Headless WebKit there freezes
+on video, so movie tests only run in Chromium.

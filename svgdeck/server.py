@@ -35,6 +35,24 @@ def create_app(data: Path) -> FastAPI:
             raise HTTPException(413, "file too large")
         return data
 
+    async def spooled(request: Request) -> Path:
+        """Stream an upload to a file in the data dir (movies can be large)."""
+        tmp_dir = store.data / "uploads"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        fd, name = tempfile.mkstemp(dir=tmp_dir)
+        size = 0
+        try:
+            with open(fd, "wb") as f:
+                async for chunk in request.stream():
+                    size += len(chunk)
+                    if size > MAX_UPLOAD:
+                        raise HTTPException(413, "file too large")
+                    f.write(chunk)
+        except BaseException:
+            Path(name).unlink(missing_ok=True)
+            raise
+        return Path(name)
+
     # --- pages ---------------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -127,10 +145,13 @@ def create_app(data: Path) -> FastAPI:
     @app.post("/api/decks/{name}/media")
     async def add_media(name: str, filename: str, request: Request):
         deck_dir(name)
+        upload = await spooled(request)
         try:
-            return store.add_media(name, filename, await body(request))
+            return store.add_media(name, filename, upload)
         except ValueError as e:
             raise HTTPException(400, str(e))
+        finally:
+            upload.unlink(missing_ok=True)
 
     @app.get("/api/fonts")
     def fonts():

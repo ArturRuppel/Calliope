@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -37,10 +38,17 @@ def movie(tmp_path_factory) -> Path:
     return path
 
 
+# Headless WPE WebKit (the iPad's engine, run on Linux) freezes when it loads a
+# movie; there the movies are plain images and movie tests are skipped.
+MOVIES = os.environ.get("SVGDECK_BROWSER", "chromium") != "webkit"
+
+
 @pytest.fixture
 def deck(tmp_path, movie) -> Path:
     video = ('<image href="../media/clock.webm" data-video="../media/clock.webm" x="100" y="100" '
              'width="640" height="480" data-sync="g1"/>')
+    if not MOVIES:
+        video = video.replace(' data-video="../media/clock.webm"', "")
     slides = [
         ("a", SLIDE.format(color="#ff0000", body='<text id="t" x="100" y="200">first</text>')),
         ("b", SLIDE.format(color="#00ff00", body=video + '<rect id="one" data-step="1" x="800" width="100" height="100"/>'
