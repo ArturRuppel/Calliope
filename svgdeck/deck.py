@@ -3,14 +3,15 @@ from __future__ import annotations
 
 import html
 import json
-import re
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree
 
 FORMAT = 1
-# Relative references in a slide: href="..." and data-video="...".
-REF = re.compile(r'\b(?:href|xlink:href|data-video)\s*=\s*"([^"#][^"]*)"')
+XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
+REFERENCE_ATTRIBUTES = {"href", XLINK_HREF, "data-video"}
 
 
 @dataclass
@@ -41,10 +42,18 @@ class Deck:
         """Deck-relative paths of every file the slides reference."""
         files = set()
         for slide in self.meta["slides"]:
-            for ref in REF.findall(self.slide_file(slide["id"]).read_text()):
-                if re.match(r"^(data:|[a-z]+://|/)", ref, re.I):
-                    continue
-                files.add((Path("slides") / html.unescape(ref)).as_posix())
+            root = ElementTree.parse(self.slide_file(slide["id"])).getroot()
+            for element in root.iter():
+                for attribute, ref in element.attrib.items():
+                    if attribute not in REFERENCE_ATTRIBUTES:
+                        continue
+                    url = urlsplit(ref)
+                    if not url.path or url.scheme or url.netloc or url.path.startswith("/"):
+                        continue
+                    path = unquote(url.path)
+                    if path.startswith("/"):
+                        raise ValueError(f"reference is not relative: {ref}")
+                    files.add((Path("slides") / path).as_posix())
         return {_normalize(f) for f in files}
 
 
