@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>svgdeck · {{DECK}}</title>
+<link rel="stylesheet" href="/editor/editor.css">
+</head>
+<body data-deck="{{DECK}}">
+<header class="bar">
+  <a class="btn" href="/" title="All decks">‹</a>
+  <button class="btn" id="toggle-strip" title="Slides">☰</button>
+  <span class="deck-title" id="deck-title"></span>
+  <div class="group tools" id="tools"></div>
+  <div class="group">
+    <button class="btn" id="undo" title="Undo (Ctrl+Z)">↶</button>
+    <button class="btn" id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
+  </div>
+  <div class="group zoom">
+    <button class="btn" id="zoom-out" title="Zoom out">−</button>
+    <button class="btn" id="zoom-fit" title="Fit slide"><span id="zoom-label">fit</span></button>
+    <button class="btn" id="zoom-in" title="Zoom in">+</button>
+  </div>
+  <span class="status" id="status">Loading…</span>
+  <div class="group">
+    <button class="btn" id="present" title="Present from this slide">▶ Present</button>
+    <a class="btn" id="export" title="Download a standalone offline copy">Export</a>
+    <button class="btn" id="toggle-panel" title="Properties">⚙</button>
+  </div>
+</header>
+<main>
+  <aside class="strip" id="strip">
+    <div class="strip-actions">
+      <button class="btn" id="slide-add" title="New slide">＋</button>
+      <button class="btn" id="slide-dup" title="Duplicate slide">⧉</button>
+      <button class="btn" id="slide-up" title="Move up">↑</button>
+      <button class="btn" id="slide-down" title="Move down">↓</button>
+      <button class="btn danger" id="slide-del" title="Delete slide">🗑</button>
+    </div>
+    <ol class="thumbs" id="thumbs"></ol>
+  </aside>
+  <section class="stage" id="stage"></section>
+  <aside class="panel" id="panel"></aside>
+</main>
+<div class="breadcrumb" id="breadcrumb" hidden>In a group · <button class="link" id="exit-group">leave group</button></div>
+<div class="toast" id="toast" role="status"></div>
+<input type="file" id="media-file" accept="image/*,video/*" multiple hidden>
+<input type="file" id="font-file" accept=".otf,.ttf" hidden>
+<script type="module" src="/editor/main.js"></script>
+</body>
+</html>

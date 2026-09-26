@@ -24,4 +24,4 @@ build-backend = "setuptools.build_meta"
 include = ["svgdeck*"]
 
 [tool.setuptools.package-data]
-svgdeck = ["player/*"]
+svgdeck = ["player/*", "editor/*"]

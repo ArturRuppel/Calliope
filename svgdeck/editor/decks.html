@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>svgdeck</title>
+<style>
+  :root { --ink: #1d232a; --muted: #6b7682; --line: #d9dee3; --accent: #2f6fdb;
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink); }
+  body { margin: 0; background: #eef1f4; }
+  main { max-width: 46rem; margin: 0 auto; padding: 24px 16px 60px; }
+  h1 { font-size: 1.5rem; margin: 0 0 16px; }
+  .deck { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 8px;
+    background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+  .deck .info { flex: 1; min-width: 0; }
+  .deck strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck small { color: var(--muted); }
+  a.btn, button { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border-radius: 8px;
+    border: 1px solid var(--line); background: #fff; color: var(--ink); text-decoration: none; font: inherit; cursor: pointer; }
+  a.btn.primary, button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; padding: 14px; background: #fff;
+    border: 1px solid var(--line); border-radius: 10px; }
+  form h2 { width: 100%; margin: 0; font-size: 1rem; }
+  input { height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; flex: 1; min-width: 10rem; }
+  .error { color: #c62828; width: 100%; }
+</style>
+</head>
+<body>
+<main>
+  <h1>svgdeck</h1>
+  <div id="decks">Loading…</div>
+  <form id="new">
+    <h2>New deck</h2>
+    <input name="title" placeholder="Title, e.g. Group meeting" required>
+    <input name="name" placeholder="Folder name, e.g. 2026-10-01_group_meeting" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required>
+    <button class="primary">Create</button>
+    <div class="error" id="error"></div>
+  </form>
+</main>
+<script>
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  async function load() {
+    const decks = await (await fetch("/api/decks")).json();
+    document.getElementById("decks").innerHTML = decks.length ? decks.map((d) => `
+      <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
+        <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
+        <a class="btn primary" href="/edit/${encodeURIComponent(d.name)}">Edit</a>
+        <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a></div>`).join("")
+      : "<p>No decks yet.</p>";
+  }
+  const form = document.getElementById("new");
+  form.title.addEventListener("input", () => {
+    if (form.name.dataset.touched) return;
+    const d = new Date().toISOString().slice(0, 10);
+    form.name.value = `${d}_${form.title.value.trim().replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "")}`;
+  });
+  form.name.addEventListener("input", () => { form.name.dataset.touched = "1"; });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const r = await fetch("/api/decks", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: form.name.value, title: form.title.value }) });
+    if (r.ok) location.href = `/edit/${encodeURIComponent(form.name.value)}`;
+    else document.getElementById("error").textContent = (await r.json()).detail || "Could not create the deck.";
+  });
+  load();
+</script>
+</body>
+</html>

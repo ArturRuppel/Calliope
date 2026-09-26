@@ -66,6 +66,13 @@ A movie is a top-level `<image>` whose `href` is a poster frame and whose
 Objects above the movie in stacking order are drawn on top of it.
 Movies are always muted.
 
+### Editor attributes
+
+| Attribute | Meaning |
+|---|---|
+| `data-locked="true"` | the editor does not select it (slide backgrounds) |
+| `data-label` | a name for the object (from Inkscape labels; `background` marks the slide background) |
+
 ### Builds
 
 Any element with `data-step="n"` (n ≥ 1) is hidden until the n-th step of the

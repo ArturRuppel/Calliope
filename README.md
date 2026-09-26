@@ -18,12 +18,42 @@ Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 `$SVGDECK_DATA`), never in this repo. Fonts are licensed and stay out of it too.
 
 ```
-svgdeck serve                       # http://127.0.0.1:8490, lists and presents decks
+svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed
 svgdeck export DECK_DIR OUT_DIR --zip talk.zip
 ```
 
-Presenting: arrows / space / page keys / click or swipe to move, a number then
+## The service on sancho
+
+`systemd/svgdeck.service` runs `svgdeck serve` on sancho's Tailscale address,
+port 8490 (install: copy it to `~/.config/systemd/user/`, then
+`systemctl --user enable --now svgdeck`). Open `http://<sancho tailnet ip>:8490/`
+on the iPad; "Add to Home Screen" gives it a full-screen window.
+
+## Editing
+
+Tools: select (V), text (T), rectangle (R), ellipse (E), line (L), arrow (A),
+draw (P), and the image button for pictures and movies (movies are converted to
+H.264 mp4 on upload so every browser can play them).
+
+- Tap to select, drag to move, drag the handles to resize (corners keep the
+  proportions; Shift frees them) or rotate. Drag on empty space to select
+  several.
+- Double-tap text to edit it, or a group to work inside it; tap outside or
+  Escape to leave.
+- With an Apple Pencil, the Pencil draws and fingers pan; two fingers pinch to
+  zoom.
+- Everything saves automatically (the status shows Saved). Undo/redo per
+  slide. If the same slide was changed elsewhere, saving stops and says so
+  rather than overwriting.
+- Keyboard: Ctrl+Z / Ctrl+Shift+Z, Ctrl+C / Ctrl+V (also across slides),
+  Ctrl+D duplicate, Ctrl+G / Ctrl+Shift+G group, Delete, arrow keys nudge
+  (Shift ×10), Page Up/Down change slide.
+- Deleted slides go to the deck's `trash/` folder.
+
+## Presenting
+
+Arrows / space / page keys / click or swipe to move, a number then
 Enter to jump, `b` or `.` for a blank screen, `f` or double-click for full
 screen. The address bar shows `#slide.step`.
 

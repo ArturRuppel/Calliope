@@ -95,7 +95,7 @@ exported `index.html`. Font files are licensed and never go into this repo.
   The imported deck then exercises the player, the export and, in later
   milestones, the editor on real content.
 
-### 2. Editor MVP (iPad)
+### 2. Editor MVP (iPad) — done 2026-09-26
 - Deck overview: slide list, reorder, add, duplicate, delete.
 - Select, move, resize, rotate; multi-select.
 - Text with the font library.
@@ -103,9 +103,16 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Place images and movies (upload from the iPad).
 - Pencil freehand drawing with smoothing.
 - Stacking order, undo/redo, autosave to the service.
+- Also done: group/ungroup, lock, copy/paste across slides, pinch zoom,
+  font upload, save-conflict detection, service on sancho.
+- Known limits: editing a text with mixed formatting (bold words) flattens
+  it to one style; strokes of freehand paths scale when resized; no
+  snapping yet.
 
 ### 3. Editor, second pass
 - Build steps.
+- Rich text: bold/colour on part of a text.
+- Pencil pressure, eraser.
 - Align and distribute, snapping, guides.
 - Clip to a rectangle or ellipse.
 - Bézier path editing.

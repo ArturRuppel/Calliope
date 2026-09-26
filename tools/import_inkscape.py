@@ -164,7 +164,7 @@ def is_plain_group(el) -> bool:
     return True
 
 
-def extract(canvas: Canvas, frame, parent, m: Matrix, out: list) -> None:
+def extract(canvas: Canvas, frame, parent, m: Matrix, out: list, sid: str = "") -> None:
     """Copy the children of `parent` that show inside `frame` into `out`,
     composing `m` (canvas -> slide pixels) into their transforms."""
     for el in parent:
@@ -175,16 +175,19 @@ def extract(canvas: Canvas, frame, parent, m: Matrix, out: list) -> None:
         hit = canvas.overlaps(el.get("id"), frame)
         if hit is False:
             continue
-        if el.tag == q("g") and (hit is None or not canvas.inside(el.get("id"), frame)):
+        # Groups straddling slides are split; a group holding this slide's
+        # frame is unpacked too, so the frame can become the locked background.
+        holds_frame = el.tag == q("g") and sid and el.find(f'.//*[@id="{sid}"]') is not None
+        if el.tag == q("g") and (hit is None or not canvas.inside(el.get("id"), frame) or holds_frame):
             if is_plain_group(el):
-                extract(canvas, frame, el, mul(m, parse_transform(el.get("transform"))), out)
+                extract(canvas, frame, el, mul(m, parse_transform(el.get("transform"))), out, sid)
             else:
                 wrapper = copy.copy(el)  # attributes only
                 for child in list(wrapper):
                     wrapper.remove(child)
                 set_transform(wrapper, mul(m, parse_transform(el.get("transform"))))
                 inner: list = []
-                extract(canvas, frame, el, IDENTITY, inner)
+                extract(canvas, frame, el, IDENTITY, inner, sid)
                 if inner:
                     wrapper.extend(inner)
                     out.append(wrapper)
@@ -515,7 +518,7 @@ def main() -> None:
         for layer in layer_roots:
             if hidden(layer):
                 continue
-            extract(canvas, frame, [layer], m, content)
+            extract(canvas, frame, [layer], m, content, sid)
 
         svg = etree.Element(q("svg"), nsmap={None: SVG})
         svg.set("viewBox", f"0 0 {W} {H}")
@@ -526,6 +529,10 @@ def main() -> None:
         defs = etree.SubElement(svg, q("defs"))
         defs.extend(defs_list)
         svg.extend(content)
+        for el in svg.iter():
+            if el.get("id") == sid:  # the frame rectangle is the slide background
+                el.set("data-locked", "true")
+                el.set("{%s}label" % INKSCAPE, "background")
 
         if n in videos:
             v = videos[n]
