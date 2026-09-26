@@ -38,7 +38,8 @@ Reference decks: `presentations/` in the lab-book database repo.
 - **Custom fonts.** Helvetica Neue (Thin to Black) and any uploaded OTF/TTF.
   The same font files are used for editing and presenting, so text lays out
   identically on every device.
-- **No Inkscape.** Once old decks are imported, the app is the only editor.
+- **No Inkscape.** The app is the only editor. Old talks stay archived as
+  they are; only the latest one is imported (as a development test ground).
 - **Offline presenting.** Export a self-contained folder (and zip) that runs
   from `index.html` with no network access.
 - **Editing is online.** A service on rocinante, reached over Tailscale.
@@ -85,11 +86,14 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Define `deck.json` and the slide SVG conventions (movies, builds, fonts).
 - Player with builds, movies and sync groups.
 - Standalone export with fonts converted to woff2.
-- Importer for the Inkscape decks: split `slides.svg` by its `slideN`
-  groups, turn the hand-positioned video overlays and the `*b.png` layers
-  into real slide objects, collect fonts.
-- Test case: the 2026-05-19 Paris postdoc seminar deck (62 slides, video
-  overlays, sync group across slides 51–53, Helvetica Neue).
+- One-off importer for the latest talk only, the 2026-05-19 Paris postdoc
+  seminar (62 slides, video overlays, sync group across slides 51–53,
+  Helvetica Neue). It is a development test ground, not a general Inkscape
+  converter: split `slides.svg` by its `slideN` groups into editable shapes
+  (clip paths, markers and filters kept), turn the hand-positioned video
+  overlays and the `*b.png` layers into real slide objects, collect fonts.
+  The imported deck then exercises the player, the export and, in later
+  milestones, the editor on real content.
 
 ### 2. Editor MVP (iPad)
 - Deck overview: slide list, reorder, add, duplicate, delete.
@@ -115,11 +119,9 @@ exported `index.html`. Font files are licensed and never go into this repo.
 
 ## Open questions
 
-- Importer depth: bring old decks in as editable shapes, or as flattened
-  images per slide? Editable means handling ~4.8k clip paths, markers and
-  filters, but keeps old drawings reusable.
 - Backups of the working data directory (decks in progress exist only
   there until archived).
 
 Decided 2026-09-26: svgdeck is standalone; the lab book only archives the
-final static exports (see Architecture).
+final static exports (see Architecture). Only the latest talk is imported,
+as editable shapes, for development; older talks are not converted.
