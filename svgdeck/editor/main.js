@@ -12,11 +12,15 @@ const TOOLS = [
   ["text", "Text (T)", "M5 5h14M12 5v14M9 19h6"],
   ["rect", "Rectangle (R)", "M4 6h16v12H4z"],
   ["ellipse", "Ellipse (E)", "M12 5c5 0 9 3.1 9 7s-4 7-9 7-9-3.1-9-7 4-7 9-7z"],
+  ["circle", "Circle (C)", "M12 3a9 9 0 100 18 9 9 0 000-18"],
+  ["polygon", "Polygon (G)", "M12 3l9 7-4 11H7L3 10z"],
+  ["bezier", "Bézier (B)", "M3 18C3 1 21 23 21 6"],
+  ["nodes", "Edit points (N)", "M4 18L8 5l12 5M6 3h4v4H6zM18 8h4v4h-4zM2 16h4v4H2z"],
   ["line", "Line (L)", "M5 19L19 5"],
   ["arrow", "Arrow (A)", "M5 19L19 5M11 5h8v8"],
   ["pen", "Draw (P) — Pencil or finger", "M4 20c3-1 4-5 7-8s5-6 9-8M16 4l4 4"],
 ];
-const KEYS = { v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen" };
+const KEYS = { c: "circle", g: "polygon", b: "bezier", n: "nodes", v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen" };
 
 const api = {
   async json(method, url, body) {
@@ -342,6 +346,13 @@ function icon(path) {
 
 function buildToolbar() {
   const tools = $("tools");
+  for (const [id, title] of [["navigate", "Navigate"], ["insert", "Insert"], ["shapes", "Shapes"],
+      ["paths", "Paths"], ["arrange", "Arrange"], ["view", "View"]]) {
+    tools.append(el("div", {class:"tool-category", role:"group", "aria-label":title},
+      el("span", {class:"category-label"}, title), el("div", {class:"category-tools", id:`tools-${id}`})));
+  }
+  const category = {select:"navigate", pan:"navigate", text:"insert", rect:"shapes", ellipse:"shapes",
+    circle:"shapes", polygon:"shapes", line:"paths", arrow:"paths", bezier:"paths", nodes:"paths", pen:"paths"};
   for (const [name, title, path] of TOOLS) {
     const b = document.createElement("button");
     b.className = "btn tool";
@@ -351,7 +362,7 @@ function buildToolbar() {
     b.innerHTML = icon(path);
     b.append(document.createTextNode(title.split(" (")[0]));
     b.addEventListener("click", () => setTool(name));
-    tools.appendChild(b);
+    $(`tools-${category[name]}`).appendChild(b);
   }
   const media = document.createElement("button");
   media.className = "btn tool";
@@ -359,7 +370,7 @@ function buildToolbar() {
   media.innerHTML = icon("M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4M15 9h.01");
   media.append(document.createTextNode("Media"));
   media.addEventListener("click", () => $("media-file").click());
-  tools.appendChild(media);
+  $("tools-insert").appendChild(media);
   setTool("select");
 }
 
@@ -386,7 +397,18 @@ function buildToggles() {
   grid.append("Grid");
   const snap = el("button", { class: "btn tool", id: "snap", title: "Snap objects to the grid",
     "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap }) }, "Snap");
-  tools.append(multi, group, actions, grid, snap);
+  $("tools-navigate").append(multi);
+  $("tools-arrange").append(group, actions,
+    el("button", {class:"btn tool", id:"align-tools", onclick:() => revealSection("Align")}, "Align"),
+    el("button", {class:"btn tool", id:"text-tools", onclick:() => revealSection("Text")}, "Format text"));
+  $("tools-view").append(grid, snap);
+}
+
+function revealSection(title) {
+  document.body.classList.remove("no-panel");
+  renderPanel();
+  const target = [...$("panel").querySelectorAll("section")].find(s => s.querySelector("h3")?.textContent.startsWith(title));
+  if (target) target.scrollIntoView({block:"start"});
 }
 
 function setAdditive(on) {
@@ -413,13 +435,17 @@ function setTool(name, { keepEdit = false } = {}) {
   editor.touchStart = null;
   if (editor.textEdit && !keepEdit) editor.endTextEdit(true);
   editor.tool = name;
+  if (["polygon", "nodes"].includes(name)) document.body.classList.remove("no-panel");
   for (const b of document.querySelectorAll("#tools [data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === name));
   $("stage").dataset.tool = name;
   editor.drawOverlay();
+  renderPanel();
 }
 
 function updateActions() {
   const count = editor.selection.length;
+  if ($("align-tools")) $("align-tools").disabled = !count;
+  if ($("text-tools")) $("text-tools").disabled = !editor.selection.some(e => e.localName === "text");
   if ($("group-selection")) $("group-selection").disabled = count < 2;
   if ($("object-actions")) $("object-actions").textContent = count ? `Actions (${count})` : "Actions";
 }
@@ -561,14 +587,25 @@ function families() {
 }
 
 function renderPanel() {
+  if (!state.deck) return;
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
+  if (editor.tool === "polygon") parts.push(section("Polygon tool",
+    row("Sides", numberControl(editor.polygonSides || 5, {min:3,max:32,step:1}, v => {editor.polygonSides = Math.max(3,Math.min(32,Math.round(v)));})),
+    el("p", {class:"hint"}, "Drag to draw a polygon. Use Edit points to move individual vertices.")));
+  if (["bezier", "nodes"].includes(editor.tool)) parts.push(section("Curve and point editing",
+    el("p", {class:"hint"}, "Drag with Bézier to create a curve. Choose Edit points to drag anchors or round control handles. Moving an anchor carries its handles with it."),
+    sel.length === 1 && editor.curvePoints(sel[0]) ? buttonRow([
+      ["Add anchors", "Split each segment without changing its shape", () => editor.splitCurve()],
+      ["Extend curve", "Add a segment at the end of the curve", () => editor.extendCurve()],
+    ]) : null));
   if (editor.textEdit) {
     const base = editor.textEdit.base;
     parts.push(section("Editing text",
       buttonRow([["Bold", "Bold (Ctrl+B)", () => editor.formatText("bold")],
                  ["Italic", "Italic (Ctrl+I)", () => editor.formatText("italic")],
+                 ["Underline", "Underline (Ctrl+U)", () => editor.formatText("underline")],
                  ["x₂", "Subscript", () => editor.formatText("subscript")],
                  ["x²", "Superscript", () => editor.formatText("superscript")]]),
       row("Colour", colorControl(base.fill, (c) => editor.formatText("foreColor", c), false)),
@@ -654,7 +691,13 @@ function renderPanel() {
     weightSelect.addEventListener("change", () => { editor.setStyle("font-weight", weightSelect.value, texts); state.prefs.weight = +weightSelect.value; savePrefs(); });
     const size = Math.round((parseFloat(tcs.fontSize) || 16) * scale * 10) / 10;
     const anchor = tcs.textAnchor;
+    const underlined = editor.lookAt(glyphs, texts[0]).decoration.includes("underline");
     parts.push(section("Text",
+      buttonRow([
+        ["Bold", "Toggle bold", () => editor.setStyle("font-weight", weight >= 600 ? "400" : "700", texts), weight >= 600],
+        ["Italic", "Toggle italic", () => editor.setStyle("font-style", tcs.fontStyle === "italic" ? "normal" : "italic", texts), tcs.fontStyle === "italic"],
+        ["Underline", "Toggle underline", () => editor.setStyle("text-decoration-line", underlined ? "none" : "underline", texts), underlined],
+      ]),
       row("Font", famSelect), row("Weight", weightSelect),
       row("Size", numberControl(size, { min: 1, max: 1000, step: 1 }, (v) => {
         editor.change(() => { for (const t of texts) editor.applyStyle(t, "font-size", `${+(v / editor.textScale(t)).toFixed(4)}px`); });
@@ -666,6 +709,9 @@ function renderPanel() {
       buttonRow([["Edit text", "Or double-tap the text", () => editor.editText(texts[0], false)]])));
   }
 
+  if (sel.length === 1 && editor.editableNodes(first) && editor.tool !== "nodes") {
+    parts.push(section("Points", buttonRow([["Edit points", "Edit anchors and control handles (N)", () => setTool("nodes")]])));
+  }
   if (lines.length) {
     parts.push(section("Arrowheads", buttonRow([
       ["Start", "Arrowhead at the start", () => editor.setArrow("start", !editor.hasArrow(lines[0], "start")), editor.hasArrow(lines[0], "start")],
@@ -686,11 +732,16 @@ function renderPanel() {
       el("p", { class: "hint" }, "Movies with the same sync group continue across slides without restarting.")));
   }
 
+  const alignTarget = el("select", {"aria-label":"Alignment reference"},
+    el("option", {value:"selection", selected:!editor.alignToSlide}, "Selection bounds"),
+    el("option", {value:"slide", selected:!!editor.alignToSlide}, "Slide"));
+  alignTarget.onchange = () => {editor.alignToSlide = alignTarget.value === "slide";};
   parts.push(section(sel.length > 1 ? "Align" : "Align on slide",
-    buttonRow([["Left", "Align left edges", () => editor.align("left")], ["Centre", "Align centres", () => editor.align("centre")],
-               ["Right", "Align right edges", () => editor.align("right")]]),
-    buttonRow([["Top", "Align top edges", () => editor.align("top")], ["Middle", "Align middles", () => editor.align("middle")],
-               ["Bottom", "Align bottom edges", () => editor.align("bottom")]]),
+    sel.length > 1 ? row("Relative to", alignTarget) : null,
+    buttonRow([["Left", "Align left edges", () => editor.align("left", editor.alignToSlide)], ["Centre", "Align centres", () => editor.align("centre", editor.alignToSlide)],
+               ["Right", "Align right edges", () => editor.align("right", editor.alignToSlide)]]),
+    buttonRow([["Top", "Align top edges", () => editor.align("top", editor.alignToSlide)], ["Middle", "Align middles", () => editor.align("middle", editor.alignToSlide)],
+               ["Bottom", "Align bottom edges", () => editor.align("bottom", editor.alignToSlide)]]),
     sel.length > 2 ? row("Spread", buttonRow([["Across", "Space evenly left to right", () => editor.distribute("x")],
                                               ["Down", "Space evenly top to bottom", () => editor.distribute("y")]])) : null,
     sel.length === 1 ? el("p", { class: "hint" }, "To align objects with each other, select several: turn on Select several in the toolbar, or drag around them.") : null));

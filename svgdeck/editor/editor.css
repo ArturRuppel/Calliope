@@ -118,3 +118,16 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
   .deck-title { display: none; }
   #present { padding: 0 8px; }
 }
+
+/* Named tool families keep navigation and document commands separate from drawing. */
+.tools { align-items: stretch; gap: 6px; }
+.tool-category { border-right: 1px solid var(--line); padding-right: 6px; min-width: 0; }
+.category-label { display: block; padding: 0 6px; color: var(--muted); font-size: 11px; }
+.category-tools { display: flex; flex-wrap: wrap; gap: 2px; }
+.tool-category .btn { padding: 0 7px; font-size: 12px; }
+.tool-category .icon { width: 18px; height: 18px; }
+.tool-bar { max-height: 30dvh; overflow-y: auto; }
+.stage[data-tool="circle"], .stage[data-tool="polygon"], .stage[data-tool="bezier"], .stage[data-tool="nodes"] { cursor: crosshair; }
+@media (max-width: 600px) {
+  .tool-category { max-width: 100%; }
+}

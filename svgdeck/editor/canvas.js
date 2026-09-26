@@ -41,15 +41,24 @@ const BLOCKS = new Set(["div", "p", "li"]);
 // stroke:none on the spans of a text that has a stroke). A rewritten text
 // takes its first character's values, so it looks the same.
 const TEXT_PAINT = ["stroke", "stroke-width", "stroke-opacity", "stroke-linejoin", "stroke-linecap", "stroke-dasharray",
-  "fill-opacity", "paint-order", "letter-spacing", "word-spacing", "font-stretch", "font-variant", "text-decoration-line"];
+  "fill-opacity", "paint-order", "letter-spacing", "word-spacing", "font-stretch", "font-variant"];
 
 function sameShift(a, b, size) {
   if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < size * 0.01;
   return (a || 0) === (b || 0);
 }
 
+function decorationOf(el, stop) {
+  const values = new Set();
+  for (let n = el; n && n.nodeType === 1; n = n.parentNode) {
+    for (const value of getComputedStyle(n).textDecorationLine.split(" ")) if (value !== "none") values.add(value);
+    if (n === stop) break;
+  }
+  return [...values].sort().join(" ") || "none";
+}
+
 function sameLook(a, b) {
-  return a.family === b.family && a.weight === b.weight && a.fontStyle === b.fontStyle &&
+  return (a.decoration || "none") === (b.decoration || "none") && a.family === b.family && a.weight === b.weight && a.fontStyle === b.fontStyle &&
     (toHex(a.fill) || a.fill) === (toHex(b.fill) || b.fill) && Math.abs(a.size / b.size - 1) < 0.01 &&
     sameShift(a.shift, b.shift, b.size);
 }
@@ -84,6 +93,7 @@ function sameRuns(a, b) {
 /** How a run's look differs from the text's, as SVG style properties. */
 function lookDiff(look, base) {
   const diff = [];
+  if ((look.decoration || "none") !== (base.decoration || "none")) diff.push(["text-decoration-line", look.decoration || "none"]);
   if (look.family !== base.family) diff.push(["font-family", look.family]);
   if (look.weight !== base.weight) diff.push(["font-weight", look.weight]);
   if (look.fontStyle !== base.fontStyle) diff.push(["font-style", look.fontStyle]);
@@ -97,7 +107,7 @@ function lookDiff(look, base) {
 
 /** A run in the edit box: plain text in the text's own look, a span otherwise. */
 function htmlRun(run, base) {
-  const diff = lookDiff(run.look, base);
+  const diff = lookDiff(run.look, {...base, decoration:"none"});
   if (!diff.length) return document.createTextNode(run.text);
   const span = document.createElement("span");
   for (const [prop, v] of diff) {
@@ -438,6 +448,23 @@ export class SlideEditor {
       make("rect", { x: Math.min(g.start.x, g.now.x), y: Math.min(g.start.y, g.now.y),
         width: Math.abs(g.now.x - g.start.x), height: Math.abs(g.now.y - g.start.y), class: "ov-marquee", "stroke-width": px });
     }
+    if (this.tool === "nodes" && this.selection.length === 1) {
+      const el = this.selection[0], nodes = this.editableNodes(el);
+      if (nodes) {
+        const points = nodes.points.map(p => toRoot(el, this.svg).transformPoint(new DOMPoint(p.x, p.y)));
+        if (nodes.curve) for (let i = 0; i < points.length - 1; i++) {
+          if (i % 3 === 1) continue;
+          make("line", {x1: points[i].x, y1: points[i].y, x2: points[i+1].x, y2: points[i+1].y, class: "ov-box", "stroke-width": px});
+        }
+        points.forEach((p, i) => {
+          const control = nodes.curve && i % 3;
+          make(control ? "circle" : "rect", control ?
+            {cx:p.x, cy:p.y, r:7*px, class:"ov-handle", "data-node":i, "stroke-width":2*px} :
+            {x:p.x-8*px,y:p.y-8*px,width:16*px,height:16*px,rx:2*px,class:"ov-handle", "data-node":i,"stroke-width":2*px});
+        });
+        return;
+      }
+    }
     if (!this.selection.length) return;
     for (const el of this.selection.length > 1 ? this.selection : []) {
       const b = rootBox(el, this.svg);
@@ -589,10 +616,83 @@ export class SlideEditor {
       moved: false, shift: e.shiftKey };
     switch (this.tool) {
       case "select": return this.downSelect(e, p, base);
+      case "nodes": return this.downNode(e, p, base);
       case "pen": return this.downPen(p, base);
       case "text": this.gesture = { kind: "text", ...base }; return;
       default: this.gesture = { kind: "create", shape: this.tool, ...base }; return;
     }
+  }
+
+  // Native SVG geometry remains the source of truth; there is no stale sidecar.
+  curvePoints(el) {
+    if (el?.localName !== "path") return null;
+    const d = el.getAttribute("d") || "";
+    const num = "[-+]?(?:\\d*\\.\\d+|\\d+\\.?\\d*)(?:[eE][-+]?\\d+)?";
+    const pair = `${num}[ ,]+${num}`;
+    if (!new RegExp(`^\\s*M\\s*${pair}(?:\\s*C\\s*${pair}[ ,]+${pair}[ ,]+${pair})+\\s*$`).test(d)) return null;
+    const values = d.match(new RegExp(num, "g")).map(Number);
+    if (!values.every(Number.isFinite)) return null;
+    return Array.from({length: values.length / 2}, (_, i) => ({x:values[2*i], y:values[2*i+1]}));
+  }
+
+  writeCurve(el, points) {
+    const p = points.map(q => `${+q.x.toFixed(3)},${+q.y.toFixed(3)}`);
+    el.setAttribute("d", `M${p[0]} ` + Array.from({length:(p.length-1)/3}, (_,i) => `C${p.slice(i*3+1,i*3+4).join(" ")}`).join(" "));
+  }
+
+  editableNodes(el) {
+    const curve = this.curvePoints(el);
+    if (curve) return {curve: true, points: curve};
+    if (["polygon", "polyline"].includes(el?.localName)) {
+      return {curve: false, points: Array.from(el.points, p => ({x:p.x,y:p.y}))};
+    }
+    return null;
+  }
+
+  downNode(e, p, base) {
+    const el = this.selection.length === 1 && this.selection[0];
+    const nodes = this.editableNodes(el);
+    if (nodes) {
+      const m = toRoot(el, this.svg);
+      let index = -1, distance = e.pointerType === "touch" ? 22 : 12;
+      nodes.points.forEach((q, i) => {
+        const v = m.transformPoint(new DOMPoint(q.x,q.y));
+        const d = Math.hypot(v.x-p.x,v.y-p.y) * this.zoom;
+        if (d < distance) {index = i; distance = d;}
+      });
+      if (index >= 0) {
+        this.begin();
+        this.gesture = {kind:"node", ...base, ...nodes, el, index, inverse:m.inverse(), original:el.getAttribute(nodes.curve ? "d" : "points")};
+        return;
+      }
+    }
+    const picked = this.pick(e,p);
+    this.select(picked ? [picked] : []);
+    if (picked && !this.editableNodes(picked)) this.hooks.toast("Choose a Bézier curve or polygon to edit its points.");
+  }
+
+  extendCurve() {
+    const el = this.selection[0], points = this.curvePoints(el);
+    if (!points) return;
+    const end = points.at(-1), previous = points.at(-2);
+    const dx = end.x-previous.x, dy=end.y-previous.y;
+    points.push({x:end.x+dx,y:end.y+dy}, {x:end.x+160,y:end.y}, {x:end.x+240,y:end.y});
+    this.change(() => this.writeCurve(el,points));
+  }
+
+  splitCurve() {
+    const el = this.selection[0], points = this.curvePoints(el);
+    if (!points) return;
+    if (points.length > 193) { this.hooks.toast("This curve already has many anchors; drag its existing points to refine it."); return; }
+    // De Casteljau subdivision preserves the exact curve while adding anchors.
+    const mid = (a,b) => ({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
+    const out = [points[0]];
+    for (let i=0; i<points.length-1; i+=3) {
+      const [a,b,c,d] = points.slice(i,i+4), ab=mid(a,b), bc=mid(b,c), cd=mid(c,d);
+      const abc=mid(ab,bc), bcd=mid(bc,cd), center=mid(abc,bcd);
+      out.push(ab,abc,center,bcd,cd,d);
+    }
+    this.change(() => this.writeCurve(el,out));
   }
 
   downSelect(e, p, base) {
@@ -682,6 +782,18 @@ export class SlideEditor {
         this.applyDelta(g.snaps, new DOMMatrix().translateSelf(dx, dy));
         break;
       }
+      case "node": {
+        const q = g.inverse.transformPoint(new DOMPoint(p.x, p.y));
+        const points = g.points.map(v => ({...v}));
+        const dx = q.x - points[g.index].x, dy = q.y - points[g.index].y;
+        points[g.index] = {x: q.x, y: q.y};
+        if (g.curve && g.index % 3 === 0) {
+          for (const i of [g.index - 1, g.index + 1]) if (points[i]) { points[i].x += dx; points[i].y += dy; }
+        }
+        if (g.curve) this.writeCurve(g.el, points);
+        else g.el.setAttribute("points", points.map(v => `${v.x},${v.y}`).join(" "));
+        break;
+      }
       case "resize": this.moveResize(g, p, e.shiftKey); break;
       case "endpoint": {
         let q = this.snapPoint(p);
@@ -759,9 +871,10 @@ export class SlideEditor {
 
   newShape(shape) {
     const style = this.hooks.shapeStyle();
-    const tag = { rect: "rect", ellipse: "ellipse", line: "line", arrow: "line" }[shape];
+    const tag = { rect: "rect", ellipse: "ellipse", circle: "circle", polygon: "polygon", bezier: "path", line: "line", arrow: "line" }[shape];
     const el = document.createElementNS(SVGNS, tag);
-    if (tag === "line") {
+    if (tag === "line" || shape === "bezier") {
+      el.style.setProperty("fill", "none");
       el.style.setProperty("stroke", style.stroke === "none" ? "#000000" : style.stroke);
       el.style.setProperty("stroke-width", style.strokeWidth);
       el.style.setProperty("stroke-linecap", "round");
@@ -786,9 +899,20 @@ export class SlideEditor {
       el.setAttribute("x2", r(a.x + dx)); el.setAttribute("y2", r(a.y + dy));
       return;
     }
-    if (constrain) { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * s; dy = Math.sign(dy || 1) * s; }
+    if (constrain || shape === "circle") { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * s; dy = Math.sign(dy || 1) * s; }
     const x = Math.min(a.x, a.x + dx), y = Math.min(a.y, a.y + dy), w = Math.abs(dx), h = Math.abs(dy);
-    if (shape === "rect") {
+    if (shape === "bezier") {
+      this.writeCurve(el, [{ x: a.x, y: a.y }, { x: a.x + dx / 3, y: a.y - 100 },
+        { x: a.x + 2 * dx / 3, y: b.y + 100 }, { x: b.x, y: b.y }]);
+    } else if (shape === "polygon") {
+      const n = this.polygonSides || 5;
+      el.setAttribute("points", Array.from({length: n}, (_, i) => {
+        const angle = -Math.PI / 2 + i * 2 * Math.PI / n;
+        return `${r(x + w / 2 + Math.cos(angle) * w / 2)},${r(y + h / 2 + Math.sin(angle) * h / 2)}`;
+      }).join(" "));
+    } else if (shape === "circle") {
+      el.setAttribute("cx", r(x + w / 2)); el.setAttribute("cy", r(y + h / 2)); el.setAttribute("r", r(w / 2));
+    } else if (shape === "rect") {
       el.setAttribute("x", r(x)); el.setAttribute("y", r(y)); el.setAttribute("width", r(w)); el.setAttribute("height", r(h));
     } else {
       el.setAttribute("cx", r(x + w / 2)); el.setAttribute("cy", r(y + h / 2));
@@ -820,7 +944,7 @@ export class SlideEditor {
     const p = this.point(e);
     switch (g.kind) {
       case "pan": return;
-      case "move": case "resize": case "rotate": case "endpoint":
+      case "move": case "resize": case "rotate": case "endpoint": case "node":
         this.commit();
         if (g.kind === "move" && !g.moved && g.additive) {
           if (g.toggle) this.select(this.selection.filter((s) => s !== g.target));
@@ -851,7 +975,7 @@ export class SlideEditor {
           this.begin();
           const c = this.snapPoint(p);
           g.el = this.adopt(this.newShape(g.shape));
-          const size = g.shape === "rect" || g.shape === "ellipse" ? [240, 160] : [240, 0];
+          const size = ["line", "arrow"].includes(g.shape) ? [240, 0] : [240, 160];
           this.shapeGeometry(g.el, g.shape, { x: c.x - size[0] / 2, y: c.y - size[1] / 2 },
             { x: c.x + size[0] / 2, y: c.y + size[1] / 2 }, false);
         }
@@ -904,6 +1028,7 @@ export class SlideEditor {
       g.line.setAttribute(`x${g.which}`, g.original[0]);
       g.line.setAttribute(`y${g.which}`, g.original[1]);
     }
+    if (g.kind === "node") g.el.setAttribute(g.curve ? "d" : "points", g.original);
     if (g.kind === "draw") g.path.remove();
     if (g.kind === "create" && g.el) g.el.remove();
     this.before = null;
@@ -972,7 +1097,7 @@ export class SlideEditor {
   /** The look of the characters in an element of a text. */
   lookAt(el, stop = null) {
     const cs = getComputedStyle(el);
-    return { family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400), fontStyle: cs.fontStyle,
+    return { decoration: decorationOf(el, stop || el.closest("text")), family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400), fontStyle: cs.fontStyle,
              fill: toHex(cs.fill) || cs.fill, size: parseFloat(cs.fontSize) || 16, shift: stop ? shiftOf(el, stop) : 0 };
   }
 
@@ -1129,7 +1254,7 @@ export class SlideEditor {
     const add = (text, el) => {
       if (!text) return;
       const cs = getComputedStyle(el);
-      pushRun(lines[lines.length - 1], text, { family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400),
+      pushRun(lines[lines.length - 1], text, { decoration: decorationOf(el,box), family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400),
         fontStyle: cs.fontStyle, fill: toHex(cs.color) || "#000000", size: (parseFloat(cs.fontSize) || 16) / scale,
         shift: shiftOf(el, box, scale) });
       atStart = false;
@@ -1200,6 +1325,12 @@ export class SlideEditor {
     const x = first?.getAttribute("x") ?? t.getAttribute("x") ?? "0";
     const y0 = parseFloat(first?.getAttribute("y") ?? t.getAttribute("y") ?? "0") || 0;
     const anchor = getComputedStyle(firstGlyphElement(t)).textAnchor;
+    // Decorations propagate visually through descendants even when set to none.
+    // Keep them on individual runs so later words can remain undecorated.
+    t.style.removeProperty("text-decoration");
+    t.style.setProperty("text-decoration-line", "none");
+    t.removeAttribute("text-decoration");
+    t.removeAttribute("text-decoration-line");
     t.style.setProperty("font-family", base.family);
     t.style.setProperty("font-size", `${+base.size.toFixed(4)}px`);
     t.style.setProperty("font-weight", base.weight);
@@ -1232,7 +1363,7 @@ export class SlideEditor {
       if (dy) line.setAttribute("dy", dy);
       if (!runs.length) line.textContent = " ";
       for (const run of runs) {
-        const diff = lookDiff(run.look, base);
+        const diff = lookDiff(run.look, {...base, decoration:"none"});
         if (!diff.length) { line.append(run.text); continue; }
         const span = document.createElementNS(SVGNS, "tspan");
         for (const [prop, v] of diff) span.style.setProperty(prop, v);
@@ -1396,10 +1527,10 @@ export class SlideEditor {
 
   /** Line objects up by their edges or centres: several objects with each
    *  other, a single one with the slide. */
-  align(how) {
+  align(how, toSlide = false) {
     const items = this.selection.map((el) => ({ el, b: rootBox(el, this.svg) })).filter((i) => i.b);
     if (!items.length) return;
-    const r = items.length > 1 ? unionBox(items.map((i) => i.b)) : { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+    const r = items.length > 1 && !toSlide ? unionBox(items.map((i) => i.b)) : { x: 0, y: 0, width: this.size[0], height: this.size[1] };
     this.change(() => {
       for (const { el, b } of items) {
         const dx = { left: r.x - b.x, centre: r.x + r.width / 2 - b.x - b.width / 2, right: r.x + r.width - b.x - b.width }[how] ?? 0;
@@ -1468,6 +1599,15 @@ export class SlideEditor {
    *  formatted differently (bold, another colour) keep their look; sizes all
    *  scale together. */
   applyTextStyle(t, prop, value) {
+    if (prop === "text-decoration-line") {
+      for (const node of [t, ...t.querySelectorAll("*")]) {
+        node.style.removeProperty("text-decoration");
+        node.removeAttribute("text-decoration");
+        node.removeAttribute(prop);
+        node.style.setProperty(prop, node === t ? value : "none");
+      }
+      return;
+    }
     const old = getComputedStyle(firstGlyphElement(t)).getPropertyValue(prop);
     const ratio = prop === "font-size" ? parseFloat(value) / (parseFloat(old) || 1) : null;
     const inner = Array.from(t.querySelectorAll("*"))

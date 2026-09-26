@@ -32,9 +32,28 @@ on the iPad; "Add to Home Screen" gives it a full-screen window.
 
 ## Editing
 
-Tools: select (V), pan (H), text (T), rectangle (R), ellipse (E), line (L), arrow (A),
-draw (P), and the image button for pictures and movies (movies are converted to
-H.264 mp4 on upload so every browser can play them).
+The toolbar is organized into **Navigate, Insert, Shapes, Paths, Arrange,
+and View**. Select (V) and Pan (H) stay together; document commands remain in
+the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
+
+- **Shapes:** rectangle (R), ellipse (E), circle (C), polygon (G). Drag to size
+  them, or tap for a default size. Circles stay circular; choose 3–32 polygon
+  sides in the properties panel before drawing. Edit points (N) lets you move
+  polygon vertices independently to make irregular shapes.
+- **Paths:** line (L), arrow (A), freehand Draw (P), Bézier (B), Edit points (N).
+  Drag with Bézier to place a cubic curve. Choose Edit points, then drag square
+  anchors or round control handles. Moving an anchor also moves its adjacent
+  handles. **Add anchors** subdivides each segment without changing the curve;
+  **Extend curve** adds another segment at its end. Point editing supports
+  these cubic curves, freehand strokes, polygons and polylines; other imported
+  SVG path commands remain selectable and transformable.
+- **Insert:** text (T) and Media for pictures and movies (movies are converted
+  to H.264 mp4 on upload so every browser can play them).
+- **Arrange:** Group, Actions, Align and Format text. Align opens edge/centre
+  alignment and equal-spacing controls. Several objects can align relative
+  to their selection bounds or the slide; a single object aligns to the slide.
+  Format text opens font, size, weight, bold/italic/underline and line alignment
+  for selected text objects.
 
 - Tap to select, drag to move, drag the handles to resize (corners keep the
   proportions; Shift frees them) or rotate. Drag on empty space to select
@@ -51,7 +70,7 @@ H.264 mp4 on upload so every browser can play them).
   set in the panel with nothing selected.
 - Double-tap text to edit it, or a group to work inside it; tap outside,
   Done or Escape to leave. Editing keeps the text's formatting; while
-  editing, the panel makes selected words bold, italic, sub/superscript or
+  editing, the panel makes selected words bold, italic, underlined, sub/superscript or
   another colour.
 - Choose **Pan** to drag the page without changing objects; choose **Select**
   to move objects, or a drawing tool to draw. The chosen tool works with a
