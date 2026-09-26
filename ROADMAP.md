@@ -71,9 +71,13 @@ No external dependencies, so it can be embedded in an export as-is.
 SVGs inlined (avoids `file://` fetch restrictions), `media/`, and `fonts/`
 converted to woff2.
 
-**Public code, private content.** This repo holds the code only. Decks live
-in the lab-book database repo (`presentations/`). Font files are licensed and
-never go into this repo.
+**Standalone app; the lab book is only the archive.** svgdeck owns its working
+decks in its own data directory on rocinante, outside this repo (set in the
+service config; decks and the font library are content, not code). When a
+talk is final, its standalone export is copied into the lab-book database
+repo (`presentations/<date>_<name>/`) as the archived record. Because the
+export plays itself, the lab book needs no svgdeck code: it just links the
+exported `index.html`. Font files are licensed and never go into this repo.
 
 ## Milestones
 
@@ -114,5 +118,8 @@ never go into this repo.
 - Importer depth: bring old decks in as editable shapes, or as flattened
   images per slide? Editable means handling ~4.8k clip paths, markers and
   filters, but keeps old drawings reusable.
-- Where decks are edited: directly in the lab-book database checkout, or in
-  a service data directory that is synced into it.
+- Backups of the working data directory (decks in progress exist only
+  there until archived).
+
+Decided 2026-09-26: svgdeck is standalone; the lab book only archives the
+final static exports (see Architecture).
