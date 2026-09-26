@@ -123,3 +123,44 @@ def test_conflict_keeps_flush_rejected(page, server):
     }""")
     assert result == [True, True]
     assert "data-conflict-probe" not in path.read_text()
+
+
+def test_present_and_export_stay_in_editor_on_save_failure(page):
+    result = page.evaluate("""async () => {
+      const original = window.fetch, originalOpen = window.open;
+      let closed = 0, opened = 0, navigated = false;
+      const requests = [];
+      window.open = () => {
+        opened++;
+        return { close: () => closed++, location: { set href(value) { navigated = true; } } };
+      };
+      window.fetch = async (...args) => {
+        if (args[1]?.method === 'PUT' && args[0].includes('/slides/')) {
+          requests.push(args[0]);
+          return new Response(JSON.stringify({detail:'review failure'}), {status:500});
+        }
+        return original(...args);
+      };
+      try {
+        svgdeckEditor.editor.change(() => svgdeckEditor.editor.svg.setAttribute('data-latest', 'unsaved'));
+        const originalURL = location.href;
+        await document.getElementById('present').onclick();
+        await document.getElementById('export').onclick({preventDefault() {}});
+        return {closed, opened, navigated, stayed:location.href === originalURL, attempts:requests.length};
+      } finally { window.fetch = original; window.open = originalOpen; }
+    }""")
+    assert result == {"closed": 1, "opened": 1, "navigated": False, "stayed": True, "attempts": 2}
+
+
+def test_typing_activates_unload_protection_before_autosave(page):
+    page.evaluate("""() => {
+      const e = svgdeckEditor.editor, t = e.newText({x:300,y:300});
+      e.select([t]); e.editText(t, true);
+    }""")
+    page.keyboard.type("Protect this text")
+    result = page.evaluate("""() => {
+      const event = new Event('beforeunload', {cancelable:true});
+      window.dispatchEvent(event);
+      return {prevented:event.defaultPrevented, dirty:svgdeckEditor.state.slides.get(svgdeckEditor.state.current).dirty};
+    }""")
+    assert result == {"prevented": True, "dirty": True}

@@ -128,3 +128,62 @@ def test_refuses_symlink_alias_of_source(deck, tmp_path):
     with pytest.raises(ValueError, match="overlap"):
         export(Deck.load(deck), alias)
     assert alias.is_symlink()
+
+
+def test_reexport_replaces_page_zip_and_obsolete_assets(tmp_path):
+    root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body="<text>before</text>"))])
+    out = export(Deck.load(root), tmp_path / "out", tmp_path / "out.zip")
+    (out / "obsolete.txt").write_text("old export asset")
+    (root / "slides" / "a.svg").write_text(SLIDE.format(color="#fff", body="<text>after</text>"))
+    export(Deck.load(root), out, tmp_path / "out.zip")
+    assert "after" in (out / "index.html").read_text()
+    assert not (out / "obsolete.txt").exists()
+    with zipfile.ZipFile(tmp_path / "out.zip") as archive:
+        assert b"after" in archive.read("out/index.html")
+    assert not list(tmp_path.glob(".*.old-*"))
+    assert not list(tmp_path.glob(".*.tmp-*"))
+
+
+def test_zip_install_failure_rolls_back_both_outputs(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body="<text>before</text>"))])
+    zip_path = tmp_path / "out.zip"
+    out = export(Deck.load(root), tmp_path / "out", zip_path)
+    old_page = (out / "index.html").read_bytes()
+    old_zip = zip_path.read_bytes()
+    (root / "slides" / "a.svg").write_text(SLIDE.format(color="#fff", body="<text>after</text>"))
+    original_replace = Path.replace
+
+    def fail_install(path, target):
+        if path.name.startswith(".out.zip.tmp-") and target == zip_path:
+            raise OSError("install failed")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", fail_install)
+    with pytest.raises(OSError, match="install failed"):
+        export(Deck.load(root), out, zip_path)
+    assert (out / "index.html").read_bytes() == old_page
+    assert zip_path.read_bytes() == old_zip
+    assert not list(tmp_path.glob(".*.old-*"))
+    assert not list(tmp_path.glob(".*.tmp-*"))
+
+
+def test_font_conversion_failure_preserves_export(tmp_path, monkeypatch):
+    import importlib
+
+    module = importlib.import_module("svgdeck.export")
+    root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body=""))])
+    deck = Deck.load(root)
+    out = export(deck, tmp_path / "out")
+    original = (out / "index.html").read_bytes()
+    deck.meta["fonts"] = [{"family": "Probe", "file": "fonts/probe.ttf"}]
+
+    def fail_font(*args):
+        raise ValueError("bad font")
+
+    monkeypatch.setattr(module, "to_woff2", fail_font)
+    with pytest.raises(ValueError, match="bad font"):
+        export(deck, out)
+    assert (out / "index.html").read_bytes() == original
+    assert not list(tmp_path.glob(".*.tmp-*"))
