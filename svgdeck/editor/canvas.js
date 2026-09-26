@@ -11,6 +11,15 @@ const DOUBLE_TAP_MS = 350;
 const BAKEABLE = new Set(["rect", "image", "ellipse", "circle", "line"]);
 const SKIP = new Set(["defs", "title", "desc", "metadata", "style", "script"]);
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const INHERITED_PRESENTATION = new Set([
+  "color", "color-interpolation", "color-interpolation-filters", "color-rendering", "cursor", "direction",
+  "fill", "fill-opacity", "fill-rule", "font-family", "font-size", "font-size-adjust", "font-stretch",
+  "font-style", "font-variant", "font-weight", "image-rendering", "letter-spacing", "marker-end", "marker-mid",
+  "marker-start", "paint-order", "pointer-events", "shape-rendering", "stroke", "stroke-dasharray",
+  "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width",
+  "text-anchor", "text-rendering", "visibility", "word-spacing", "writing-mode",
+]);
+const hasMovie = (el) => el.matches("image[data-video]") || !!el.querySelector("image[data-video]");
 
 const num = (el, name) => parseFloat(el.getAttribute(name)) || 0;
 const GENERIC = new Set(["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"]);
@@ -1194,34 +1203,42 @@ export class SlideEditor {
   duplicate() {
     if (!this.selection.length) return;
     this.change(() => {
-      const copies = this.selection.map((el) => {
-        const c = this.cloneWithNewIds(el);
+      const copies = this.selection.map((el) => el.cloneNode(true));
+      this.remapIds(copies);
+      this.selection.forEach((el, i) => {
+        const c = copies[i];
         el.after(c);
-        return c;
       });
       this.selection = copies;
       this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(24, 24));
     });
   }
 
-  /** Clone, renaming ids defined inside the clone (and references to them). */
-  cloneWithNewIds(el) {
-    const c = el.cloneNode(true);
-    const suffix = "-" + Math.random().toString(36).slice(2, 7);
+  /** Rename ids and references in several objects with one shared mapping. */
+  remapIds(roots) {
+    const used = new Set(Array.from(this.svg.querySelectorAll("[id]"), (el) => el.id));
     const map = new Map();
-    for (const n of [c, ...c.querySelectorAll("[id]")]) {
-      if (n.id) { map.set(n.id, n.id + suffix); n.id += suffix; }
+    for (const n of roots.flatMap((root) => [root, ...root.querySelectorAll("[id]")])) {
+      if (!n.id || map.has(n.id)) continue;
+      const base = n.id;
+      let id;
+      do { id = `${base}-copy-${Math.random().toString(36).slice(2, 7)}`; } while (used.has(id));
+      used.add(id);
+      map.set(base, id);
     }
-    if (!map.size) return c;
-    for (const n of [c, ...c.querySelectorAll("*")]) {
-      for (const attr of Array.from(n.attributes)) {
-        let v = attr.value;
-        if (attr.localName === "href" && v.startsWith("#") && map.has(v.slice(1))) v = "#" + map.get(v.slice(1));
-        else if (v.includes("url(#")) v = v.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g, (m, q, id) => map.has(id) ? `url(#${map.get(id)})` : m);
-        if (v !== attr.value) n.setAttribute(attr.name, v);
+    for (const root of roots) {
+      for (const n of [root, ...root.querySelectorAll("*")]) {
+        if (n.id && map.has(n.id)) n.id = map.get(n.id);
+        for (const attr of Array.from(n.attributes)) {
+          let v = attr.value;
+          if (attr.localName === "href" && v.startsWith("#") && map.has(v.slice(1))) v = "#" + map.get(v.slice(1));
+          else if (v.includes("url(")) v = v.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g,
+            (match, quote, id) => map.has(id) ? `url(#${map.get(id)})` : match);
+          if (v !== attr.value) n.setAttributeNS(attr.namespaceURI, attr.name, v);
+        }
       }
     }
-    return c;
+    return roots;
   }
 
   order(where) {
@@ -1257,6 +1274,10 @@ export class SlideEditor {
 
   group() {
     if (this.selection.length < 2) return;
+    if (this.selection.some(hasMovie)) {
+      this.hooks.toast("Movies cannot be grouped because grouped movies do not play in presentations.");
+      return;
+    }
     this.change(() => {
       const sel = Array.from(this.context.children).filter((el) => this.selection.includes(el));
       const g = document.createElementNS(SVGNS, "g");
@@ -1270,8 +1291,13 @@ export class SlideEditor {
     const groups = this.selection.filter((el) => el.localName === "g");
     if (!groups.length) return;
     for (const g of groups) {
-      if (["clip-path", "mask", "filter"].some((a) => g.hasAttribute(a) || g.style.getPropertyValue(a)) ||
-          (g.style.opacity && +g.style.opacity < 1)) {
+      const groupStyle = getComputedStyle(g);
+      const opacity = parseFloat(groupStyle.opacity);
+      if (["clip-path", "mask", "filter"].some((a) => {
+        const value = groupStyle.getPropertyValue(a);
+        return value && value !== "none";
+      }) ||
+          opacity !== 1) {
         this.hooks.toast("This group has clipping or effects; ungrouping would change how it looks.");
         return;
       }
@@ -1280,12 +1306,22 @@ export class SlideEditor {
       const released = [];
       for (const g of groups) {
         const T = localMatrix(g);
-        const inherited = Array.from(g.style).map((p) => [p, g.style.getPropertyValue(p)]);
+        const probe = document.createElementNS(SVGNS, "g");
+        g.after(probe);
+        const groupStyle = getComputedStyle(g), neutralStyle = getComputedStyle(probe);
+        const inherited = Array.from(INHERITED_PRESENTATION)
+          .map((p) => [p, groupStyle.getPropertyValue(p)])
+          .filter(([p, value]) => value && value !== neutralStyle.getPropertyValue(p));
+        probe.remove();
         for (const child of Array.from(g.children)) {
           if (child.nodeType === 1 && !SKIP.has(child.localName)) {
+            const computed = getComputedStyle(child);
+            const childValues = new Map(inherited.map(([p]) => [p, computed.getPropertyValue(p)]));
             setTransform(child, T.multiply(localMatrix(child)));
-            for (const [p, v] of inherited) {
-              if (!child.style.getPropertyValue(p) && !child.hasAttribute(p)) child.style.setProperty(p, v);
+            for (const [p] of inherited) {
+              // Freeze the resolved child value: a relative child override
+              // (for example 2em inside a 2em group) also changes on reparent.
+              child.style.setProperty(p, childValues.get(p));
             }
             released.push(child);
           }
@@ -1575,16 +1611,23 @@ export class SlideEditor {
       for (const d of parsed.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefIn);
       return document.importNode(parsed, true);
     };
+    const pastedDefs = clip.defs.map(parse);
+    const pastedItems = clip.items.map(parse);
+    if (this.context !== this.svg && pastedItems.some(hasMovie)) {
+      this.hooks.toast("Movies cannot be pasted into groups because grouped movies do not play in presentations.");
+      return true;
+    }
+
+    // Clipboard ids are slide-local. Rename definitions and items as one unit,
+    // so collisions and references between separately copied objects are safe.
+    this.remapIds([...pastedDefs, ...pastedItems]);
+
     this.change(() => {
       let defs = this.svg.querySelector(":scope > defs");
       if (!defs) { defs = document.createElementNS(SVGNS, "defs"); this.svg.prepend(defs); }
-      for (const s of clip.defs) {
-        const d = parse(s);
-        if (!this.svg.querySelector(`#${CSS.escape(d.id)}`)) defs.appendChild(d);
-      }
+      for (const d of pastedDefs) defs.appendChild(d);
       const P = toRoot(this.context, this.svg).inverse();
-      const pasted = clip.items.map((s) => {
-        const el = this.cloneWithNewIds(parse(s));
+      const pasted = pastedItems.map((el) => {
         setTransform(el, P.multiply(localMatrix(el)));
         this.context.appendChild(el);
         return el;
