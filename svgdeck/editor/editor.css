@@ -62,10 +62,12 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .ov-marquee { fill: rgba(47, 111, 219, .08); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
 /* Line ends: hollow rings, so arrowheads under them stay visible. */
+.ov-gridline { fill: none; stroke: rgba(47, 111, 219, .28); }
 .ov-end { fill: rgba(47, 111, 219, .12); stroke: var(--accent); }
 .text-edit { position: absolute; z-index: 5; margin: 0; padding: 2px 4px; border: 1.5px solid var(--accent); border-radius: 3px;
-  background: rgba(255, 255, 255, .92); outline: none; resize: none; overflow: hidden; white-space: pre;
-  -webkit-user-select: text; user-select: text; }
+  background: rgba(255, 255, 255, .92); outline: none; overflow: visible; white-space: pre; width: max-content;
+  -webkit-user-select: text; user-select: text; cursor: text; }
+.text-edit > div { min-height: 1em; }
 
 .panel { background: var(--surface); border-left: 1px solid var(--line); overflow-y: auto; padding: 4px 12px 40px; }
 .panel section { padding: 10px 0; border-bottom: 1px solid var(--line); }

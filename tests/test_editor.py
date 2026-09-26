@@ -357,7 +357,7 @@ def test_editing_imported_rich_text_keeps_its_font_and_size(page, server):
         });
         t.append(...lines); e.svg.append(t); e.selection = [t];
       }); })()""")
-    page.once("dialog", lambda d: d.accept())
+    page.on("dialog", lambda d: pytest.fail(f"unexpected dialog: {d.message}"))
     page.keyboard.press("Enter")  # edit the selected text
     page.wait_for_selector(".text-edit")
     page.keyboard.press("End")
@@ -367,4 +367,153 @@ def test_editing_imported_rich_text_keeps_its_font_and_size(page, server):
       const cs = getComputedStyle(s);
       return [cs.fontFamily, cs.fontSize, cs.fill, Array.from(t.querySelectorAll('tspan')).map(x => [x.textContent, x.getAttribute('y')])]; })()""")
     assert t[0] == "monospace" and t[1] == "12px" and t[2] == "rgb(18, 52, 86)"
-    assert t[3] == [["Mostly imaging", "80"], ["Second line data", "95"]]  # line spacing kept
+    assert t[3][0::2] == [["Mostly imaging", "80"], ["Second line data", "95"]]  # line spacing kept
+    # The bold words stay bold, the others don't.
+    bold = page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('text tspan tspan'))
+      .map(s => [s.textContent, getComputedStyle(s).fontWeight])""")
+    assert bold == [["imaging", "700"], ["line data", "700"]]  # typing continues the bold
+    plain = page.evaluate("getComputedStyle(svgdeckEditor.editor.svg.querySelector('text tspan')).fontWeight")
+    assert plain == "400"
+
+
+def exact(label):
+    return re.compile(rf"^{re.escape(label)}$")
+
+
+def button(page, label):
+    page.locator("#panel button").filter(has_text=exact(label)).first.click()
+
+
+def add_rects(page, boxes):
+    page.evaluate(f"""(() => {{ const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {{ for (const [x, y, w, h] of {boxes}) {{
+        const r = document.createElementNS(ns, 'rect');
+        for (const [k, v] of Object.entries({{x, y, width: w, height: h, fill: '#888'}})) r.setAttribute(k, v);
+        e.svg.append(r); }} }}); }})()""")
+
+
+def rect_boxes(page):
+    return page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('rect:not([data-locked])'))
+      .map(r => { const b = r.getBBox(), m = r.getCTM(), s = svgdeckEditor.editor.svg.getCTM().inverse().multiply(m);
+                  return [Math.round(b.x + s.e), Math.round(b.y + s.f), Math.round(b.width), Math.round(b.height)]; })""")
+
+
+def test_bold_on_selected_words_while_editing(page, server):
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 300, 300))
+    page.keyboard.type("plain strong")
+    for _ in "strong":
+        page.keyboard.press("Shift+ArrowLeft")
+    button(page, "Bold")
+    assert page.locator(".text-edit").count() == 1, "the panel ended the edit"
+    page.keyboard.press("End")
+    page.keyboard.type("!")
+    button(page, "Done")
+    words = page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('text tspan tspan'))
+      .map(s => [s.textContent, getComputedStyle(s).fontWeight])""")
+    assert words and words[0][0].startswith("strong") and int(words[0][1]) >= 700
+    line = page.evaluate("svgdeckEditor.editor.svg.querySelector('text tspan').textContent")
+    assert line == "plain strong!"
+    assert "font-weight: 700" in saved_slide(page, server) or "font-weight:700" in saved_slide(page, server)
+
+
+def test_whole_text_weight_keeps_bold_words(page, server):
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const t = document.createElementNS(ns, 'text'); t.setAttribute('style', 'font-size:40px;font-weight:400');
+        const line = document.createElementNS(ns, 'tspan'); line.setAttribute('x', '200'); line.setAttribute('y', '300');
+        const b = document.createElementNS(ns, 'tspan'); b.setAttribute('style', 'font-weight:700'); b.textContent = 'bold';
+        line.append('plain ', b); t.append(line); e.svg.append(t); e.selection = [t];
+      }); e.select(e.selection); })()""")
+    page.evaluate("svgdeckEditor.editor.setStyle('font-weight', '300')")
+    got = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text');
+      return [getComputedStyle(t.querySelector('tspan')).fontWeight, getComputedStyle(t.querySelector('tspan tspan')).fontWeight]; })()""")
+    assert got == ["300", "700"]
+
+
+def test_grid_snaps_new_and_moved_shapes(page, server):
+    page.evaluate("localStorage.clear()")
+    page.locator("#panel label", has_text="Snap to grid").click()
+    page.locator("#panel .row", has_text="Spacing").locator("input").fill("50")
+    page.locator("#panel .row", has_text="Spacing").locator("input").dispatch_event("change")
+    assert page.evaluate("svgdeckEditor.editor.grid") == {"show": False, "snap": True, "size": 50}
+    page.keyboard.press("r")
+    drag(page, (103, 97), (251, 212))
+    assert rect_boxes(page) == [[100, 100, 150, 100]]
+    drag(page, (170, 150), (237, 181))  # by (67, 31): snaps to (50, 50)... or the nearer edge
+    x, y, w, h = rect_boxes(page)[0]
+    assert x % 50 == 0 and y % 50 == 0 and (w, h) == (150, 100)
+    # The toolbar toggle turns it off; then moves are free again.
+    page.click("#snap")
+    drag(page, (x + 20, y + 20), (x + 33, y + 27))
+    nx, ny = rect_boxes(page)[0][:2]
+    assert abs(nx - (x + 13)) <= 3 and abs(ny - (y + 7)) <= 3 and (nx % 50, ny % 50) != (0, 0)
+
+
+def test_select_several_by_tapping_then_group_and_ungroup(page, server):
+    add_rects(page, [[100, 100, 100, 100], [400, 100, 100, 100], [700, 400, 100, 100]])
+    page.click("#multi")
+    for x, y in ((150, 150), (450, 150), (750, 450)):
+        page.mouse.click(*to_screen(page, x, y))
+    assert page.evaluate("svgdeckEditor.editor.selection.length") == 3
+    page.mouse.click(*to_screen(page, 750, 450))  # a tap on a selected one takes it out
+    assert page.evaluate("svgdeckEditor.editor.selection.length") == 2
+    button(page, "Group")
+    assert page.evaluate("svgdeckEditor.editor.selection.map(e => e.localName)") == ["g"]
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll(':scope > g > rect').length") == 2
+    button(page, "Ungroup")
+    assert page.evaluate("svgdeckEditor.editor.selection.length") == 2
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('g').length") == 0
+
+
+def test_align_and_distribute(page, server):
+    add_rects(page, [[100, 100, 100, 100], [300, 250, 50, 50], [900, 500, 100, 200]])
+    page.evaluate("svgdeckEditor.editor.selectAll()")
+    button(page, "Left")
+    assert [b[0] for b in rect_boxes(page)] == [100, 100, 100]
+    button(page, "Bottom")
+    assert [b[1] + b[3] for b in rect_boxes(page)] == [700, 700, 700]
+    page.evaluate("(() => { const e = svgdeckEditor.editor; e.change(() => { const r = e.svg.querySelectorAll('rect:not([data-locked])'); "
+                  "r[1].setAttribute('x', 500); r[2].setAttribute('x', 1500); }); })()")
+    button(page, "Across")
+    boxes = sorted(rect_boxes(page))
+    gaps = [boxes[i + 1][0] - boxes[i][0] - boxes[i][2] for i in range(2)]
+    assert abs(gaps[0] - gaps[1]) <= 1 and boxes[0][0] == 100 and boxes[2][0] == 1500
+    # One object aligns with the slide.
+    page.mouse.click(*to_screen(page, 150, 650))
+    button(page, "Centre")
+    b = [b for b in rect_boxes(page) if b[2] == 100 and b[3] == 100][0]
+    assert b[0] == 910
+
+
+def test_saving_does_not_fetch_media_from_the_wrong_place(page, server):
+    urls = []
+    page.on("request", lambda r: urls.append(r.url))
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => { const i = document.createElementNS(ns, 'image');
+        for (const [k, v] of Object.entries({href: e.hooks.hrefIn('../media/pic.png'), width: 100, height: 100})) i.setAttribute(k, v);
+        e.svg.append(i); e.selection = [i]; }); })()""")
+    page.evaluate("svgdeckEditor.editor.moveBy(10, 10)")
+    saved_slide(page, server)
+    page.wait_for_timeout(200)
+    assert not [u for u in urls if "/media/" in u and "/d/talk/media/" not in u]
+
+
+def test_editing_keeps_subscripts_and_stroke_overrides(page, server):
+    # Like the import: the text has a stroke that its spans turn off, and a subscript.
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const t = document.createElementNS(ns, 'text'); t.setAttribute('style', 'font-size:40px;stroke:#000;stroke-width:3');
+        const line = document.createElementNS(ns, 'tspan'); line.setAttribute('x', '200'); line.setAttribute('y', '300');
+        line.setAttribute('style', 'stroke:none');
+        const sub = document.createElementNS(ns, 'tspan'); sub.setAttribute('style', 'font-size:65%;baseline-shift:sub'); sub.textContent = 'l2';
+        line.append('T', sub); t.append(line); e.svg.append(t); e.selection = [t];
+      }); e.select(e.selection); })()""")
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("Home")
+    page.keyboard.type("x")
+    page.keyboard.press("Escape")
+    got = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), s = t.querySelector('tspan tspan');
+      return [t.textContent, s && s.textContent, s && getComputedStyle(s).baselineShift, getComputedStyle(t.querySelector('tspan')).stroke]; })()""")
+    assert got == ["xTl2", "l2", "sub", "none"]

@@ -42,13 +42,13 @@ Reference decks: `presentations/` in the lab-book database repo.
   they are; only the latest one is imported (as a development test ground).
 - **Offline presenting.** Export a self-contained folder (and zip) that runs
   from `index.html` with no network access.
-- **Editing is online.** A service on rocinante, reached over Tailscale.
+- **Editing is online.** A service on sancho, reached over Tailscale.
 
 Secondary, later: PDF export, speaker view.
 
 ## Architecture
 
-**Service on rocinante.** A `systemd --user` unit like the lab book. Stores
+**Service on sancho.** A `systemd --user` unit like the lab book. Stores
 decks, the font library and media; serves the editor; runs exports.
 
 **Deck on disk.** Plain files, git-friendly, inspectable:
@@ -73,7 +73,7 @@ SVGs inlined (avoids `file://` fetch restrictions), `media/`, and `fonts/`
 converted to woff2.
 
 **Standalone app; the lab book is only the archive.** svgdeck owns its working
-decks in its own data directory on rocinante, outside this repo (set in the
+decks in its own data directory on sancho, outside this repo (set in the
 service config; decks and the font library are content, not code). When a
 talk is final, its standalone export is copied into the lab-book database
 repo (`presentations/<date>_<name>/`) as the archived record. Because the
@@ -105,15 +105,16 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Stacking order, undo/redo, autosave to the service.
 - Also done: group/ungroup, lock, copy/paste across slides, pinch zoom,
   font upload, save-conflict detection, service on sancho.
-- Known limits: editing a text with mixed formatting (bold words) flattens
-  it to one style; strokes of freehand paths scale when resized; no
+- Known limits: strokes of freehand paths scale when resized; no
   snapping yet.
 
 ### 3. Editor, second pass
+- Done 2026-09-26: rich text (editing keeps formatting; bold, italic,
+  sub/superscript and colour on selected words), align and distribute,
+  grid snapping with adjustable spacing, select several by tapping.
 - Build steps.
-- Rich text: bold/colour on part of a text.
 - Pencil pressure, eraser.
-- Align and distribute, snapping, guides.
+- Snapping to other objects, guides.
 - Clip to a rectangle or ellipse.
 - Bézier path editing.
 - Reusable pieces: title bar, scale bar, citation line, slide number.

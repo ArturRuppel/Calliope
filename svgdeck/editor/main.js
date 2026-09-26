@@ -56,7 +56,7 @@ const state = {
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
-                     weight: 400, size: 48, recent: [] };
+                     weight: 400, size: 48, recent: [], grid: { show: false, snap: false, size: 20 } };
   try { return { ...defaults, ...JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}") }; } catch (e) { return defaults; }
 }
 function savePrefs() {
@@ -302,8 +302,8 @@ async function renderThumb(id, force = false) {
   const rec = await slideRecord(id);
   const doc = new DOMParser().parseFromString(rec.text, "image/svg+xml");
   if (doc.querySelector("parsererror")) return;
+  for (const el of doc.querySelectorAll("[href]")) el.setAttribute("href", hrefIn(el.getAttribute("href")));
   const svg = document.importNode(doc.documentElement, true);
-  for (const el of svg.querySelectorAll("[href]")) el.setAttribute("href", hrefIn(el.getAttribute("href")));
   prefixIds(svg, `t-${id}-`);
   svg.removeAttribute("width");
   svg.removeAttribute("height");
@@ -334,6 +334,32 @@ function buildToolbar() {
   media.addEventListener("click", () => $("media-file").click());
   tools.appendChild(media);
   setTool("select");
+}
+
+// Toggles next to the tools: several objects by tapping, and the grid.
+function buildToggles() {
+  const tools = $("tools");
+  const multi = el("button", { class: "btn tool", id: "multi", title: "Select several: taps add to or remove from the selection",
+    "aria-pressed": "false", onclick: () => setAdditive(!editor.additive) });
+  multi.innerHTML = icon("M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z");
+  const grid = el("button", { class: "btn tool", id: "snap", title: "Snap to grid (grid spacing in the panel)",
+    "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap, show: !state.prefs.grid.snap || state.prefs.grid.show }) });
+  grid.innerHTML = icon("M4 4v16M10 4v16M16 4v16M4 4h16M4 10h16M4 16h16");
+  tools.append(multi, grid);
+}
+
+function setAdditive(on) {
+  editor.additive = on;
+  $("multi").setAttribute("aria-pressed", String(on));
+}
+
+function setGrid(change) {
+  Object.assign(state.prefs.grid, change);
+  savePrefs();
+  Object.assign(editor.grid, state.prefs.grid);
+  $("snap").setAttribute("aria-pressed", String(state.prefs.grid.snap));
+  editor.drawOverlay();
+  if (!editor.selection.length) renderPanel();
 }
 
 function setTool(name, { keepEdit = false } = {}) {
@@ -421,13 +447,36 @@ function renderPanel() {
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
+  if (editor.textEdit) {
+    const base = editor.textEdit.base;
+    parts.push(section("Editing text",
+      buttonRow([["Bold", "Bold (Ctrl+B)", () => editor.formatText("bold")],
+                 ["Italic", "Italic (Ctrl+I)", () => editor.formatText("italic")],
+                 ["x₂", "Subscript", () => editor.formatText("subscript")],
+                 ["x²", "Superscript", () => editor.formatText("superscript")]]),
+      row("Colour", colorControl(base.fill, (c) => editor.formatText("foreColor", c), false)),
+      el("p", { class: "hint" }, "Select words to format them; with nothing selected, the whole text changes. " +
+        "Font, size and alignment are set after editing."),
+      buttonRow([["Done", "Finish editing (Esc)", () => editor.endTextEdit(true)]])));
+    panel.replaceChildren(...parts);
+    return;
+  }
   if (!sel.length) {
     const svg = editor.svg;
     const bg = svg && (svg.querySelector('[data-label="background"]') || svg.querySelector("[data-locked='true']"));
     parts.push(section(`Slide ${index() + 1} of ${state.deck.slides.length}`,
       bg ? row("Background", colorControl(getComputedStyle(bg).fill, (c) => editor.setStyle("fill", c, [bg]), false)) : null,
-      buttonRow([["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()],
+      buttonRow([["Select all", "Select every object (Ctrl+A)", () => editor.selectAll()],
+                 ["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()],
                  clipboardData() ? ["Paste", "Paste copied objects (Ctrl+V)", pasteClipboard] : null].filter(Boolean))));
+    const grid = state.prefs.grid;
+    const check = (on, text, fn) => el("label", { class: "check" },
+      el("input", { type: "checkbox", checked: on, onchange: (e) => fn(e.target.checked) }), text);
+    parts.push(section("Grid",
+      check(grid.show, "Show grid", (on) => setGrid({ show: on })),
+      check(grid.snap, "Snap to grid", (on) => setGrid({ snap: on })),
+      row("Spacing", numberControl(grid.size, { min: 1, max: 960, step: 1, suffix: "px" }, (v) => setGrid({ size: Math.max(1, v) }))),
+      buttonRow([10, 20, 40, 60, 120].map((s) => [String(s), `${s} px grid`, () => setGrid({ size: s }), grid.size === s]))));
     parts.push(section("New shapes",
       row("Fill", colorControl(state.prefs.fill, (c) => { state.prefs.fill = c; savePrefs(); renderPanel(); }, true)),
       row("Line", colorControl(state.prefs.stroke, (c) => { state.prefs.stroke = c; savePrefs(); renderPanel(); }, true)),
@@ -494,7 +543,7 @@ function renderPanel() {
         editor.change(() => { for (const t of texts) editor.applyStyle(t, "font-size", `${+(v / editor.textScale(t)).toFixed(4)}px`); });
         state.prefs.size = v; savePrefs();
       })),
-      row("Align", buttonRow([["Left", "Align lines left", () => editor.setAlign("start", texts), anchor === "start"],
+      row("Lines", buttonRow([["Left", "Align lines left", () => editor.setAlign("start", texts), anchor === "start"],
                               ["Centre", "Centre lines", () => editor.setAlign("middle", texts), anchor === "middle"],
                               ["Right", "Align lines right", () => editor.setAlign("end", texts), anchor === "end"]])),
       buttonRow([["Edit text", "Or double-tap the text", () => editor.editText(texts[0], false)]])));
@@ -520,6 +569,15 @@ function renderPanel() {
       el("p", { class: "hint" }, "Movies with the same sync group continue across slides without restarting.")));
   }
 
+  parts.push(section(sel.length > 1 ? "Align" : "Align on slide",
+    buttonRow([["Left", "Align left edges", () => editor.align("left")], ["Centre", "Align centres", () => editor.align("centre")],
+               ["Right", "Align right edges", () => editor.align("right")]]),
+    buttonRow([["Top", "Align top edges", () => editor.align("top")], ["Middle", "Align middles", () => editor.align("middle")],
+               ["Bottom", "Align bottom edges", () => editor.align("bottom")]]),
+    sel.length > 2 ? row("Spread", buttonRow([["Across", "Space evenly left to right", () => editor.distribute("x")],
+                                              ["Down", "Space evenly top to bottom", () => editor.distribute("y")]])) : null,
+    sel.length === 1 ? el("p", { class: "hint" }, "To align objects with each other, select several: turn on Select several in the toolbar, or drag around them.") : null));
+
   parts.push(section("Arrange",
     buttonRow([["To front", "Bring to front", () => editor.order("front")], ["Forward", "Bring forward", () => editor.order("forward")],
                ["Backward", "Send backward", () => editor.order("backward")], ["To back", "Send to back", () => editor.order("back")]]),
@@ -531,7 +589,7 @@ function renderPanel() {
                kinds.has("g") ? ["Ungroup", "Ctrl+Shift+G", () => editor.ungroup()] : null,
                ["Lock", "Make unselectable (e.g. backgrounds)", () => editor.lock()],
                ["Delete", "Delete", () => editor.deleteSelection()]].filter(Boolean))));
-  panel.replaceChildren(...parts);
+  panel.replaceChildren(...parts.filter(Boolean));
 }
 
 /** The element whose style shows an object's look: a text's first glyph, a
@@ -592,7 +650,7 @@ document.addEventListener("keydown", (e) => {
   if (mod && k === "y") { e.preventDefault(); redo(); return; }
   if (mod && k === "d") { e.preventDefault(); editor.duplicate(); return; }
   if (mod && k === "g") { e.preventDefault(); (e.shiftKey ? editor.ungroup() : editor.group()); return; }
-  if (mod && k === "a") { e.preventDefault(); editor.select(editor.children()); return; }
+  if (mod && k === "a") { e.preventDefault(); editor.selectAll(); return; }
   if (mod && (k === "c" || k === "x")) {
     if (editor.selection.length) { e.preventDefault(); copySelection(k === "x"); }
     return;
@@ -686,6 +744,7 @@ function wire() {
   $("slide-down").onclick = () => moveSlide(1);
   $("slide-del").onclick = deleteSlide;
   $("exit-group").onclick = () => editor.exitGroup();
+  $("panel").addEventListener("pointerdown", () => { if (editor.textEdit) editor.textEdit.holding = true; }, true);
   $("media-file").onchange = (e) => { uploadMedia([...e.target.files]); e.target.value = ""; };
   $("font-file").onchange = async (e) => {
     const file = e.target.files[0];
@@ -705,6 +764,8 @@ function wire() {
 async function main() {
   wire();
   buildToolbar();
+  buildToggles();
+  Object.assign(editor.grid, state.prefs.grid);
   try {
     const [deck, faces] = await Promise.all([api.deck(), api.fonts()]);
     state.deck = deck.deck;

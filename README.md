@@ -38,9 +38,16 @@ H.264 mp4 on upload so every browser can play them).
 
 - Tap to select, drag to move, drag the handles to resize (corners keep the
   proportions; Shift frees them) or rotate. Drag on empty space to select
-  several.
-- Double-tap text to edit it, or a group to work inside it; tap outside or
-  Escape to leave.
+  several, or turn on *Select several* in the toolbar so taps add to (or take
+  out of) the selection. Several objects can be grouped, aligned and spaced
+  evenly from the panel; a single object aligns with the slide.
+- The grid button snaps moves, resizes, line ends and new shapes to a grid.
+  The spacing (and showing the grid) is set in the panel with nothing
+  selected.
+- Double-tap text to edit it, or a group to work inside it; tap outside,
+  Done or Escape to leave. Editing keeps the text's formatting; while
+  editing, the panel makes selected words bold, italic, sub/superscript or
+  another colour.
 - With an Apple Pencil, the Pencil draws and fingers pan; two fingers pinch to
   zoom.
 - Everything saves automatically (the status shows Saved). Undo/redo per

@@ -26,6 +26,84 @@ export function firstGlyphElement(t) {
 }
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
 
+// --- formatted text runs ------------------------------------------------------
+const BLOCKS = new Set(["div", "p", "li"]);
+// Inherited properties that inner spans often override (Inkscape puts
+// stroke:none on the spans of a text that has a stroke). A rewritten text
+// takes its first character's values, so it looks the same.
+const TEXT_PAINT = ["stroke", "stroke-width", "stroke-opacity", "stroke-linejoin", "stroke-linecap", "stroke-dasharray",
+  "fill-opacity", "paint-order", "letter-spacing", "word-spacing", "font-stretch", "font-variant", "text-decoration-line"];
+
+function sameShift(a, b, size) {
+  if (typeof a === "number" && typeof b === "number") return Math.abs(a - b) < size * 0.01;
+  return (a || 0) === (b || 0);
+}
+
+function sameLook(a, b) {
+  return a.family === b.family && a.weight === b.weight && a.fontStyle === b.fontStyle &&
+    (toHex(a.fill) || a.fill) === (toHex(b.fill) || b.fill) && Math.abs(a.size / b.size - 1) < 0.01 &&
+    sameShift(a.shift, b.shift, b.size);
+}
+
+/** Sub/superscript of an element inside a text: "sub", "super", a raise in
+ *  the text's units, or 0. Nested spans inherit their parent's shift. */
+function shiftOf(el, stop, scale = 1) {
+  for (let n = el; n && n.nodeType === 1; n = n.parentNode) {
+    const cs = getComputedStyle(n);
+    const v = n.namespaceURI === SVGNS ? cs.baselineShift : cs.verticalAlign;
+    if (v === "sub" || v === "super") return v;
+    if (v && v !== "baseline" && v !== "0px") {
+      const px = v.endsWith("%") ? parseFloat(v) / 100 * parseFloat(cs.fontSize) : parseFloat(v);
+      if (px) return px / scale;
+    }
+    if (n === stop) break;
+  }
+  return 0;
+}
+
+function pushRun(runs, text, look) {
+  const last = runs[runs.length - 1];
+  if (last && sameLook(last.look, look)) last.text += text;
+  else runs.push({ text, look });
+}
+
+function sameRuns(a, b) {
+  return a.length === b.length && a.every((line, i) => line.length === b[i].length &&
+    line.every((r, j) => r.text === b[i][j].text && sameLook(r.look, b[i][j].look)));
+}
+
+/** How a run's look differs from the text's, as SVG style properties. */
+function lookDiff(look, base) {
+  const diff = [];
+  if (look.family !== base.family) diff.push(["font-family", look.family]);
+  if (look.weight !== base.weight) diff.push(["font-weight", look.weight]);
+  if (look.fontStyle !== base.fontStyle) diff.push(["font-style", look.fontStyle]);
+  if ((toHex(look.fill) || look.fill) !== (toHex(base.fill) || base.fill)) diff.push(["fill", toHex(look.fill) || look.fill]);
+  if (Math.abs(look.size / base.size - 1) >= 0.01) diff.push(["font-size", `${+look.size.toFixed(4)}px`]);
+  if (!sameShift(look.shift, base.shift, base.size)) {
+    diff.push(["baseline-shift", typeof look.shift === "number" ? `${+look.shift.toFixed(4)}px` : look.shift || "baseline"]);
+  }
+  return diff;
+}
+
+/** A run in the edit box: plain text in the text's own look, a span otherwise. */
+function htmlRun(run, base) {
+  const diff = lookDiff(run.look, base);
+  if (!diff.length) return document.createTextNode(run.text);
+  const span = document.createElement("span");
+  for (const [prop, v] of diff) {
+    if (prop === "fill") span.style.color = v;
+    else if (prop === "font-size") span.style.fontSize = `${run.look.size / base.size}em`;
+    else if (prop === "baseline-shift") {
+      const s = run.look.shift;
+      span.style.verticalAlign = typeof s === "number" ? `${s / run.look.size}em` : s || "baseline";
+    }
+    else span.style.setProperty(prop, v);
+  }
+  span.textContent = run.text;
+  return span;
+}
+
 export class SlideEditor {
   /** hooks: commit(before, after), select(selection), toast(msg),
    *  hrefIn(v), hrefOut(v), shapeStyle(), textStyle(), ensureFont(family),
@@ -54,6 +132,8 @@ export class SlideEditor {
     this.lastTap = null;
     this.textEdit = null;
     this.before = null;
+    this.grid = { show: false, snap: false, size: 20 };  // slide pixels
+    this.additive = false;  // taps add to the selection (touch has no Shift)
 
     host.addEventListener("pointerdown", (e) => this.onDown(e));
     host.addEventListener("pointermove", (e) => this.onMove(e));
@@ -61,6 +141,11 @@ export class SlideEditor {
     host.addEventListener("pointercancel", (e) => this.onCancel(e));
     host.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     host.addEventListener("contextmenu", (e) => e.preventDefault());
+    // Remember the selected words while the panel is used to format them.
+    document.addEventListener("selectionchange", () => {
+      const te = this.textEdit, sel = getSelection();
+      if (te && sel.rangeCount && te.box.contains(sel.anchorNode)) te.range = sel.getRangeAt(0).cloneRange();
+    });
     new ResizeObserver(() => { if (this.fitMode) this.fit(); else this.layout(); }).observe(host);
   }
 
@@ -71,15 +156,18 @@ export class SlideEditor {
     if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") {
       throw new Error("this slide is not valid SVG");
     }
-    const svg = document.importNode(doc.documentElement, true);
-    for (const el of svg.querySelectorAll("[href], [data-video]")) this.rewriteRefs(el, this.hooks.hrefIn);
-    for (const el of svg.querySelectorAll("*")) {
+    // Rewrite media paths before the slide enters the page, or WebKit starts
+    // fetching them relative to the editor's URL.
+    const parsed = doc.documentElement;
+    for (const el of parsed.querySelectorAll("[href], [data-video]")) this.rewriteRefs(el, this.hooks.hrefIn);
+    for (const el of parsed.querySelectorAll("*")) {
       const legacy = el.getAttributeNS("http://www.w3.org/1999/xlink", "href");
       if (legacy && !el.hasAttribute("href")) {
         el.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
         el.setAttribute("href", this.hooks.hrefIn(legacy));
       }
     }
+    const svg = document.importNode(parsed, true);
     const vb = (svg.getAttribute("viewBox") || "0 0 1920 1080").split(/[\s,]+/).map(Number);
     this.size = [vb[2], vb[3]];
     this.overlay.setAttribute("viewBox", `${vb[0]} ${vb[1]} ${vb[2]} ${vb[3]}`);
@@ -99,8 +187,15 @@ export class SlideEditor {
     }
   }
 
+  /** A copy in a document without a window: nothing in it loads. (A copy
+   *  in the page would fetch ../media/... relative to the editor's URL.) */
+  inertClone(node) {
+    this.inert ||= document.implementation.createDocument(SVGNS, "svg", null);
+    return this.inert.importNode(node, true);
+  }
+
   serialize() {
-    const clone = this.svg.cloneNode(true);
+    const clone = this.inertClone(this.svg);
     for (const el of clone.querySelectorAll("[href], [data-video]")) this.rewriteRefs(el, this.hooks.hrefOut);
     for (const el of clone.querySelectorAll("[data-editing]")) {
       el.removeAttribute("data-editing");
@@ -170,6 +265,45 @@ export class SlideEditor {
   point(e) {
     const r = this.page.getBoundingClientRect();
     return { x: (e.clientX - r.left) / this.zoom, y: (e.clientY - r.top) / this.zoom };
+  }
+
+  // --- grid -------------------------------------------------------------------
+  snapTo(v) {
+    const s = this.grid.size;
+    return this.grid.snap && s > 0 ? Math.round(v / s) * s : v;
+  }
+
+  snapPoint(p) {
+    return { x: this.snapTo(p.x), y: this.snapTo(p.y) };
+  }
+
+  /** A move by (dx, dy) adjusted so the nearer edge of the box lands on the grid. */
+  snapDelta(box, dx, dy) {
+    if (!this.grid.snap || !box) return [dx, dy];
+    const fix = (lo, hi, d) => {
+      const opts = [lo + d, hi + d].map((v) => this.snapTo(v) - v);
+      return d + (Math.abs(opts[0]) <= Math.abs(opts[1]) ? opts[0] : opts[1]);
+    };
+    return [fix(box.x, box.x + box.width, dx), fix(box.y, box.y + box.height, dy)];
+  }
+
+  drawGrid(o) {
+    const [W, H] = this.size;
+    let step = this.grid.size;
+    if (!(step > 0)) return;
+    while (step * this.zoom < 8) step *= 2;  // never denser than 8 screen px
+    const pattern = document.createElementNS(SVGNS, "pattern");
+    for (const [k, v] of Object.entries({ id: "ov-grid", width: step, height: step, patternUnits: "userSpaceOnUse" })) pattern.setAttribute(k, v);
+    const path = document.createElementNS(SVGNS, "path");
+    path.setAttribute("d", `M${step} 0H0V${step}`);
+    path.setAttribute("class", "ov-gridline");
+    path.setAttribute("stroke-width", 1 / this.zoom);
+    pattern.appendChild(path);
+    const defs = document.createElementNS(SVGNS, "defs");
+    defs.appendChild(pattern);
+    const rect = document.createElementNS(SVGNS, "rect");
+    for (const [k, v] of Object.entries({ x: 0, y: 0, width: W, height: H, fill: "url(#ov-grid)" })) rect.setAttribute(k, v);
+    o.append(defs, rect);
   }
 
   // --- selection -------------------------------------------------------------
@@ -274,6 +408,7 @@ export class SlideEditor {
     const o = this.overlay;
     o.replaceChildren();
     if (!this.svg) return;
+    if (this.grid.show) this.drawGrid(o);
     const px = 1 / this.zoom;
     const make = (tag, attrs) => {
       const el = document.createElementNS(SVGNS, tag);
@@ -446,15 +581,17 @@ export class SlideEditor {
         el = this.pick(e, p);
       }
     }
+    const additive = e.shiftKey || this.additive;
     if (!el) {
-      if (!e.shiftKey) this.select([]);
-      this.gesture = { kind: "marquee", ...base, additive: e.shiftKey };
+      if (!additive) this.select([]);
+      this.gesture = { kind: "marquee", ...base, additive };
       return;
     }
-    if (e.shiftKey) {
-      const has = this.selection.includes(el);
-      this.select(has ? this.selection.filter((s) => s !== el) : [...this.selection, el]);
-      this.gesture = { kind: "none", ...base };
+    if (additive) {
+      // Tapping a selected object takes it out; dragging moves them all.
+      const had = this.selection.includes(el);
+      if (!had) this.select([...this.selection, el]);
+      this.gesture = { kind: "move", ...base, target: el, snaps: null, additive: true, toggle: had };
       return;
     }
     if (!this.selection.includes(el)) this.select([el]);
@@ -497,15 +634,16 @@ export class SlideEditor {
     g.moved = true;
     switch (g.kind) {
       case "move": {
-        if (!g.snaps) { this.begin(); g.snaps = this.snapshot(); }
+        if (!g.snaps) { this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
         let dx = p.x - g.start.x, dy = p.y - g.start.y;
-        if (e.shiftKey) { if (Math.abs(dx) > Math.abs(dy)) dy = 0; else dx = 0; }
+        [dx, dy] = this.snapDelta(g.box0, dx, dy);
+        if (e.shiftKey) { if (Math.abs(p.x - g.start.x) > Math.abs(p.y - g.start.y)) dy = 0; else dx = 0; }
         this.applyDelta(g.snaps, new DOMMatrix().translateSelf(dx, dy));
         break;
       }
       case "resize": this.moveResize(g, p, e.shiftKey); break;
       case "endpoint": {
-        let q = p;
+        let q = this.snapPoint(p);
         if (e.shiftKey) {
           const other = this.lineEnds(g.line)[g.which === 1 ? 1 : 0];
           const angle = Math.round(Math.atan2(p.y - other.y, p.x - other.x) / (Math.PI / 4)) * (Math.PI / 4);
@@ -542,6 +680,7 @@ export class SlideEditor {
 
   moveResize(g, p, free) {
     const { box, handle } = g;
+    p = this.snapPoint(p);
     const left = box.x, right = box.x + box.width, top = box.y, bottom = box.y + box.height;
     let sx = 1, sy = 1, ax = left, ay = top;
     if (handle.includes("e")) { ax = left; sx = box.width ? (p.x - left) / box.width : 1; }
@@ -565,7 +704,7 @@ export class SlideEditor {
       this.begin();
       g.el = this.adopt(this.newShape(g.shape));
     }
-    this.shapeGeometry(g.el, g.shape, g.start, p, square);
+    this.shapeGeometry(g.el, g.shape, this.snapPoint(g.start), this.snapPoint(p), square);
     if (g.shape === "arrow" && !g.arrowed) { g.arrowed = true; this.refreshArrows(g.el); }
   }
 
@@ -631,6 +770,10 @@ export class SlideEditor {
       case "pan": return;
       case "move": case "resize": case "rotate": case "endpoint":
         this.commit();
+        if (g.kind === "move" && !g.moved && g.additive) {
+          if (g.toggle) this.select(this.selection.filter((s) => s !== g.target));
+          return;
+        }
         if (g.kind === "move" && !g.moved) {
           if (this.selection.length > 1) this.select([g.target]);
           this.tap(e, p, g.target);
@@ -654,10 +797,11 @@ export class SlideEditor {
         if (!g.el) {
           // A tap places a default-sized shape.
           this.begin();
+          const c = this.snapPoint(p);
           g.el = this.adopt(this.newShape(g.shape));
           const size = g.shape === "rect" || g.shape === "ellipse" ? [240, 160] : [240, 0];
-          this.shapeGeometry(g.el, g.shape, { x: p.x - size[0] / 2, y: p.y - size[1] / 2 },
-            { x: p.x + size[0] / 2, y: p.y + size[1] / 2 }, false);
+          this.shapeGeometry(g.el, g.shape, { x: c.x - size[0] / 2, y: c.y - size[1] / 2 },
+            { x: c.x + size[0] / 2, y: c.y + size[1] / 2 }, false);
         }
         if (g.shape === "arrow") this.refreshArrows(g.el);
         this.selection = [g.el];
@@ -666,7 +810,7 @@ export class SlideEditor {
         return;
       }
       case "text": {
-        const t = this.newText(p);
+        const t = this.newText(this.snapPoint(p));
         this.select([t]);
         this.editText(t, true);
         this.hooks.toolDone?.();
@@ -762,51 +906,112 @@ export class SlideEditor {
     return Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) || 1;
   }
 
-  textLines(t) {
-    const lines = Array.from(t.children).filter((c) => c.localName === "tspan" && (c.hasAttribute("x") || c.hasAttribute("dy") || c.hasAttribute("y")));
-    const raw = lines.length ? lines.map((l) => l.textContent) : [t.textContent];
-    return raw.map((l) => l.replace(/\n+$/, ""));
+  /** A text's lines: the spans that start lines, or the text itself. */
+  lineNodes(t) {
+    const lines = Array.from(t.children).filter((c) => c.localName === "tspan" &&
+      (c.hasAttribute("x") || c.hasAttribute("dy") || c.hasAttribute("y")));
+    return lines.length ? lines : [t];
   }
 
-  isRich(t) {
-    const spans = t.querySelectorAll("tspan");
-    for (const s of spans) {
-      const st = s.getAttribute("style") || "";
-      if (/font-weight|fill|font-style|font-family|font-size/.test(st) || s.hasAttribute("fill") || s.hasAttribute("font-weight")) {
-        const line = s.parentNode === t && (s.hasAttribute("x") || s.hasAttribute("dy"));
-        if (!line || s.querySelector("tspan")) return true;
+  /** The look of the characters in an element of a text. */
+  lookAt(el, stop = null) {
+    const cs = getComputedStyle(el);
+    return { family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400), fontStyle: cs.fontStyle,
+             fill: toHex(cs.fill) || cs.fill, size: parseFloat(cs.fontSize) || 16, shift: stop ? shiftOf(el, stop) : 0 };
+  }
+
+  /** Each line of a text as runs of equally formatted characters. */
+  textRuns(t) {
+    return this.lineNodes(t).map((line) => {
+      const runs = [];
+      const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+      let n;
+      while ((n = walker.nextNode())) {
+        // A blank placed on its own (Inkscape leaves these at line ends) is
+        // invisible and does not move the line; joined to it, it would.
+        const p = n.parentNode;
+        if (p !== line && !n.data.trim() && (p.hasAttribute("x") || p.hasAttribute("y"))) continue;
+        // Line breaks inside a line show as spaces (or collapse with them).
+        const pre = getComputedStyle(n.parentNode).whiteSpace.startsWith("pre");
+        const text = pre ? n.data.replace(/\r/g, "").replace(/\n/g, " ") : n.data.replace(/\s+/g, " ");
+        if (text) pushRun(runs, text, this.lookAt(n.parentNode, t));
       }
-    }
-    return false;
+      return runs;
+    });
   }
 
+  /** Edit a text in place. Formatting (bold words, colours, fonts) is kept,
+   *  and can be changed on selected words with formatText(). */
   editText(t, isNew) {
-    if (!isNew && this.isRich(t) &&
-        !confirm("This text has mixed formatting (e.g. bold words). Editing it here keeps only the first word's style. Continue?")) {
-      return;
-    }
     this.endTextEdit(true);
     this.begin();
-    const cs = getComputedStyle(firstGlyphElement(t));
-    const area = document.createElement("textarea");
-    area.className = "text-edit";
-    area.value = isNew ? "" : this.textLines(t).join("\n");
-    area.spellcheck = true;
-    this.page.appendChild(area);
+    const glyph = firstGlyphElement(t);
+    const gcs = getComputedStyle(glyph);
+    const base = { ...this.lookAt(glyph), letterSpacing: parseFloat(gcs.letterSpacing) || 0,
+                   paint: Object.fromEntries(TEXT_PAINT.map((p) => [p, gcs.getPropertyValue(p)])) };
+    const box = document.createElement("div");
+    box.className = "text-edit";
+    box.contentEditable = "true";
+    box.spellcheck = true;
+    for (const runs of isNew ? [[]] : this.textRuns(t)) {
+      const div = document.createElement("div");
+      for (const run of runs) div.appendChild(htmlRun(run, base));
+      if (!runs.length) div.appendChild(document.createElement("br"));
+      box.appendChild(div);
+    }
+    this.page.appendChild(box);
+    const styleAttr = t.getAttribute("style");
     t.setAttribute("data-editing", "true");
     t.style.visibility = "hidden";
-    this.textEdit = { t, area, isNew, style: { family: cs.fontFamily, weight: cs.fontWeight, fontStyle: cs.fontStyle,
-      fill: cs.fill, size: parseFloat(cs.fontSize) || 16, letterSpacing: cs.letterSpacing }, pitch: this.linePitch(t) };
-    area.addEventListener("keydown", (e) => {
+    this.textEdit = { t, box, isNew, base, styleAttr, pitch: this.linePitch(t), scale: 1, range: null, holding: false };
+    box.addEventListener("keydown", (e) => {
       e.stopPropagation();
       if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); this.endTextEdit(true); }
     });
-    area.addEventListener("input", () => this.positionTextEdit());
-    area.addEventListener("blur", () => setTimeout(() => { if (this.textEdit?.area === area) this.endTextEdit(true); }, 0));
+    box.addEventListener("paste", (e) => {
+      // Text from elsewhere comes in plain, in this text's look.
+      e.preventDefault();
+      document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") || "").replace(/\r/g, ""));
+    });
+    box.addEventListener("input", () => this.positionTextEdit());
+    box.addEventListener("focus", () => { if (this.textEdit) this.textEdit.holding = false; });
+    // Leaving the box ends the edit, except for a trip to the panel's
+    // formatting buttons (they set `holding`).
+    box.addEventListener("blur", () => setTimeout(() => {
+      const te = this.textEdit;
+      if (te?.box === box && !te.holding && document.activeElement !== box) this.endTextEdit(true);
+    }, 0));
     this.positionTextEdit();
-    area.focus();
-    area.setSelectionRange(area.value.length, area.value.length);
+    box.focus();
+    try { document.execCommand("styleWithCSS", false, true); } catch (e) { /* old engines: <b> tags, read the same */ }
+    const range = document.createRange();
+    range.selectNodeContents(box);
+    range.collapse(false);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
     this.drawOverlay();
+    this.hooks.select(this.selection);
+  }
+
+  /** Bold, italic or a colour for the selected words while editing; with
+   *  nothing selected, for the whole text. */
+  formatText(command, value) {
+    const te = this.textEdit;
+    if (!te) return;
+    te.box.focus();
+    const sel = getSelection();
+    if (te.range && te.box.contains(te.range.startContainer)) { sel.removeAllRanges(); sel.addRange(te.range); }
+    const whole = sel.isCollapsed || !te.box.contains(sel.anchorNode);
+    if (whole) {
+      const r = document.createRange();
+      r.selectNodeContents(te.box);
+      sel.removeAllRanges();
+      sel.addRange(r);
+    }
+    document.execCommand("styleWithCSS", false, true);
+    document.execCommand(command, false, value);
+    if (whole) sel.collapseToEnd();
+    this.positionTextEdit();
   }
 
   /** Distance between lines of a text, in its own units (null if one line). */
@@ -818,80 +1023,144 @@ export class SlideEditor {
   positionTextEdit() {
     const te = this.textEdit;
     if (!te) return;
-    const { t, area, style } = te;
+    const { t, box, base } = te;
     const m = toRoot(t, this.svg);
     const scale = Math.sqrt(Math.abs(m.a * m.d - m.b * m.c)) * this.zoom;
-    const size = style.size * scale;
+    te.scale = scale;
+    const size = base.size * scale;
     const pitch = te.pitch ? te.pitch * scale : size * 1.25;
-    const firstLine = this.lineSpans(t)[0];
-    const x0 = parseFloat(firstLine?.getAttribute("x") ?? t.getAttribute("x")) || 0;
-    const y0 = parseFloat(firstLine?.getAttribute("y") ?? t.getAttribute("y")) || 0;
+    const nodes = this.lineNodes(t);
+    const first = nodes[0] !== t ? nodes[0] : null;
+    const x0 = parseFloat(first?.getAttribute("x") ?? t.getAttribute("x")) || 0;
+    const y0 = parseFloat(first?.getAttribute("y") ?? t.getAttribute("y")) || 0;
     const anchor = m.transformPoint(new DOMPoint(x0, y0));
     const align = getComputedStyle(firstGlyphElement(t)).textAnchor;
-    // Size the box to the text, measured in the text's own font.
-    const ctx = (this.measure ||= document.createElement("canvas").getContext("2d"));
-    ctx.font = `${style.fontStyle} ${style.weight} ${size}px ${style.family}`;
-    const lines = area.value.split("\n");
-    const width = Math.max(size * 2, ...lines.map((l) => ctx.measureText(l).width)) + size * 0.6;
-    const ax = anchor.x * this.zoom;
-    const left = align === "middle" ? ax - width / 2 : align === "end" ? ax - width : ax;
-    Object.assign(area.style, {
-      left: `${left - 4}px`, top: `${anchor.y * this.zoom - size * 0.95 - 3}px`,
-      fontFamily: style.family, fontWeight: style.weight, fontStyle: style.fontStyle,
-      fontSize: `${size}px`, lineHeight: `${pitch}px`, letterSpacing: style.letterSpacing,
-      color: style.fill === "none" ? "#000" : style.fill,
+    // The box grows with its text; it hangs off the anchor like the text does.
+    Object.assign(box.style, {
+      left: `${anchor.x * this.zoom}px`, top: `${anchor.y * this.zoom - size * 0.95 - 3}px`,
+      transform: { middle: "translateX(-50%)", end: "translateX(-100%)" }[align] || "none",
+      marginLeft: { middle: "0", end: "6px" }[align] || "-6px",
+      fontFamily: base.family, fontWeight: base.weight, fontStyle: base.fontStyle,
+      fontSize: `${size}px`, lineHeight: `${pitch}px`, letterSpacing: `${base.letterSpacing * scale}px`,
+      color: toHex(base.fill) || "#000",
       textAlign: { middle: "center", end: "right" }[align] || "left",
-      width: `${width + 8}px`, height: `${lines.length * pitch + size * 0.3 + 6}px`,
+      minWidth: `${size * 2}px`,
     });
+  }
+
+  /** The edit box's lines as runs, read back from what the browser shows. */
+  readRuns(box, scale) {
+    const lines = [[]];
+    let atStart = true, fromBlock = false;
+    const newLine = (block) => { lines.push([]); atStart = true; fromBlock = block; };
+    const add = (text, el) => {
+      if (!text) return;
+      const cs = getComputedStyle(el);
+      pushRun(lines[lines.length - 1], text, { family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400),
+        fontStyle: cs.fontStyle, fill: toHex(cs.color) || "#000000", size: (parseFloat(cs.fontSize) || 16) / scale,
+        shift: shiftOf(el, box, scale) });
+      atStart = false;
+      fromBlock = false;
+    };
+    const visit = (node) => {
+      for (const n of node.childNodes) {
+        if (n.nodeType === Node.TEXT_NODE) {
+          n.data.replace(/\r/g, "").replace(/ /g, " ").split("\n").forEach((part, i) => {
+            if (i) newLine(false);
+            add(part, n.parentNode);
+          });
+        } else if (n.nodeType !== Node.ELEMENT_NODE) {
+          continue;
+        } else if (n.localName === "br") {
+          // A <br> closing a line is a placeholder, not an extra line.
+          if (n.nextSibling || !(n.parentNode === box || BLOCKS.has(n.parentNode.localName))) newLine(false);
+        } else if (BLOCKS.has(n.localName)) {
+          if (!atStart) newLine(true);
+          visit(n);
+          newLine(true);
+        } else {
+          visit(n);
+        }
+      }
+    };
+    visit(box);
+    if (fromBlock && !lines[lines.length - 1].length) lines.pop();
+    return lines;
   }
 
   endTextEdit(save) {
     const te = this.textEdit;
     if (!te) return;
+    const { t, box, isNew, base } = te;
+    const lines = save ? this.readRuns(box, te.scale) : null;
     this.textEdit = null;
-    const { t, area, isNew, style } = te;
-    const value = area.value.replace(/\s+$/, "");
-    area.remove();
+    box.remove();
     t.removeAttribute("data-editing");
-    t.style.removeProperty("visibility");
-    if (!save) { this.before = null; return; }
-    if (!value.trim()) {
+    // Put the style back exactly as written, so looking is not an edit.
+    if (te.styleAttr === null) t.removeAttribute("style"); else t.setAttribute("style", te.styleAttr);
+    if (!save) { this.before = null; this.drawOverlay(); this.hooks.select(this.selection); return; }
+    const trim = (ls) => { while (ls.length && !ls[ls.length - 1].some((r) => r.text.trim())) ls.pop(); return ls; };
+    trim(lines);
+    if (!lines.length) {
       t.remove();
       this.selection = this.selection.filter((el) => el !== t);
       if (isNew) { this.before = null; this.drawOverlay(); this.hooks.select(this.selection); return; }
       this.commit();
       return;
     }
-    if (!isNew && value === this.textLines(t).join("\n")) { this.commit(); return; }
-    this.setTextLines(t, value.split("\n"), style, te.pitch);
+    if (!isNew && sameRuns(lines, trim(this.textRuns(t)))) { this.commit(); return; }
+    this.setTextRuns(t, lines, base, te.pitch);
     this.commit();
   }
 
-  setTextLines(t, lines, style, pitch) {
-    const firstLine = this.lineSpans(t)[0] || t.querySelector("tspan[x], tspan[y]");
-    const x = firstLine?.getAttribute("x") ?? t.getAttribute("x") ?? "0";
-    const y0 = parseFloat(firstLine?.getAttribute("y") ?? t.getAttribute("y") ?? "0") || 0;
+  /** Rewrite a text from lines of runs: the first character's look goes on
+   *  the text, words that differ get a span saying how. */
+  setTextRuns(t, lines, base, pitch) {
+    const nodes = this.lineNodes(t);
+    const first = nodes[0] !== t ? nodes[0] : null;
+    const x = first?.getAttribute("x") ?? t.getAttribute("x") ?? "0";
+    const y0 = parseFloat(first?.getAttribute("y") ?? t.getAttribute("y") ?? "0") || 0;
     const anchor = getComputedStyle(firstGlyphElement(t)).textAnchor;
-    if (style && t.querySelector("tspan")) {
-      // The spans carried the look (Inkscape puts font and colour there);
-      // move the first word's look onto the text itself.
-      t.style.setProperty("font-family", style.family);
-      t.style.setProperty("font-size", `${style.size}px`);
-      t.style.setProperty("font-weight", style.weight);
-      t.style.setProperty("font-style", style.fontStyle);
-      if (style.fill && style.fill !== "none") t.style.setProperty("fill", style.fill);
-      t.style.setProperty("text-anchor", anchor);
+    t.style.setProperty("font-family", base.family);
+    t.style.setProperty("font-size", `${+base.size.toFixed(4)}px`);
+    t.style.setProperty("font-weight", base.weight);
+    t.style.setProperty("font-style", base.fontStyle);
+    if (toHex(base.fill)) t.style.setProperty("fill", toHex(base.fill));
+    t.style.setProperty("text-anchor", anchor);
+    for (const p of ["font-family", "font-size", "font-weight", "font-style", "fill", "text-anchor"]) t.removeAttribute(p);
+    const tcs = getComputedStyle(t);
+    for (const [p, v] of Object.entries(base.paint || {})) {
+      if (v && tcs.getPropertyValue(p) !== v) { t.style.setProperty(p, v); t.removeAttribute(p); }
     }
-    const step = pitch || (style ? style.size : parseFloat(getComputedStyle(t).fontSize) || 16) * 1.25;
+    const step = pitch || base.size * 1.25;
+    // Lines that existed keep their own place; new ones continue the spacing.
+    const old = (first ? nodes : []).map((l) => [l.getAttribute("x")?.trim().split(/[\s,]+/)[0] ?? null, parseFloat(l.getAttribute("y"))]);
+    const place = (i) => {
+      if (i < old.length && old[i][0] !== null && !Number.isNaN(old[i][1])) return old[i];
+      const k = old.findLastIndex((o) => !Number.isNaN(o[1]));
+      return k >= 0 && i > k ? [x, old[k][1] + (i - k) * step] : [x, y0 + i * step];
+    };
+    const dys = (first ? nodes : []).map((l) => l.getAttribute("dy"));
     t.replaceChildren();
     t.setAttribute("x", x);
     t.setAttribute("y", String(y0));
-    lines.forEach((line, i) => {
-      const span = document.createElementNS(SVGNS, "tspan");
-      span.setAttribute("x", x);
-      span.setAttribute("y", String(+(y0 + i * step).toFixed(3)));
-      span.textContent = line || " ";
-      t.appendChild(span);
+    lines.forEach((runs, i) => {
+      const line = document.createElementNS(SVGNS, "tspan");
+      const [lx, ly] = place(i);
+      line.setAttribute("x", lx);
+      line.setAttribute("y", String(+ly.toFixed(3)));
+      const dy = i < old.length && dys[i];
+      if (dy) line.setAttribute("dy", dy);
+      if (!runs.length) line.textContent = " ";
+      for (const run of runs) {
+        const diff = lookDiff(run.look, base);
+        if (!diff.length) { line.append(run.text); continue; }
+        const span = document.createElementNS(SVGNS, "tspan");
+        for (const [prop, v] of diff) span.style.setProperty(prop, v);
+        span.textContent = run.text;
+        line.append(span);
+      }
+      t.appendChild(line);
     });
   }
 
@@ -1007,6 +1276,52 @@ export class SlideEditor {
     });
   }
 
+  selectAll() {
+    this.select(this.children());
+  }
+
+  /** Move one object by (dx, dy) in slide coordinates. */
+  shift(el, dx, dy) {
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return;
+    const saved = this.selection;
+    this.selection = [el];
+    this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(dx, dy));
+    this.selection = saved;
+  }
+
+  /** Line objects up by their edges or centres: several objects with each
+   *  other, a single one with the slide. */
+  align(how) {
+    const items = this.selection.map((el) => ({ el, b: rootBox(el, this.svg) })).filter((i) => i.b);
+    if (!items.length) return;
+    const r = items.length > 1 ? unionBox(items.map((i) => i.b)) : { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+    this.change(() => {
+      for (const { el, b } of items) {
+        const dx = { left: r.x - b.x, centre: r.x + r.width / 2 - b.x - b.width / 2, right: r.x + r.width - b.x - b.width }[how] ?? 0;
+        const dy = { top: r.y - b.y, middle: r.y + r.height / 2 - b.y - b.height / 2, bottom: r.y + r.height - b.y - b.height }[how] ?? 0;
+        this.shift(el, dx, dy);
+      }
+    });
+  }
+
+  /** Space three or more objects evenly between the outermost ones. */
+  distribute(axis) {
+    const [pos, len] = axis === "x" ? ["x", "width"] : ["y", "height"];
+    const items = this.selection.map((el) => ({ el, b: rootBox(el, this.svg) })).filter((i) => i.b)
+      .sort((a, b) => a.b[pos] + a.b[len] / 2 - (b.b[pos] + b.b[len] / 2));
+    if (items.length < 3) return;
+    const first = items[0].b, last = items[items.length - 1].b;
+    const total = items.reduce((s, i) => s + i.b[len], 0);
+    const gap = (last[pos] + last[len] - first[pos] - total) / (items.length - 1);
+    this.change(() => {
+      let at = first[pos];
+      for (const { el, b } of items) {
+        this.shift(el, axis === "x" ? at - b.x : 0, axis === "y" ? at - b.y : 0);
+        at += b[len] + gap;
+      }
+    });
+  }
+
   lock() {
     this.change(() => { for (const el of this.selection) el.setAttribute("data-locked", "true"); this.selection = []; });
   }
@@ -1031,6 +1346,7 @@ export class SlideEditor {
   }
 
   applyStyle(el, prop, value) {
+    if (el.localName === "text") { this.applyTextStyle(el, prop, value); return; }
     el.style.setProperty(prop, value);
     el.removeAttribute(prop);
     if (el.localName === "g" || el.localName === "text" || el.localName === "a") {
@@ -1040,6 +1356,25 @@ export class SlideEditor {
           d.removeAttribute(prop);
         }
       }
+    }
+  }
+
+  /** Change a text's look where it matches its first character. Words
+   *  formatted differently (bold, another colour) keep their look; sizes all
+   *  scale together. */
+  applyTextStyle(t, prop, value) {
+    const old = getComputedStyle(firstGlyphElement(t)).getPropertyValue(prop);
+    const ratio = prop === "font-size" ? parseFloat(value) / (parseFloat(old) || 1) : null;
+    const inner = Array.from(t.querySelectorAll("*"))
+      .filter((d) => d.style.getPropertyValue(prop) || d.hasAttribute(prop))
+      .map((d) => [d, getComputedStyle(d).getPropertyValue(prop)]);
+    const own = getComputedStyle(t).getPropertyValue(prop);
+    t.style.setProperty(prop, ratio ? `${+(parseFloat(own) * ratio).toFixed(4)}px` : value);
+    t.removeAttribute(prop);
+    for (const [d, v] of inner) {
+      if (!ratio && v !== old) continue;
+      d.style.setProperty(prop, ratio ? `${+(parseFloat(v) * ratio).toFixed(4)}px` : value);
+      d.removeAttribute(prop);
     }
   }
 
@@ -1190,7 +1525,7 @@ export class SlideEditor {
       }
     };
     const items = this.selection.map((el) => {
-      const c = el.cloneNode(true);
+      const c = this.inertClone(el);
       setTransform(c, toRoot(el.parentNode, this.svg).multiply(localMatrix(el)));
       collect(c);
       return c;
@@ -1201,10 +1536,10 @@ export class SlideEditor {
       const id = [...ids].find((i) => !seen.has(i));
       seen.add(id);
       const def = this.svg.querySelector(`defs #${CSS.escape(id)}`) || this.svg.getElementById?.(id);
-      if (def && !this.selection.some((s) => s === def || s.contains(def))) { const c = def.cloneNode(true); defs.push(c); collect(c); }
+      if (def && !this.selection.some((s) => s === def || s.contains(def))) { const c = this.inertClone(def); defs.push(c); collect(c); }
     }
     const ser = new XMLSerializer();
-    const out = (n) => { const c = n.cloneNode(true); this.rewriteRefs(c, this.hooks.hrefOut); for (const d of c.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefOut); return ser.serializeToString(c); };
+    const out = (n) => { const c = this.inertClone(n); this.rewriteRefs(c, this.hooks.hrefOut); for (const d of c.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefOut); return ser.serializeToString(c); };
     return JSON.stringify({ svgdeck: 1, defs: defs.map(out), items: items.map(out) });
   }
 
@@ -1214,10 +1549,10 @@ export class SlideEditor {
     if (!clip || clip.svgdeck !== 1) return false;
     const parse = (s) => {
       const doc = new DOMParser().parseFromString(`<svg xmlns="${SVGNS}">${s}</svg>`, "image/svg+xml");
-      const el = document.importNode(doc.documentElement.firstElementChild, true);
-      this.rewriteRefs(el, this.hooks.hrefIn);
-      for (const d of el.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefIn);
-      return el;
+      const parsed = doc.documentElement.firstElementChild;
+      this.rewriteRefs(parsed, this.hooks.hrefIn);
+      for (const d of parsed.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefIn);
+      return document.importNode(parsed, true);
     };
     this.change(() => {
       let defs = this.svg.querySelector(":scope > defs");
