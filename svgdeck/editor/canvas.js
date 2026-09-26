@@ -137,7 +137,7 @@ export class SlideEditor {
     this.context = null;
     this.gesture = null;
     this.pointers = new Map();
-    this.penSeen = false;
+    this.touchStart = null;
     this.lastTap = null;
     this.textEdit = null;
     this.before = null;
@@ -149,7 +149,11 @@ export class SlideEditor {
     host.addEventListener("pointerup", (e) => this.onUp(e));
     host.addEventListener("pointercancel", (e) => this.onCancel(e));
     host.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
-    host.addEventListener("contextmenu", (e) => e.preventDefault());
+    host.addEventListener("contextmenu", (e) => {
+      if (e.target.closest?.(".text-edit")) return;
+      e.preventDefault();
+      this.openContextMenu(e.clientX, e.clientY);
+    });
     // Remember the selected words while the panel is used to format them.
     document.addEventListener("selectionchange", () => {
       const te = this.textEdit, sel = getSelection();
@@ -523,11 +527,24 @@ export class SlideEditor {
   }
 
   // --- pointer handling ---------------------------------------------------------
+  openContextMenu(x, y, preserveSelection = false) {
+    if (!this.svg) return;
+    this.endTextEdit(true);
+    this.lastTap = null;
+    if (!preserveSelection || !this.selection.length) {
+      const event = { clientX: x, clientY: y, target: document.elementFromPoint(x, y) };
+      const item = this.pick(event, this.point(event));
+      if (item && !this.selection.includes(item)) this.select([item]);
+    }
+    this.hooks.contextMenu?.(x, y);
+  }
+
   onDown(e) {
     if (e.target.closest && e.target.closest(".text-edit")) return;
     if (!this.svg) return;
-    if (e.pointerType === "pen") this.penSeen = true;
-    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType });
+    if (e.pointerType === "mouse" && e.button === 2) return;
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType,
+      startX: e.clientX, startY: e.clientY, started: performance.now() });
     this.host.setPointerCapture(e.pointerId);
     e.preventDefault();
 
@@ -536,19 +553,34 @@ export class SlideEditor {
       return;
     }
     const touches = [...this.pointers.values()].filter((p) => p.type === "touch");
+    if (e.pointerType === "touch" && touches.length === 1) {
+      this.touchStart = { selection: [...this.selection], context: this.context };
+    }
+    if (this.gesture?.kind === "pinch") {
+      this.gesture.tapCandidate = false; // a third/replacement finger is not a two-finger tap
+      return;
+    }
     if (touches.length === 2) {
+      const tapCandidate = performance.now() - touches[0].started < 250 && !this.gesture?.moved &&
+        touches.every((t) => Math.hypot(t.x - t.startX, t.y - t.startY) < TAP_PX.touch);
       this.cancelGesture();
-      this.gesture = { kind: "pinch", ...this.pinchState() };
+      if (this.touchStart) {
+        this.context = this.touchStart.context;
+        this.select(this.touchStart.selection.filter((el) => this.svg.contains(el)));
+      }
+      const pinch = this.pinchState();
+      this.gesture = { kind: "pinch", ...pinch, tapCandidate, started: touches[0].started,
+        menuPoint: pinch.mid };
       return;
     }
     if (this.gesture) return;
     if (this.textEdit) { this.endTextEdit(true); return; }
 
     const p = this.point(e);
-    // With a Pencil in use, a finger pans instead of drawing (palm rejection).
-    const fingerPans = e.pointerType === "touch" && this.penSeen && this.tool !== "select";
-    if (e.button === 1 || fingerPans || (e.button === 0 && e.altKey && e.pointerType === "mouse")) {
-      this.gesture = { kind: "pan", id: e.pointerId, last: { x: e.clientX, y: e.clientY } };
+    // The chosen tool applies to every pointer. Pan is explicit; a previous
+    // Pencil stroke must not silently change what a later finger drag does.
+    if (this.tool === "pan" || e.button === 1 || (e.button === 0 && e.altKey && e.pointerType === "mouse")) {
+      this.gesture = { kind: "pan", id: e.pointerId, pointerType: e.pointerType, last: { x: e.clientX, y: e.clientY } };
       return;
     }
     if (e.button !== 0 && e.pointerType === "mouse") return;
@@ -765,11 +797,22 @@ export class SlideEditor {
   }
 
   onUp(e) {
+    const ptr = this.pointers.get(e.pointerId);
+    if (this.gesture?.kind === "pinch" && ptr &&
+        Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY) >= TAP_PX.touch) {
+      this.gesture.tapCandidate = false;
+    }
     this.pointers.delete(e.pointerId);
     const g = this.gesture;
     if (!g) return;
     if (g.kind === "pinch") {
-      if ([...this.pointers.values()].filter((p) => p.type === "touch").length < 2) this.gesture = null;
+      if (![...this.pointers.values()].some((p) => p.type === "touch")) {
+        this.gesture = null;
+        this.touchStart = null;
+        if (g.tapCandidate && performance.now() - g.started < 450) {
+          this.openContextMenu(g.menuPoint.x, g.menuPoint.y, true);
+        }
+      }
       return;
     }
     if (g.id !== e.pointerId) return;
@@ -848,6 +891,7 @@ export class SlideEditor {
 
   onCancel(e) {
     this.pointers.delete(e.pointerId);
+    this.touchStart = null;
     if (this.gesture && (this.gesture.id === e.pointerId || this.gesture.kind === "pinch")) this.cancelGesture();
   }
 
@@ -873,6 +917,9 @@ export class SlideEditor {
 
   movePinch() {
     const g = this.gesture;
+    const touches = [...this.pointers.values()].filter((p) => p.type === "touch");
+    if (touches.some((t) => Math.hypot(t.x - t.startX, t.y - t.startY) >= TAP_PX.touch)) g.tapCandidate = false;
+    if (g.tapCandidate || touches.length < 2) return;
     const now = this.pinchState();
     this.pan.x += now.mid.x - g.mid.x;
     this.pan.y += now.mid.y - g.mid.y;

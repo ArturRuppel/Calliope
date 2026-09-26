@@ -32,26 +32,32 @@ on the iPad; "Add to Home Screen" gives it a full-screen window.
 
 ## Editing
 
-Tools: select (V), text (T), rectangle (R), ellipse (E), line (L), arrow (A),
+Tools: select (V), pan (H), text (T), rectangle (R), ellipse (E), line (L), arrow (A),
 draw (P), and the image button for pictures and movies (movies are converted to
 H.264 mp4 on upload so every browser can play them).
 
 - Tap to select, drag to move, drag the handles to resize (corners keep the
   proportions; Shift frees them) or rotate. Drag on empty space to select
   several, or turn on *Select several* in the toolbar so taps add to (or take
-  out of) the selection. Several objects can be grouped, aligned and spaced
-  evenly from the panel; a single object aligns with the slide. Movies must
+  out of) the selection. Choose **Group** in the toolbar to combine the
+  selected objects. Right-click or **tap with two fingers** for the Actions
+  menu, including Group, Ungroup, Copy, Duplicate, stacking order and Delete.
+  The Actions button opens the same menu. Several objects can be aligned and
+  spaced evenly from the panel; a single object aligns with the slide. Movies must
   stay outside groups; grouping them or pasting them into a group is refused
   so they remain playable.
-- The grid button snaps moves, resizes, line ends and new shapes to a grid.
-  The spacing (and showing the grid) is set in the panel with nothing
-  selected.
+- **Grid** shows or hides the grid. **Snap** separately snaps moves, resizes,
+  line ends and new shapes to it. Both buttons toggle on and off; spacing is
+  set in the panel with nothing selected.
 - Double-tap text to edit it, or a group to work inside it; tap outside,
   Done or Escape to leave. Editing keeps the text's formatting; while
   editing, the panel makes selected words bold, italic, sub/superscript or
   another colour.
-- With an Apple Pencil, the Pencil draws and fingers pan; two fingers pinch to
-  zoom.
+- Choose **Pan** to drag the page without changing objects; choose **Select**
+  to move objects, or a drawing tool to draw. The chosen tool works with a
+  finger, mouse or Apple Pencil. Two fingers drag to pan or pinch to zoom in
+  any tool; a brief two-finger tap opens Actions. Touches while the Pencil is
+  down are ignored as palm contact.
 - Everything saves automatically (the status shows Saved). Undo/redo per
   slide. If the same slide was changed elsewhere, saving stops and says so
   rather than overwriting.

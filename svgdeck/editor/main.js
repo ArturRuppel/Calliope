@@ -8,6 +8,7 @@ const PALETTE = ["#000000", "#333333", "#7c7c7c", "#c2c2c2", "#ffffff", "#92b1e5
                  "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"];
 const TOOLS = [
   ["select", "Select (V)", "M5 3l14 9-6 1.5L16 20l-2.5 1-3-6.5L5 18z"],
+  ["pan", "Pan (H)", "M8 12V6a2 2 0 014 0v5-7a2 2 0 014 0v7-4a2 2 0 014 0v8c0 4-3 6-7 6-3 0-5-2-7-5l-3-4a2 2 0 013-2l2 2"],
   ["text", "Text (T)", "M5 5h14M12 5v14M9 19h6"],
   ["rect", "Rectangle (R)", "M4 6h16v12H4z"],
   ["ellipse", "Ellipse (E)", "M12 5c5 0 9 3.1 9 7s-4 7-9 7-9-3.1-9-7 4-7 9-7z"],
@@ -15,7 +16,7 @@ const TOOLS = [
   ["arrow", "Arrow (A)", "M5 19L19 5M11 5h8v8"],
   ["pen", "Draw (P) — Pencil or finger", "M4 20c3-1 4-5 7-8s5-6 9-8M16 4l4 4"],
 ];
-const KEYS = { v: "select", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen" };
+const KEYS = { v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen" };
 
 const api = {
   async json(method, url, body) {
@@ -96,7 +97,8 @@ const editor = new SlideEditor($("stage"), {
     rec.redo = [];
     markDirty(state.current, after);
   },
-  select() { renderPanel(); updateBreadcrumb(); },
+  select() { closeContextMenu(); updateActions(); renderPanel(); updateBreadcrumb(); },
+  contextMenu: (x, y) => showContextMenu(x, y),
   textChanged(text) {
     const rec = state.slides.get(state.current);
     if (rec && rec.text !== text) markDirty(state.current, text);
@@ -345,7 +347,9 @@ function buildToolbar() {
     b.className = "btn tool";
     b.dataset.tool = name;
     b.title = title;
+    b.setAttribute("aria-label", title);
     b.innerHTML = icon(path);
+    b.append(document.createTextNode(title.split(" (")[0]));
     b.addEventListener("click", () => setTool(name));
     tools.appendChild(b);
   }
@@ -353,6 +357,7 @@ function buildToolbar() {
   media.className = "btn tool";
   media.title = "Insert image or movie";
   media.innerHTML = icon("M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4M15 9h.01");
+  media.append(document.createTextNode("Media"));
   media.addEventListener("click", () => $("media-file").click());
   tools.appendChild(media);
   setTool("select");
@@ -364,15 +369,31 @@ function buildToggles() {
   const multi = el("button", { class: "btn tool", id: "multi", title: "Select several: taps add to or remove from the selection",
     "aria-pressed": "false", onclick: () => setAdditive(!editor.additive) });
   multi.innerHTML = icon("M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z");
-  const grid = el("button", { class: "btn tool", id: "snap", title: "Snap to grid (grid spacing in the panel)",
-    "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap, show: !state.prefs.grid.snap || state.prefs.grid.show }) });
+  multi.append("Select several");
+  const group = el("button", { class: "btn tool", id: "group-selection", disabled: true,
+    title: "Select two or more objects, then group them", onclick: () => { setTool("select"); editor.group(); } }, "Group");
+  const actions = el("button", { class: "btn tool", id: "object-actions", "aria-haspopup": "menu", "aria-expanded": "false",
+    onclick: () => {
+      if (!editor.svg) return;
+      if (contextMenu) { closeContextMenu(); return; }
+      editor.endTextEdit(true);
+      const r = actions.getBoundingClientRect();
+      showContextMenu(r.left, r.bottom);
+    } }, "Actions");
+  const grid = el("button", { class: "btn tool", id: "grid", title: "Show or hide the grid",
+    "aria-pressed": String(state.prefs.grid.show), onclick: () => setGrid({ show: !state.prefs.grid.show }) });
   grid.innerHTML = icon("M4 4v16M10 4v16M16 4v16M4 4h16M4 10h16M4 16h16");
-  tools.append(multi, grid);
+  grid.append("Grid");
+  const snap = el("button", { class: "btn tool", id: "snap", title: "Snap objects to the grid",
+    "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap }) }, "Snap");
+  tools.append(multi, group, actions, grid, snap);
 }
 
 function setAdditive(on) {
+  if (on) setTool("select");
   editor.additive = on;
   $("multi").setAttribute("aria-pressed", String(on));
+  if (on) toast("Tap objects to select them, then choose Group or open Actions.", 5000);
 }
 
 function setGrid(change) {
@@ -380,17 +401,91 @@ function setGrid(change) {
   savePrefs();
   Object.assign(editor.grid, state.prefs.grid);
   $("snap").setAttribute("aria-pressed", String(state.prefs.grid.snap));
+  $("grid").setAttribute("aria-pressed", String(state.prefs.grid.show));
   editor.drawOverlay();
   if (!editor.selection.length) renderPanel();
 }
 
 function setTool(name, { keepEdit = false } = {}) {
+  closeContextMenu();
+  editor.cancelGesture();
+  editor.pointers.clear();
+  editor.touchStart = null;
   if (editor.textEdit && !keepEdit) editor.endTextEdit(true);
   editor.tool = name;
-  for (const b of document.querySelectorAll("[data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === name));
+  for (const b of document.querySelectorAll("#tools [data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === name));
   $("stage").dataset.tool = name;
   editor.drawOverlay();
 }
+
+function updateActions() {
+  const count = editor.selection.length;
+  if ($("group-selection")) $("group-selection").disabled = count < 2;
+  if ($("object-actions")) $("object-actions").textContent = count ? `Actions (${count})` : "Actions";
+}
+
+// The same commands are available to mouse, touch and keyboard users.
+let contextMenu = null;
+let menuFocus = null;
+function closeContextMenu(restoreFocus = false) {
+  if (!contextMenu) return;
+  contextMenu.remove();
+  contextMenu = null;
+  $("object-actions")?.setAttribute("aria-expanded", "false");
+  if (restoreFocus && menuFocus?.isConnected) menuFocus.focus({ preventScroll: true });
+}
+
+function showContextMenu(x, y) {
+  closeContextMenu();
+  menuFocus = document.activeElement;
+  const selection = editor.selection;
+  const count = selection.length;
+  const menu = el("div", { class: "context-menu", id: "context-menu", role: "menu", "aria-label": "Object actions" });
+  contextMenu = menu;
+  menu.append(el("div", { class: "menu-title", role: "presentation" }, count ? `${count} object${count === 1 ? "" : "s"} selected` : "Slide actions"));
+  const action = (label, fn, enabled = true) => {
+    menu.append(el("button", { type: "button", role: "menuitem", disabled: !enabled,
+      onclick: () => { closeContextMenu(); fn(); } }, label));
+  };
+  action(editor.additive ? "Finish selecting several" : "Select several", () => setAdditive(!editor.additive));
+  action("Select all", () => { setTool("select"); editor.selectAll(); });
+  action("Group", () => { setTool("select"); editor.group(); }, count > 1);
+  if (selection.some((item) => item.localName === "g")) action("Ungroup", () => { setTool("select"); editor.ungroup(); });
+  if (count === 1 && selection[0].localName === "g") action("Edit group", () => { setTool("select"); editor.enterGroup(selection[0]); });
+  if (editor.context !== editor.svg) action("Leave group", () => editor.exitGroup());
+  if (count) {
+    action("Copy", () => copySelection(false));
+    action("Cut", () => copySelection(true));
+    action("Duplicate", () => editor.duplicate());
+    action("Bring to front", () => editor.order("front"));
+    action("Send to back", () => editor.order("back"));
+    action("Delete", () => editor.deleteSelection());
+  }
+  if (clipboardData()) action("Paste", pasteClipboard);
+  if (count < 2) menu.append(el("p", { class: "menu-hint", role: "presentation" }, "To group: choose Select several, tap each object, then Group."));
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); closeContextMenu(true); }
+    else if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) {
+      e.preventDefault();
+      const buttons = [...menu.querySelectorAll("button:not(:disabled)")];
+      const current = buttons.indexOf(document.activeElement);
+      const next = e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 :
+        (current + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[next]?.focus();
+    } else if (e.key === "Tab") closeContextMenu();
+    e.stopPropagation();
+  });
+  document.body.append(menu);
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(x, innerWidth - rect.width - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, innerHeight - rect.height - 8))}px`;
+  $("object-actions").setAttribute("aria-expanded", "true");
+  menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+}
+document.addEventListener("pointerdown", (e) => {
+  if (contextMenu && !contextMenu.contains(e.target) && !e.target.closest("#object-actions")) closeContextMenu();
+}, true);
+window.addEventListener("resize", () => closeContextMenu());
 
 async function uploadMedia(files) {
   for (const file of files) {
