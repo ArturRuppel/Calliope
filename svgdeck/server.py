@@ -7,6 +7,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 
+from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
@@ -22,6 +23,9 @@ def create_app(data: Path) -> FastAPI:
     store = Store(data)
     app = FastAPI(title="svgdeck", docs_url=None, redoc_url=None)
     editor_dir = Path(str(resources.files("svgdeck") / "editor"))
+    # Serialize CPU-heavy conversions without blocking saves or consuming the
+    # thread-pool capacity used by the read endpoints. Waiting stays async.
+    media_limiter = CapacityLimiter(1)
 
     def deck_dir(name: str) -> Path:
         try:
@@ -147,7 +151,10 @@ def create_app(data: Path) -> FastAPI:
         deck_dir(name)
         upload = await spooled(request)
         try:
-            return store.add_media(name, filename, upload)
+            # run_sync waits for its worker even when the request is cancelled,
+            # so the upload remains available until processing has finished.
+            return await to_thread.run_sync(store.add_media, name, filename, upload,
+                                           limiter=media_limiter)
         except ValueError as e:
             raise HTTPException(400, str(e))
         finally:
