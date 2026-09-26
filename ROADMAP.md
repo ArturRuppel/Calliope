@@ -82,7 +82,7 @@ exported `index.html`. Font files are licensed and never go into this repo.
 
 ## Milestones
 
-### 1. Deck format, player, standalone export
+### 1. Deck format, player, standalone export — done 2026-09-26
 - Define `deck.json` and the slide SVG conventions (movies, builds, fonts).
 - Player with builds, movies and sync groups.
 - Standalone export with fonts converted to woff2.

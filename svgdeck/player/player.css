@@ -1,0 +1,15 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
+.svgdeck { position: fixed; inset: 0; overflow: hidden; user-select: none; -webkit-user-select: none;
+  touch-action: none; cursor: default; }
+.svgdeck-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.svgdeck-stage { position: absolute; left: 50%; top: 50%; transform-origin: 50% 50%; overflow: hidden;
+  visibility: hidden; }
+.svgdeck-ready .svgdeck-stage { visibility: visible; }
+.svgdeck-slide { position: absolute; inset: 0; display: none; overflow: hidden; }
+.svgdeck-slide.svgdeck-current { display: block; }
+.svgdeck-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; }
+/* Slides are authored with xml:space="preserve"; keep whitespace as drawn. */
+.svgdeck-layer text { white-space: pre; }
+.svgdeck-video { position: absolute; left: 0; top: 0; transform-origin: 0 0; object-fit: contain;
+  pointer-events: none; }
+.svgdeck-blank .svgdeck-stage { visibility: hidden; }

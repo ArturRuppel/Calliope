@@ -1,0 +1,27 @@
+[project]
+name = "svgdeck"
+version = "0.1.0"
+description = "Draw slide decks in the browser, present them with movies, export them as standalone offline HTML"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "fonttools[woff]",
+]
+
+[project.optional-dependencies]
+import = ["lxml"]
+dev = ["pytest", "playwright", "lxml"]
+
+[project.scripts]
+svgdeck = "svgdeck.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["svgdeck*"]
+
+[tool.setuptools.package-data]
+svgdeck = ["player/*"]
