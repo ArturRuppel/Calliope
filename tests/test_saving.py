@@ -164,3 +164,37 @@ def test_typing_activates_unload_protection_before_autosave(page):
       return {prevented:event.defaultPrevented, dirty:svgdeckEditor.state.slides.get(svgdeckEditor.state.current).dirty};
     }""")
     assert result == {"prevented": True, "dirty": True}
+
+
+def test_flush_does_not_normalize_untouched_rich_text(page):
+    result = page.evaluate("""async () => {
+      const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const t = document.createElementNS(ns, 'text');
+        t.setAttribute('x', '200');
+        t.setAttribute('y', '300');
+        t.setAttribute('style', 'font-size:40px;stroke:#000;stroke-width:3');
+        const line = document.createElementNS(ns, 'tspan');
+        line.setAttribute('x', '200');
+        line.setAttribute('y', '300');
+        line.setAttribute('style', 'stroke:none');
+        const sub = document.createElementNS(ns, 'tspan');
+        sub.setAttribute('style', 'font-size:65%;baseline-shift:sub');
+        sub.textContent = 'l2';
+        line.append('T', sub);
+        t.append(line);
+        e.svg.append(t);
+        e.selection = [t];
+      });
+      await svgdeckEditor.flush();
+      const before = e.serialize();
+      const undoBefore = svgdeckEditor.state.slides.get(svgdeckEditor.state.current).undo.length;
+      e.editText(e.selection[0], false);
+      await svgdeckEditor.flush();
+      e.endTextEdit(true);
+      return {
+        unchanged: e.serialize() === before,
+        undoDelta: svgdeckEditor.state.slides.get(svgdeckEditor.state.current).undo.length - undoBefore,
+      };
+    }""")
+    assert result == {"unchanged": True, "undoDelta": 0}

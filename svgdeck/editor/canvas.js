@@ -982,7 +982,7 @@ export class SlideEditor {
       e.preventDefault();
       document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") || "").replace(/\r/g, ""));
     });
-    box.addEventListener("input", () => { this.syncTextEdit(); this.positionTextEdit(); });
+    box.addEventListener("input", () => { this.textEdit.changed = true; this.syncTextEdit(); this.positionTextEdit(); });
     box.addEventListener("focus", () => { if (this.textEdit) this.textEdit.holding = false; });
     // Leaving the box ends the edit, except for a trip to the panel's
     // formatting buttons (they set `holding`).
@@ -1020,6 +1020,7 @@ export class SlideEditor {
     document.execCommand("styleWithCSS", false, true);
     document.execCommand(command, false, value);
     if (whole) sel.collapseToEnd();
+    te.changed = true;
     this.syncTextEdit();
     this.positionTextEdit();
   }
@@ -1029,12 +1030,13 @@ export class SlideEditor {
    *  (and the one undo transaction opened by editText) alone. */
   syncTextEdit() {
     const te = this.textEdit;
-    if (!te) return;
+    if (!te?.changed) return;
     const lines = this.readRuns(te.box, te.scale);
     while (lines.length && !lines[lines.length - 1].some((r) => r.text.trim())) lines.pop();
     if (lines.length) this.setTextRuns(te.t, lines, te.base, te.pitch);
     else te.t.replaceChildren();
-    te.synced = true;
+    te.changed = false;
+    te.materialized = true;
     this.hooks.textChanged?.(this.serialize());
   }
 
@@ -1138,7 +1140,7 @@ export class SlideEditor {
       this.commit();
       return;
     }
-    if (!isNew && !te.synced && sameRuns(lines, trim(this.textRuns(t)))) { this.commit(); return; }
+    if (!isNew && !te.materialized && sameRuns(lines, trim(this.textRuns(t)))) { this.commit(); return; }
     this.setTextRuns(t, lines, base, te.pitch);
     this.commit();
   }
