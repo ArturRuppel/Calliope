@@ -973,7 +973,7 @@ export class SlideEditor {
       e.preventDefault();
       document.execCommand("insertText", false, (e.clipboardData?.getData("text/plain") || "").replace(/\r/g, ""));
     });
-    box.addEventListener("input", () => this.positionTextEdit());
+    box.addEventListener("input", () => { this.syncTextEdit(); this.positionTextEdit(); });
     box.addEventListener("focus", () => { if (this.textEdit) this.textEdit.holding = false; });
     // Leaving the box ends the edit, except for a trip to the panel's
     // formatting buttons (they set `holding`).
@@ -1011,7 +1011,22 @@ export class SlideEditor {
     document.execCommand("styleWithCSS", false, true);
     document.execCommand(command, false, value);
     if (whole) sel.collapseToEnd();
+    this.syncTextEdit();
     this.positionTextEdit();
+  }
+
+  /** Copy the active HTML editor into the SVG without closing it. This keeps
+   *  autosave and unload protection current while leaving the DOM selection
+   *  (and the one undo transaction opened by editText) alone. */
+  syncTextEdit() {
+    const te = this.textEdit;
+    if (!te) return;
+    const lines = this.readRuns(te.box, te.scale);
+    while (lines.length && !lines[lines.length - 1].some((r) => r.text.trim())) lines.pop();
+    if (lines.length) this.setTextRuns(te.t, lines, te.base, te.pitch);
+    else te.t.replaceChildren();
+    te.synced = true;
+    this.hooks.textChanged?.(this.serialize());
   }
 
   /** Distance between lines of a text, in its own units (null if one line). */
@@ -1104,11 +1119,17 @@ export class SlideEditor {
     if (!lines.length) {
       t.remove();
       this.selection = this.selection.filter((el) => el !== t);
-      if (isNew) { this.before = null; this.drawOverlay(); this.hooks.select(this.selection); return; }
+      if (isNew) {
+        this.before = null;
+        this.hooks.textChanged?.(this.serialize());
+        this.drawOverlay();
+        this.hooks.select(this.selection);
+        return;
+      }
       this.commit();
       return;
     }
-    if (!isNew && sameRuns(lines, trim(this.textRuns(t)))) { this.commit(); return; }
+    if (!isNew && !te.synced && sameRuns(lines, trim(this.textRuns(t)))) { this.commit(); return; }
     this.setTextRuns(t, lines, base, te.pitch);
     this.commit();
   }

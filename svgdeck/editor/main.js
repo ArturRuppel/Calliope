@@ -97,6 +97,10 @@ const editor = new SlideEditor($("stage"), {
     markDirty(state.current, after);
   },
   select() { renderPanel(); updateBreadcrumb(); },
+  textChanged(text) {
+    const rec = state.slides.get(state.current);
+    if (rec && rec.text !== text) markDirty(state.current, text);
+  },
   toast,
   hrefIn, hrefOut,
   shapeStyle: () => ({ fill: state.prefs.fill, stroke: state.prefs.stroke, strokeWidth: state.prefs.strokeWidth }),
@@ -120,52 +124,70 @@ function markDirty(id, text) {
   rec.dirty = true;
   setStatus("Unsaved", "dirty");
   clearTimeout(rec.timer);
-  rec.timer = setTimeout(() => save(id), 700);
+  rec.timer = setTimeout(() => save(id).catch(() => {}), 700);
   scheduleThumb(id);
 }
 
 async function save(id) {
   const rec = state.slides.get(id);
-  if (!rec || !rec.dirty || rec.conflict) return;
-  if (rec.saving) { rec.again = true; return; }
+  if (!rec) return;
+  if (rec.conflict) throw rec.saveError || new Error("This slide has a save conflict");
+  if (rec.savePromise) return rec.savePromise;
+  if (!rec.dirty) return;
+  clearTimeout(rec.timer);
   rec.saving = true;
-  const text = rec.text;
-  setStatus("Saving…", "busy");
-  try {
-    rec.version = await api.putSlide(id, text, rec.version);
-    if (rec.text === text) rec.dirty = false;
-  } catch (e) {
-    if (e.status === 409) {
-      rec.conflict = true;
-      setStatus("Conflict", "error");
-      toast("This slide was changed somewhere else. Reload the page to get the latest version (your last edits here are not saved).", 10000);
-    } else {
-      setStatus("Not saved", "error");
-      toast(`Saving failed: ${e.message}. Retrying…`);
-      setTimeout(() => save(id), 3000);
+  rec.savePromise = (async () => {
+    while (rec.dirty && !rec.conflict) {
+      const text = rec.text;
+      setStatus("Saving…", "busy");
+      try {
+        rec.version = await api.putSlide(id, text, rec.version);
+        rec.saveError = null;
+        if (rec.text === text) rec.dirty = false;
+      } catch (e) {
+        rec.saveError = e;
+        if (e.status === 409) {
+          rec.conflict = true;
+          setStatus("Conflict", "error");
+          toast("This slide was changed somewhere else. Reload the page to get the latest version (your last edits here are not saved).", 10000);
+        } else {
+          setStatus("Not saved", "error");
+          toast(`Saving failed: ${e.message}. Retrying…`);
+          rec.timer = setTimeout(() => save(id).catch(() => {}), 3000);
+        }
+        throw e;
+      }
     }
-  } finally {
+  })().finally(() => {
     rec.saving = false;
-  }
-  if (rec.again || (rec.dirty && !rec.conflict && rec.text !== text)) { rec.again = false; save(id); }
-  refreshStatus();
+    rec.savePromise = null;
+    refreshStatus();
+  });
+  return rec.savePromise;
 }
 
 function refreshStatus() {
   const recs = [...state.slides.values()];
   if (recs.some((r) => r.conflict)) setStatus("Conflict", "error");
-  else if (recs.some((r) => r.dirty || r.saving)) setStatus("Saving…", "busy");
+  else if (recs.some((r) => r.saving)) setStatus("Saving…", "busy");
+  else if (recs.some((r) => r.saveError)) setStatus("Not saved", "error");
+  else if (recs.some((r) => r.dirty)) setStatus("Unsaved", "dirty");
   else setStatus("Saved", "ok");
 }
 
 async function flush() {
-  await Promise.all([...state.slides.entries()].filter(([, r]) => r.dirty).map(([id]) => save(id)));
+  editor.syncTextEdit();
+  while (true) {
+    const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
+    if (!pending.length) return;
+    await Promise.all(pending.map(([id]) => save(id)));
+  }
 }
 
 window.addEventListener("beforeunload", (e) => {
   if ([...state.slides.values()].some((r) => r.dirty || r.saving)) { e.preventDefault(); e.returnValue = ""; }
 });
-document.addEventListener("visibilitychange", () => { if (document.hidden) flush(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) flush().catch(() => {}); });
 
 async function putDeck(deck) {
   try {
@@ -727,12 +749,16 @@ function wire() {
   $("present").onclick = async () => {
     const url = `/d/${DECK}/#${index() + 1}`;
     const win = window.open("about:blank", "_blank");
-    await flush();
-    if (win) win.location.href = url; else location.href = url;
+    try {
+      await flush();
+      if (win) win.location.href = url; else location.href = url;
+    } catch (e) {
+      win?.close();
+    }
   };
   $("export").onclick = async (e) => {
     e.preventDefault();
-    await flush();
+    try { await flush(); } catch (error) { return; }
     toast("Preparing the export…");
     location.href = `/api/decks/${DECK}/export.zip`;
   };
