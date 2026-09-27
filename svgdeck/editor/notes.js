@@ -1,5 +1,5 @@
 // Notes are plain text, stored with the slide entry in deck.json.
-export function installNotes({state,putDeck,toast}) {
+export function installNotes({state,putDeck,toast,mount=document.body}) {
   const drafts = new Map();
   let current = null, pending = null, timer = null;
   const panel = document.createElement('section'); panel.className = 'notes-panel'; panel.hidden = true;
@@ -11,7 +11,7 @@ export function installNotes({state,putDeck,toast}) {
   const save = document.createElement('button'); save.className = 'btn'; save.textContent = 'Save notes';
   const close = document.createElement('button'); close.className = 'btn'; close.textContent = 'Close notes';
   close.onclick = () => { panel.hidden = true; };
-  panel.append(title,text,save,close,status); document.body.append(panel);
+  panel.append(title,text,save,close,status); mount.append(panel);
   text.addEventListener('input', () => {
     if (!current) return;
     drafts.set(current,text.value); status.textContent = 'Unsaved notes';
@@ -41,5 +41,5 @@ export function installNotes({state,putDeck,toast}) {
   }
   save.onclick = () => flush().catch(e => toast(`Notes not saved: ${e.message}`));
   window.addEventListener('beforeunload', e => {if (drafts.size) { e.preventDefault(); e.returnValue=''; }});
-  return {render,flush,open() {render();panel.hidden=false;text.focus();}};
+  return {render,flush,open(focus=true) {render();panel.hidden=false;if (focus) text.focus();}};
 }

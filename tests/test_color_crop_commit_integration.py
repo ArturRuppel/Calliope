@@ -1,4 +1,5 @@
 """Independent user-flow checks for colors and explicit working-copy commits."""
+from conftest import open_doc_menu
 from test_editor import page, server
 
 
@@ -38,15 +39,14 @@ def test_contextual_crop_and_build_explanation(page):
       i.setAttribute('x',100);i.setAttribute('y',100);i.setAttribute('width',300);i.setAttribute('height',200);e.change(()=>e.svg.append(i));e.select([i]);}""")
     assert page.locator('#crop-selection').is_visible()
     assert page.get_by_role('button',name='Crop image',exact=True).is_visible()
-    page.locator('summary').filter(has_text='Panels').click()
-    page.get_by_role('button',name='Build steps',exact=True).click()
+    page.get_by_role('tab',name='Builds',exact=True).click()
     assert 'next click' in page.locator('.objects-panel .objects-hint').inner_text()
 
 
 def test_commit_ui_flushes_diffs_and_restores_working_copy(page, server):
     page.evaluate("""() => {const e=svgdeckEditor.editor,r=document.createElementNS('http://www.w3.org/2000/svg','rect');
       e.change(()=>{r.id='committed-shape';r.setAttribute('width',200);r.setAttribute('height',100);r.setAttribute('fill','#123456');e.svg.append(r)});}""")
-    page.locator('#commit-deck').click()
+    open_doc_menu(page); page.locator('#commit-deck').click()
     dialog=page.get_by_role('dialog',name='Deck commits')
     dialog.get_by_label('Commit message').fill('First milestone')
     dialog.get_by_role('button',name='Commit working copy').click()
@@ -54,7 +54,7 @@ def test_commit_ui_flushes_diffs_and_restores_working_copy(page, server):
     row.wait_for()
     dialog.get_by_role('button',name='Close',exact=True).click()
     page.evaluate("""() => {const e=svgdeckEditor.editor;e.change(()=>e.svg.querySelector('#committed-shape').setAttribute('fill','#abcdef'));}""")
-    page.locator('#commit-deck').click()
+    open_doc_menu(page); page.locator('#commit-deck').click()
     row=dialog.locator('.commit-row').filter(has_text='First milestone')
     row.get_by_role('button',name='Working diff').click()
     page.wait_for_function("document.querySelector('.commit-diff pre')?.textContent.includes('#abcdef')")
@@ -62,6 +62,6 @@ def test_commit_ui_flushes_diffs_and_restores_working_copy(page, server):
     row.get_by_role('button',name='Restore',exact=True).click()
     page.wait_for_function("!document.querySelector('.commits-dialog').open")
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#committed-shape').getAttribute('fill')")=='#123456'
-    page.locator('#commit-deck').click()
+    open_doc_menu(page); page.locator('#commit-deck').click()
     dialog.locator('.commit-row').filter(has_text='Working copy before restor').wait_for()
     assert dialog.locator('.commit-row').filter(has_text='Working copy before restor').count()==1

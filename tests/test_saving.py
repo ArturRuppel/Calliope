@@ -145,7 +145,7 @@ def test_present_and_export_stay_in_editor_on_save_failure(page):
         svgdeckEditor.editor.change(() => svgdeckEditor.editor.svg.setAttribute('data-latest', 'unsaved'));
         const originalURL = location.href;
         await document.getElementById('present').onclick();
-        await document.getElementById('export').onclick({preventDefault() {}});
+        await svgdeckEditor.exportDeck();
         return {closed, opened, navigated, stayed:location.href === originalURL, attempts:requests.length};
       } finally { window.fetch = original; window.open = originalOpen; }
     }""")

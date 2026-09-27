@@ -5,46 +5,73 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>svgdeck · {{DECK}}</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
 <link rel="stylesheet" href="/editor/editor.css">
 <link rel="stylesheet" href="/editor/colors.css">
 </head>
 <body data-deck="{{DECK}}">
 <header class="bar">
-  <a class="btn" href="/" title="All decks">‹</a>
-  <button class="btn" id="toggle-strip" title="Slides">☰</button>
-  <span class="deck-title" id="deck-title"></span>
-  <div class="group">
-    <button class="btn" id="undo" title="Undo (Ctrl+Z)">↶</button>
-    <button class="btn" id="redo" title="Redo (Ctrl+Shift+Z)">↷</button>
-  </div>
-  <div class="group zoom">
-    <button class="btn" id="zoom-out" title="Zoom out">−</button>
-    <button class="btn" id="zoom-fit" title="Fit slide"><span id="zoom-label">fit</span></button>
-    <button class="btn" id="zoom-in" title="Zoom in">+</button>
-  </div>
-  <span class="status" id="status">Loading…</span>
-  <div class="group">
-    <button class="btn" id="commit-deck" title="Save an immutable snapshot of the entire deck">Commit</button>
-    <button class="btn" id="present" title="Present from this slide">▶ Present</button>
-    <a class="btn" id="export" title="Download a standalone offline copy">Export</a>
-    <button class="btn" id="toggle-panel" title="Properties">⚙</button>
-  </div>
+  <a class="btn icon-btn" href="/" title="All decks" aria-label="All decks"><svg class="icon" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg></a>
+  <button class="btn icon-btn" id="toggle-strip" title="Slides" aria-label="Slides" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM9 3v18"/></svg></button>
+  <button class="doc-btn" id="doc-menu-btn" aria-haspopup="menu" aria-expanded="false" title="Deck: snapshots, history, export, settings">
+    <span class="doc-text"><span class="deck-title" id="deck-title"></span>
+      <span class="doc-sub"><span id="slide-pos"></span> · <span class="status" id="status">Loading…</span></span></span>
+    <svg class="icon small" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+  </button>
+  <span class="spacer"></span>
+  <button class="btn icon-btn" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="icon" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
+  <button class="btn icon-btn" id="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><svg class="icon" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
+  <span class="vrule"></span>
+  <button class="btn icon-btn" id="toggle-panel" title="Inspector" aria-label="Inspector" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM15 3v18"/></svg></button>
+  <button class="btn primary" id="present" title="Present from this slide"><svg class="icon small filled" viewBox="0 0 24 24"><path d="M6 4v16l14-8z"/></svg>Present</button>
 </header>
-<nav class="tool-bar" aria-label="Drawing and selection tools"><div class="group tools" id="tools"></div></nav>
 <main>
+  <nav class="rail" id="tools" aria-label="Tools"></nav>
   <aside class="strip" id="strip">
     <div class="strip-actions">
-      <button class="btn" id="slide-add" title="New slide">＋</button>
-      <button class="btn" id="slide-dup" title="Duplicate slide">⧉</button>
-      <button class="btn" id="slide-up" title="Move up">↑</button>
-      <button class="btn" id="slide-down" title="Move down">↓</button>
-      <button class="btn danger" id="slide-del" title="Delete slide">🗑</button>
+      <button class="btn strip-add" id="slide-add" title="New slide after this one"><svg class="icon small" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Slide</button>
+      <button class="btn icon-btn dots" id="slide-menu-btn" title="Slide actions" aria-label="Slide actions" aria-haspopup="menu" aria-expanded="false"><svg class="icon small" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg></button>
+    </div>
+    <div class="menu slide-menu" id="slide-menu" role="menu" hidden>
+      <button role="menuitem" id="slide-dup">Duplicate slide</button>
+      <button role="menuitem" id="slide-up">Move up</button>
+      <button role="menuitem" id="slide-down">Move down</button>
+      <button role="menuitem" class="danger" id="slide-del">Delete slide</button>
     </div>
     <ol class="thumbs" id="thumbs"></ol>
   </aside>
-  <section class="stage" id="stage"></section>
-  <aside class="panel" id="panel"></aside>
+  <div class="stage-wrap" id="stage-wrap">
+    <section class="stage" id="stage"></section>
+    <div class="view-bar floating" id="view-bar">
+      <button class="btn icon-btn" id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+      <button class="btn zoom-fit" id="zoom-fit" title="Fit slide"><span id="zoom-label">Fit</span></button>
+      <button class="btn icon-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+      <span class="vrule"></span>
+      <span class="view-toggles" id="view-toggles"></span>
+    </div>
+    <div class="sel-bar" id="sel-bar" hidden>
+      <div class="sel-row" id="sel-row" role="toolbar" aria-label="Selection"></div>
+      <div class="sel-row" id="align-row" role="toolbar" aria-label="Align" hidden></div>
+    </div>
+    <div class="ink-bar floating" id="ink-bar" hidden></div>
+  </div>
+  <aside class="inspector" id="inspector">
+    <div class="tabs" role="tablist" id="inspector-tabs">
+      <button role="tab" data-tab="design" aria-selected="true">Design</button>
+      <button role="tab" data-tab="objects" aria-selected="false">Objects</button>
+      <button role="tab" data-tab="builds" aria-selected="false">Builds</button>
+      <button role="tab" data-tab="notes" aria-selected="false">Notes</button>
+    </div>
+    <div class="tab-body panel" id="panel" data-tab-body="design"></div>
+    <div class="tab-body" id="objects-mount" data-tab-body="objects builds" hidden></div>
+    <div class="tab-body" id="notes-mount" data-tab-body="notes" hidden></div>
+  </aside>
 </main>
+<div class="menu doc-menu" id="doc-menu" role="menu" hidden></div>
+<dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-title">
+  <header><h2 id="settings-title"></h2><button class="btn icon-btn" id="settings-close" aria-label="Close">×</button></header>
+  <div class="panel settings-body" id="settings-body"></div>
+</dialog>
 <div class="breadcrumb" id="breadcrumb" hidden>In a group · <button class="link" id="exit-group">leave group</button></div>
 <div class="toast" id="toast" role="status"></div>
 <input type="file" id="media-file" accept="image/*,video/*" multiple hidden>

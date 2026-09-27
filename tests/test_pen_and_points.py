@@ -1,5 +1,6 @@
 """Pencil and finger tools, the eraser, other input devices, and point editing."""
 import pytest
+from conftest import open_doc_menu, pick_tool, tool_button, tool_pressed
 from test_editor import BROWSER, page, server, to_screen, drag, add_rects, saved_slide
 
 chromium_only = pytest.mark.skipif(BROWSER != 'chromium', reason='pen input is injected through Chromium CDP')
@@ -40,30 +41,35 @@ def paths(page):
 def test_pencil_and_finger_keep_their_own_tools(page):
     add_rects(page, [[800, 300, 200, 200]])
     session = page.context.new_cdp_session(page)
-    assert page.locator('#pen-status').is_hidden()  # no Pencil seen yet
+    assert page.locator('#ink-bar .pencil-note').count() == 0  # no Pencil seen yet
     pen_stroke(page, session, [(200, 200), (300, 260), (400, 240)])
     # The first Pencil stroke draws (the Pencil's default tool) and announces it.
     assert paths(page) == 1
     assert page.evaluate('svgdeckEditor.editor.penSeen') is True
-    assert page.locator('#pen-status').is_visible()
+    assert page.locator('#ink-bar .pencil-note').inner_text() == 'Pencil: Draw'
     assert page.locator('#tools [data-tool="pen"]').get_attribute('data-pen') == 'true'
-    assert page.locator('#tools [data-tool="select"]').get_attribute('aria-pressed') == 'true'
+    assert tool_pressed(page, 'select')
     # The mouse still selects and moves.
     drag(page, (900, 400), (950, 400))
     assert page.evaluate('+svgdeckEditor.editor.svg.querySelector("rect:not([data-locked])").getAttribute("x")') == pytest.approx(850, abs=1)
     assert paths(page) == 1
     # Tapping a tool with the Pencil gives it to the Pencil only.
-    box = page.locator('#tools [data-tool="rect"]').bounding_box()
+    # Shapes sit in a flyout: the Pencil opens it, then taps Rectangle.
+    box = page.locator('#tools [data-family="shapes"]').bounding_box()
+    pen_click(session, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
+    assert page.locator('#tool-flyout').get_attribute('data-slot') == 'pen'
+    box = page.locator('#tool-flyout [data-tool="rect"]').bounding_box()
     pen_click(session, box['x'] + box['width'] / 2, box['y'] + box['height'] / 2)
     assert page.evaluate('svgdeckEditor.editor.tools') == {'touch': 'select', 'pen': 'rect'}
-    assert page.locator('#tools [data-tool="rect"]').get_attribute('data-pen') == 'true'
+    assert page.locator('#tools [data-family="shapes"]').get_attribute('data-pen') == 'true'
+    assert not tool_pressed(page, 'rect')
     pen_stroke(page, session, [(200, 600), (300, 700), (400, 800)])
     assert page.evaluate('svgdeckEditor.editor.svg.querySelectorAll("rect:not([data-locked])").length') == 2
     # ...and a finger or mouse tap gives it to the finger.
-    page.click('#tools [data-tool="ellipse"]')
+    pick_tool(page, 'ellipse')
     assert page.evaluate('svgdeckEditor.editor.tools') == {'touch': 'ellipse', 'pen': 'select'}  # rect tool returned the Pencil to Select
     # The Pencil's tool survives a reload.
-    page.click('#tools [data-tool="select"]')
+    pick_tool(page, 'select')
     pen_click(session, *[v + 10 for v in page.locator('#tools [data-tool="erase"]').bounding_box().values()][:2])
     page.reload()
     page.wait_for_function('window.svgdeckEditor?.editor.svg')
@@ -76,13 +82,18 @@ def test_linked_pencil_follows_the_finger(page):
     session = page.context.new_cdp_session(page)
     pen_stroke(page, session, [(200, 200), (300, 260)])
     page.evaluate('svgdeckEditor.editor.select([])')
-    page.locator('#panel').get_by_label('The Pencil has its own tool').uncheck()
+    open_doc_menu(page)
+    page.click('#pen-status')
+    page.locator('#settings-body').get_by_label('The Pencil has its own tool').uncheck()
     assert page.evaluate('svgdeckEditor.editor.tools') == {'touch': 'select', 'pen': 'select'}
-    page.click('#tools [data-tool="rect"]')
+    page.click('#settings-close')
+    pick_tool(page, 'rect')
     assert page.evaluate('svgdeckEditor.editor.tools') == {'touch': 'rect', 'pen': 'rect'}
     assert page.locator('#tools [data-pen="true"]').count() == 0
     page.evaluate('svgdeckEditor.setTool("select")')
-    page.locator('#panel').get_by_label('The Pencil has its own tool').check()
+    open_doc_menu(page)
+    page.click('#pen-status')
+    page.locator('#settings-body').get_by_label('The Pencil has its own tool').check()
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'pen'
 
 
@@ -150,31 +161,43 @@ def test_eraser_removes_strokes_it_crosses_in_one_undo(page, server):
 
 # --- other input devices -------------------------------------------------------------------
 
+def open_pencil_settings(page):
+    open_doc_menu(page)
+    page.click('#pen-status')
+    return page.locator('#settings-body')
+
+
 def test_key_device_binding_press_and_hold(page):
     page.evaluate('svgdeckEditor.editor.select([])')
-    panel = page.locator('#panel')
+    panel = open_pencil_settings(page)
     panel.get_by_label('Action to assign').select_option('pen:bezier')
     panel.get_by_role('button', name='Assign a key or button').click()
     page.keyboard.press('F9')
     assert page.evaluate('svgdeckEditor.state.prefs.bindings["key:F9"]') == 'pen:bezier'
     assert panel.get_by_text('F9', exact=True).is_visible()
+    page.click('#settings-close')  # bindings act once the dialog is closed
     page.keyboard.press('F9')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'bezier'
     assert page.evaluate('svgdeckEditor.editor.tools.touch') == 'select'
     # A hold binding with a modifier: the Pencil erases while the key is down.
+    panel = open_pencil_settings(page)
     panel.get_by_label('Action to assign').select_option('penhold:erase')
     panel.get_by_role('button', name='Assign a key or button').click()
     page.keyboard.press('Control+Shift+KeyE')
     assert page.evaluate('svgdeckEditor.state.prefs.bindings["key:Ctrl+Shift+KeyE"]') == 'penhold:erase'
+    page.click('#settings-close')
     page.keyboard.down('Control'); page.keyboard.down('Shift'); page.keyboard.down('KeyE')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'erase'
     page.keyboard.up('KeyE'); page.keyboard.up('Shift'); page.keyboard.up('Control')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'bezier'
-    # Escape cancels learning; removing a binding frees the key.
+    # Escape cancels learning (the dialog stays); removing a binding frees the key.
+    panel = open_pencil_settings(page)
     panel.get_by_role('button', name='Assign a key or button').click()
     page.keyboard.press('Escape')
     assert page.evaluate('svgdeckEditor.controller.learning') is None
+    assert page.locator('#settings-dialog').is_visible()
     panel.get_by_role('button', name='Remove F9').click()
+    page.click('#settings-close')
     page.keyboard.press('F9')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'bezier'
     assert page.evaluate('"key:F9" in svgdeckEditor.state.prefs.bindings') is False
@@ -193,7 +216,9 @@ def test_gamepad_buttons_switch_tools(page):
         fakePad.buttons[i] = {pressed: false, value: 0}; await frame();
       };
     }''')
-    assert page.locator('#pen-status').is_visible()
+    open_doc_menu(page)
+    assert 'controller connected' in page.locator('#pen-status').inner_text()
+    page.keyboard.press('Escape')
     page.evaluate('press(1)')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'erase'
     page.evaluate('press(0)')

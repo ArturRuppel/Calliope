@@ -52,6 +52,12 @@ def to_screen(page, x, y):
         return [r.left + {x} * e.zoom, r.top + {y} * e.zoom]; }})()""")
 
 
+def screen_tol(page):
+    """Slide pixels two rounded pointer positions can be off by (WebKit rounds
+    mouse events to whole screen pixels)."""
+    return max(2, 2 / page.evaluate("svgdeckEditor.editor.zoom"))
+
+
 def drag(page, a, b, steps=8):
     page.mouse.move(*to_screen(page, *a))
     page.mouse.down()
@@ -85,7 +91,7 @@ def test_draw_move_resize_undo(page, server):
     # Move it: geometry changes, no transform (baked).
     drag(page, (400, 300), (500, 350))
     rect = main_rect(saved_slide(page, server))
-    assert attrs(rect) == pytest.approx({"x": 300, "y": 250, "width": 400, "height": 200}, abs=2)
+    assert attrs(rect) == pytest.approx({"x": 300, "y": 250, "width": 400, "height": 200}, abs=screen_tol(page))
     assert "transform" not in rect
 
     # Resize from the bottom-right handle (corner keeps aspect ratio).
@@ -152,11 +158,11 @@ def test_slides_add_duplicate_delete(page, server):
     page.keyboard.press("r")
     drag(page, (100, 100), (300, 300))
     saved_slide(page, server)
-    page.click("#slide-dup")
+    page.click("#slide-menu-btn"); page.click("#slide-dup")
     page.wait_for_function("svgdeckEditor.state.deck.slides.length === 3")
     assert "<rect " in saved_slide(page, server).split("background", 1)[1]
     page.once("dialog", lambda d: d.accept())
-    page.click("#slide-del")
+    page.click("#slide-menu-btn"); page.click("#slide-del")
     page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2")
     assert len(list((data / "decks" / "talk" / "trash").glob("*.svg"))) == 1
 
@@ -222,11 +228,14 @@ def panel_button(page, label):
 def test_single_arrowhead_appears(page, server):
     page.keyboard.press("l")
     drag(page, (300, 500), (1300, 500))
-    plain = dark_pixels(page, 1300, 500)  # with the selection showing, as on the iPad
+    # Zoomed in, so the counts do not depend on how much room the editor's chrome leaves.
+    page.evaluate("svgdeckEditor.editor.zoomAt(...%s, 1.6)" % to_screen(page, 800, 500))
+    # With the selection showing, as on the iPad: the end handles sit on the line ends.
+    end, start = dark_pixels(page, 1300, 500), dark_pixels(page, 300, 500)
     panel_button(page, "End")
     page.wait_for_timeout(100)
-    assert dark_pixels(page, 1300, 500) > plain * 1.5, "end arrowhead not drawn"
-    assert dark_pixels(page, 300, 500) <= plain * 1.2, "start got an arrowhead too"
+    assert dark_pixels(page, 1300, 500) - end > 25, "end arrowhead not drawn"
+    assert dark_pixels(page, 300, 500) - start < 5, "start got an arrowhead too"
 
 
 def test_arrowhead_follows_line_colour(page, server):
@@ -336,7 +345,8 @@ def test_dragging_a_line_end(page, server):
 def test_copy_paste_buttons_across_slides(page, server):
     page.keyboard.press("e")
     drag(page, (100, 100), (300, 200))
-    panel_button(page, "Copy")
+    page.click("#object-actions")
+    page.locator("#context-menu").get_by_role("menuitem", name="Copy").click()
     page.click("#slide-add")
     page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2")
     panel_button(page, "Paste")
@@ -384,6 +394,18 @@ def button(page, label):
     page.locator("#panel button").filter(has_text=exact(label)).first.click()
 
 
+def bar(page, label):
+    """A button in the bar over the selection."""
+    page.locator("#sel-bar button").filter(has_text=exact(label)).first.click()
+
+
+def align(page, title):
+    """Align from the selection bar: its Align button opens the alignment row."""
+    if page.locator("#align-row").is_hidden():
+        bar(page, "Align")
+    page.get_by_title(title, exact=True).click()
+
+
 def add_rects(page, boxes):
     page.evaluate(f"""(() => {{ const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
       e.change(() => {{ for (const [x, y, w, h] of {boxes}) {{
@@ -404,11 +426,11 @@ def test_bold_on_selected_words_while_editing(page, server):
     page.keyboard.type("plain strong")
     for _ in "strong":
         page.keyboard.press("Shift+ArrowLeft")
-    button(page, "Bold")
-    assert page.locator(".text-edit").count() == 1, "the panel ended the edit"
+    page.get_by_title("Bold (Ctrl+B)", exact=True).click()
+    assert page.locator(".text-edit").count() == 1, "the bar ended the edit"
     page.keyboard.press("End")
     page.keyboard.type("!")
-    button(page, "Done")
+    page.get_by_role("button", name="Done", exact=True).click()
     words = page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('text tspan tspan'))
       .map(s => [s.textContent, getComputedStyle(s).fontWeight])""")
     assert words and words[0][0].startswith("strong") and int(words[0][1]) >= 700
@@ -458,10 +480,10 @@ def test_select_several_by_tapping_then_group_and_ungroup(page, server):
     assert page.evaluate("svgdeckEditor.editor.selection.length") == 3
     page.mouse.click(*to_screen(page, 750, 450))  # a tap on a selected one takes it out
     assert page.evaluate("svgdeckEditor.editor.selection.length") == 2
-    button(page, "Group")
+    bar(page, "Group")
     assert page.evaluate("svgdeckEditor.editor.selection.map(e => e.localName)") == ["g"]
     assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll(':scope > g > rect').length") == 2
-    button(page, "Ungroup")
+    bar(page, "Ungroup")
     assert page.evaluate("svgdeckEditor.editor.selection.length") == 2
     assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('g').length") == 0
 
@@ -469,19 +491,19 @@ def test_select_several_by_tapping_then_group_and_ungroup(page, server):
 def test_align_and_distribute(page, server):
     add_rects(page, [[100, 100, 100, 100], [300, 250, 50, 50], [900, 500, 100, 200]])
     page.evaluate("svgdeckEditor.editor.selectAll()")
-    button(page, "Left")
+    align(page, "Align left edges")
     assert [b[0] for b in rect_boxes(page)] == [100, 100, 100]
-    button(page, "Bottom")
+    align(page, "Align bottom edges")
     assert [b[1] + b[3] for b in rect_boxes(page)] == [700, 700, 700]
     page.evaluate("(() => { const e = svgdeckEditor.editor; e.change(() => { const r = e.svg.querySelectorAll('rect:not([data-locked])'); "
                   "r[1].setAttribute('x', 500); r[2].setAttribute('x', 1500); }); })()")
-    button(page, "Across")
+    page.locator("#align-row").get_by_role("button", name="Across", exact=True).click()
     boxes = sorted(rect_boxes(page))
     gaps = [boxes[i + 1][0] - boxes[i][0] - boxes[i][2] for i in range(2)]
     assert abs(gaps[0] - gaps[1]) <= 1 and boxes[0][0] == 100 and boxes[2][0] == 1500
     # One object aligns with the slide.
     page.mouse.click(*to_screen(page, 150, 650))
-    button(page, "Centre")
+    align(page, "Align centres")
     b = [b for b in rect_boxes(page) if b[2] == 100 and b[3] == 100][0]
     assert b[0] == 910
 

@@ -1,5 +1,6 @@
 """Pan, independent grid controls and context menus for mouse and touch."""
 import pytest
+from conftest import pick_tool, tool_button, tool_pressed
 from test_editor import BROWSER, page, server, to_screen, drag, add_rects
 
 
@@ -8,14 +9,14 @@ def test_pan_select_and_draw_can_be_switched_repeatedly(page):
     page.evaluate('svgdeckEditor.editor.selectAll()')
     source = page.evaluate('svgdeckEditor.editor.serialize()')
     before = page.evaluate('({...svgdeckEditor.editor.pan})')
-    page.click('#tools [data-tool="pan"]')
+    pick_tool(page, 'pan')
     drag(page, (400, 300), (650, 400))
     assert page.evaluate('svgdeckEditor.editor.pan.x') > before['x']
     assert page.evaluate('svgdeckEditor.editor.serialize()') == source
     for tool in ['select', 'pen', 'pan', 'rect', 'select', 'pan']:
-        page.click(f'#tools [data-tool="{tool}"]')
+        pick_tool(page, tool)
         assert page.evaluate('svgdeckEditor.editor.tool') == tool
-        assert page.locator(f'#tools [data-tool="{tool}"]').get_attribute('aria-pressed') == 'true'
+        assert tool_pressed(page, tool)
     page.keyboard.press('v')
     assert page.evaluate('svgdeckEditor.editor.tool') == 'select'
     page.keyboard.press('h')
@@ -40,8 +41,8 @@ def test_grid_visibility_and_snapping_are_independent_and_persist(page):
 
 def test_multiselect_group_button_and_right_click_ungroup(page):
     add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150]])
-    assert page.locator('#group-selection').is_disabled()
-    page.click('#tools [data-tool="pan"]')
+    assert page.locator('#group-selection').count() == 0  # the bar offers Group only for several objects
+    pick_tool(page, 'pan')
     page.click('#multi')
     assert page.evaluate('svgdeckEditor.editor.tool') == 'select'
     page.mouse.click(*to_screen(page, 175, 175))
@@ -99,7 +100,7 @@ def test_two_finger_tap_preserves_selection_and_groups(page):
 def test_two_finger_drag_pans_and_zooms_without_editing_or_menu(page, tool):
     add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150]])
     page.evaluate('svgdeckEditor.editor.selectAll()')
-    page.click(f'#tools [data-tool="{tool}"]')
+    pick_tool(page, tool)
     session = page.context.new_cdp_session(page)
     x,y = to_screen(page, 1000, 600)
     source = page.evaluate('svgdeckEditor.editor.serialize()')
@@ -129,15 +130,15 @@ def test_finger_can_pan_then_select_then_draw_after_pencil_use(page):
     # Reproduce the old implicit mode left behind by a Pencil stroke.
     page.evaluate('svgdeckEditor.editor.penSeen = true')
     session = page.context.new_cdp_session(page)
-    page.click('#tools [data-tool="pan"]')
+    pick_tool(page, 'pan')
     before = page.evaluate('({...svgdeckEditor.editor.pan})')
     x,y = to_screen(page, 700, 400)
     touch(session, 'touchStart', [(1,x,y)])
     touch(session, 'touchMove', [(1,x+70,y+30)])
     touch(session, 'touchEnd', [])
     assert page.evaluate('svgdeckEditor.editor.pan.x') == pytest.approx(before['x']+70,abs=1)
-    page.click('#tools [data-tool="select"]')
-    page.click('#tools [data-tool="rect"]')
+    pick_tool(page, 'select')
+    pick_tool(page, 'rect')
     x,y = to_screen(page, 300, 300)
     touch(session, 'touchStart', [(1,x,y)])
     touch(session, 'touchMove', [(1,x+100,y+60)])
@@ -150,8 +151,12 @@ def test_finger_can_pan_then_select_then_draw_after_pencil_use(page):
 def test_tools_and_menu_fit_tablet_and_phone_viewports(page, width, height, tmp_path):
     page.set_viewport_size({'width':width,'height':height})
     for name in ['select','pan']:
-        box = page.locator(f'#tools [data-tool="{name}"]').bounding_box()
+        box = tool_button(page, name).bounding_box()
         assert 0 <= box['x'] and box['x']+box['width'] <= width
+    add_rects(page, [[100, 100, 150, 150]])
+    page.evaluate('svgdeckEditor.editor.selectAll()')
+    box = page.locator('#sel-bar').bounding_box()
+    assert box['x'] >= 0 and box['x']+box['width'] <= width
     page.click('#object-actions')
     menu = page.locator('#context-menu')
     box = menu.bounding_box()

@@ -1,4 +1,5 @@
 """Independent integration checks for the feature review."""
+from conftest import open_doc_menu
 from test_editor import page, server
 from svgdeck.store import Store
 
@@ -11,8 +12,8 @@ def test_revision_restore_refreshes_thumbnail(page, server):
       e.change(()=>e.svg.querySelector('[data-label="background"]').setAttribute('fill','#99bbee'));
       await svgdeckEditor.flush();
     }""")
-    page.locator('summary').filter(has_text='Panels').click()
-    page.get_by_role('button',name='History and recovery').click()
+    open_doc_menu(page)
+    page.get_by_role('menuitem',name='History and recovery').click()
     page.locator('.recovery-dialog button').filter(has_text='Restore').first.click()
     page.wait_for_function("svgdeckEditor.editor.svg.querySelector('[data-label=background]').getAttribute('fill') === '#eebb99'")
     page.wait_for_function("document.querySelector('.thumbs .current .thumb [data-label=background]')?.getAttribute('fill') === '#eebb99'")

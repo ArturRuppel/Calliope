@@ -115,7 +115,7 @@ def test_custom_colour_targets_selected_rich_text_and_keeps_alpha(page, server):
     dialog.get_by_label("Opacity percent").fill("25")
     dialog.get_by_role("button", name="Apply").click()
     assert page.locator(".text-edit").count() == 1, "colour dialog ended rich-text editing"
-    panel.get_by_title("Finish editing (Esc)", exact=True).click()
+    page.get_by_title("Finish editing (Esc)", exact=True).click()
 
     runs = page.evaluate("""() => svgdeckEditor.editor.textRuns(
       svgdeckEditor.editor.svg.querySelector('text'))[0].map(run => [run.text, run.look.fill])""")

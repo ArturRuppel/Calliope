@@ -135,7 +135,7 @@ def test_upload_to_deleted_origin_is_not_inserted_elsewhere(page):
     page.locator("#media-file").set_input_files({"name": "gone.png", "mimeType": "image/png", "buffer": b"gone"})
     page.wait_for_function("typeof window.completeUpload === 'function'")
     page.once("dialog", lambda dialog: dialog.accept())
-    page.click("#slide-del")
+    page.click("#slide-menu-btn"); page.click("#slide-del")
     page.wait_for_function("svgdeckEditor.state.deck.slides.length === 1")
     page.evaluate("completeUpload()")
     page.wait_for_function("document.getElementById('toast').textContent.includes('slide was deleted')")

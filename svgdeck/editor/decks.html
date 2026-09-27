@@ -5,30 +5,37 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>svgdeck</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
 <style>
-  :root { --ink: #1d232a; --muted: #6b7682; --line: #d9dee3; --accent: #2f6fdb;
-    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: var(--ink); }
-  body { margin: 0; background: #eef1f4; }
-  main { max-width: 46rem; margin: 0 auto; padding: 24px 16px 60px; }
-  h1 { font-size: 1.5rem; margin: 0 0 16px; }
-  .deck { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 8px;
-    background: #fff; border: 1px solid var(--line); border-radius: 10px; }
-  .deck .info { flex: 1; min-width: 0; }
-  .deck strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .deck small { color: var(--muted); }
-  a.btn, button { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border-radius: 8px;
-    border: 1px solid var(--line); background: #fff; color: var(--ink); text-decoration: none; font: inherit; cursor: pointer; }
-  a.btn.primary, button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
-  form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 24px; padding: 14px; background: #fff;
-    border: 1px solid var(--line); border-radius: 10px; }
-  form h2 { width: 100%; margin: 0; font-size: 1rem; }
-  input { height: 40px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; flex: 1; min-width: 10rem; }
-  .error { color: #c62828; width: 100%; }
+  /* The Modernist system, as in the editor: flat, square, ink on warm grey, one red accent. */
+  :root { --ink: #201e1d; --muted: #605d5d; --line: color-mix(in srgb, #201e1d 40%, transparent); --accent: #ec3013;
+    --accent-600: #dd2b0f; --n200: #eae7e7; --bg: #f3f2f2;
+    font: 15px/1.4 "Archivo", system-ui, -apple-system, sans-serif; color: var(--ink); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); }
+  header { display: flex; align-items: center; gap: 16px; height: 64px; padding: 0 24px; border-bottom: 2px solid var(--line); }
+  header h1 { font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin: 0; flex: 1; }
+  main { max-width: 60rem; margin: 0 auto; padding: 8px 24px 60px; }
+  .deck { display: flex; align-items: center; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+  .deck .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .deck strong { font-size: 17px; line-height: 1.2; font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .deck small { color: var(--muted); font-size: 12px; }
+  a.btn, button { display: inline-flex; align-items: center; height: 44px; padding: 0 16px; border-radius: 0;
+    border: 2px solid var(--ink); background: none; color: var(--ink); text-decoration: none; font: inherit;
+    font-weight: 800; font-size: 13px; cursor: pointer; }
+  a.btn:hover, button:hover { background: var(--n200); }
+  a.btn.primary, button.primary { background: var(--accent); border-color: var(--accent); color: #fff; min-width: 96px; }
+  a.btn.primary:hover, button.primary:hover { background: var(--accent-600); border-color: var(--accent-600); }
+  form { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 32px; padding-top: 16px; border-top: 2px solid var(--line); }
+  form h2 { width: 100%; margin: 0 0 4px; font-size: 18px; font-weight: 800; }
+  input { height: 44px; padding: 0 12px; border: 2px solid var(--line); border-radius: 0; background: #fff; font: inherit; flex: 1; min-width: 10rem; }
+  input:focus { outline: none; border-color: var(--ink); }
+  .error { color: #ae1800; width: 100%; }
 </style>
 </head>
 <body>
+<header><h1>svgdeck</h1><a class="btn primary" href="#new" onclick="document.querySelector('#new input').focus()">New deck</a></header>
 <main>
-  <h1>svgdeck</h1>
   <div id="decks">Loading…</div>
   <form id="new">
     <h2>New deck</h2>

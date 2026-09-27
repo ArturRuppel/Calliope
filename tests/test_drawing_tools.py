@@ -1,6 +1,7 @@
 """Geometry, editing transactions, and discoverable formatting controls."""
 import pytest
-from test_editor import page, server, drag, to_screen, add_rects, saved_slide
+from conftest import pick_tool
+from test_editor import page, server, screen_tol, drag, to_screen, add_rects, saved_slide
 
 
 def draw_curve(page, a, b):
@@ -78,13 +79,13 @@ def test_nodes_respect_transformed_groups_and_cancel(page):
 def test_alignment_reference_and_text_controls(page, server):
     add_rects(page,[[100,100,100,100],[400,400,200,100]])
     page.evaluate('svgdeckEditor.editor.selectAll()')
-    page.click('#align-tools')
-    page.locator('[aria-label="Alignment reference"]').select_option('slide')
+    page.locator('#sel-bar').get_by_role('button',name='Align',exact=True).click()
+    page.get_by_role('button',name='to selection',exact=True).click()  # several objects: align to the slide instead
     page.get_by_title('Align left edges',exact=True).click()
     assert page.evaluate('[...svgdeckEditor.editor.selection].map(s=>s.getBBox().x)') == pytest.approx([0,0],abs=.1)
     page.keyboard.press('t'); page.mouse.click(*to_screen(page,400,400))
     page.keyboard.type('Formatted text');page.keyboard.press('Escape')
-    page.click('#text-tools')
+    page.click('#inspector-tabs [data-tab="design"]')
     page.get_by_title('Toggle bold',exact=True).click()
     page.get_by_title('Toggle italic',exact=True).click()
     page.get_by_title('Toggle underline',exact=True).click()
@@ -98,18 +99,21 @@ def test_alignment_reference_and_text_controls(page, server):
     assert selected(page,'e.textRuns(s)[0][0].look.decoration') == 'underline' 
 
 
-@pytest.mark.parametrize('width,height',[(1400,900),(1024,768),(768,1024),(390,844)])
-def test_grouped_toolbar_and_canvas_remain_usable(page,width,height,tmp_path):
+@pytest.mark.parametrize('width,height',[(1400,900),(1194,834),(1024,768),(768,1024),(390,844)])
+def test_tool_rail_and_canvas_remain_usable(page,width,height,tmp_path):
     page.set_viewport_size({'width':width,'height':height})
     page.evaluate('document.body.classList.add("no-panel","no-strip")')
-    for name in ['Navigate','Shapes','Paths','Arrange','View']:
-        assert page.get_by_role('group',name=name,exact=True).count() == 1
-    page.click('[data-tool="bezier"]')
+    for name in ['select','pen','erase','text']:
+        box=page.locator(f'#tools [data-tool="{name}"]').bounding_box()
+        assert box['y']+box['height'] <= height
+    for family in ['shapes','paths']:
+        assert page.locator(f'#tools [data-family="{family}"]').count() == 1
+    pick_tool(page,'bezier')
     assert page.evaluate('svgdeckEditor.editor.tool') == 'bezier'
     page.evaluate('document.body.classList.add("no-panel")')
     stage=page.locator('#stage').bounding_box()
     assert stage['height'] > height*.5
-    assert stage['width'] > width*.9
+    assert stage['width'] > width-80  # only the tool rail beside it
     page.screenshot(path=str(tmp_path/'organized-tools.png'))
 
 
@@ -173,8 +177,8 @@ def test_connected_straight_and_curved_nodes_finish_as_one_undo(page,server):
     points=selected(page,'e.curvePoints(s)')
     assert len(points)==10
     assert points[1] == points[0] and points[2] == points[3]
-    assert points[5]['x'] == pytest.approx(550,abs=2)
-    assert points[7]['x'] == pytest.approx(750,abs=2)
+    assert points[5]['x'] == pytest.approx(550,abs=screen_tol(page))
+    assert points[7]['x'] == pytest.approx(750,abs=screen_tol(page))
     saved_slide(page,server)
     page.keyboard.press('Control+z')
     assert page.evaluate('svgdeckEditor.editor.serialize()') == before
@@ -203,7 +207,7 @@ def test_path_touch_finish_and_flush(page,server):
     from test_touch_tools import touch
     from test_editor import BROWSER
     if BROWSER!='chromium': pytest.skip('CDP requires Chromium')
-    page.click('[data-tool="bezier"]');session=page.context.new_cdp_session(page)
+    pick_tool(page,'bezier');session=page.context.new_cdp_session(page)
     for point in [(200,300),(500,300),(700,600)]:
         x,y=to_screen(page,*point);touch(session,'touchStart',[(1,x,y)]);touch(session,'touchEnd',[])
     page.get_by_role('button',name='Finish path',exact=True).click()

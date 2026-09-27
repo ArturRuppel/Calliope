@@ -56,3 +56,39 @@ def deck(tmp_path, movie) -> Path:
         ("c", SLIDE.format(color="#0000ff", body=video + '<rect id="above" x="100" y="100" width="50" height="50"/>')),
     ]
     return write_deck(tmp_path / "deck", slides, {"clock.webm": movie})
+
+
+FAMILIES = {"rect": "shapes", "ellipse": "shapes", "circle": "shapes", "polygon": "shapes", "line": "shapes",
+            "arrow": "shapes", "bezier": "paths", "nodes": "paths"}
+
+
+def tool_button(page, tool: str):
+    """The editor's button for a tool: rail buttons are always there; shapes
+    and paths sit in a flyout, opened here. Pan lives in the view bar."""
+    family = FAMILIES.get(tool)
+    if family:
+        if page.locator(f'#tool-flyout[data-family="{family}"]').count() == 0:
+            page.click(f'#tools [data-family="{family}"]')
+        return page.locator(f'#tool-flyout [data-tool="{tool}"]')
+    if tool == "pan":
+        return page.locator("#pan-tool")
+    return page.locator(f'#tools [data-tool="{tool}"]')
+
+
+def pick_tool(page, tool: str) -> None:
+    tool_button(page, tool).click()
+
+
+def open_doc_menu(page) -> None:
+    """The deck menu under the title: commits, history, export, settings."""
+    if page.locator("#doc-menu").is_hidden():
+        page.click("#doc-menu-btn")
+
+
+def tool_pressed(page, tool: str) -> bool:
+    """Whether the rail shows the tool as the finger's: shapes and paths
+    through their family button."""
+    family = FAMILIES.get(tool)
+    selector = (f'#tools [data-family="{family}"]' if family else
+                "#pan-tool" if tool == "pan" else f'#tools [data-tool="{tool}"]')
+    return page.locator(selector).get_attribute("aria-pressed") == "true"

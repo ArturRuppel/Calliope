@@ -8,8 +8,7 @@ from test_player import page as player_page
 
 
 def test_notes_roundtrip_and_live_speaker(page, server):
-    page.locator('summary').filter(has_text='Panels').click()
-    page.get_by_role('button', name='Speaker notes', exact=True).click()
+    page.get_by_role('tab', name='Notes', exact=True).click()
     notes = 'Opening remarks\n<not HTML> & reminders'
     page.get_by_role('textbox', name='Notes for this slide').fill(notes)
     page.evaluate('svgdeckEditor.flush()')
@@ -18,8 +17,7 @@ def test_notes_roundtrip_and_live_speaker(page, server):
     assert meta['slides'][0]['notes'] == notes
     page.reload()
     page.wait_for_function('window.svgdeckEditor?.state.current')
-    page.locator('summary').filter(has_text='Panels').click()
-    page.get_by_role('button', name='Speaker notes', exact=True).click()
+    page.get_by_role('tab', name='Notes', exact=True).click()
     assert page.get_by_role('textbox', name='Notes for this slide').input_value() == notes
     page.goto(server[0] + '/d/talk/?speaker=1')
     page.wait_for_function('document.querySelector(".svgdeck-ready")')
@@ -87,12 +85,11 @@ def test_movie_crop_and_build_visibility_in_export(deck, tmp_path):
 def test_pending_notes_survive_slide_reorder(page, server):
     page.locator('#slide-add').click()
     page.wait_for_function('svgdeckEditor.state.deck.slides.length === 2')
-    page.locator('summary').filter(has_text='Panels').click()
-    page.get_by_role('button', name='Speaker notes', exact=True).click()
+    page.get_by_role('tab', name='Notes', exact=True).click()
     page.get_by_role('textbox', name='Notes for this slide').fill('Keep this note with its slide')
     sid = page.evaluate('svgdeckEditor.state.current')
-    page.get_by_role('button', name='Close notes').click()
-    page.locator('#slide-up').click()
+    page.get_by_role('tab', name='Design', exact=True).click()
+    page.click('#slide-menu-btn'); page.locator('#slide-up').click()
     page.wait_for_function('(id) => svgdeckEditor.state.deck.slides[0].id === id', arg=sid)
     page.evaluate('svgdeckEditor.flush()')
     meta = json.loads((server[1] / 'decks/talk/deck.json').read_text())

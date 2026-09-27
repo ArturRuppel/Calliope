@@ -6,7 +6,7 @@ const NON_ARTWORK = new Set([...SKIP, "clipPath", "mask", "marker", "pattern", "
 const SVGNS = "http://www.w3.org/2000/svg";
 const MAX_STEP = 999;
 
-export function installObjects({ editor, state, toast, settle }) {
+export function installObjects({ editor, state, toast, settle, mount = document.body }) {
   let mode = "objects";
   let preview = null;
   let renderedSlide = null;
@@ -21,7 +21,7 @@ export function installObjects({ editor, state, toast, settle }) {
   // object the user is about to select or change.
   editor.host.addEventListener("pointerdown", () => exitPreview(), true);
   panel.addEventListener("focusin", (e) => { if (!e.target.closest(".build-preview")) exitPreview(); });
-  document.body.append(panel);
+  mount.append(panel);
 
   function ensureCss() {
     if (document.querySelector('link[data-svgdeck-objects]')) return;

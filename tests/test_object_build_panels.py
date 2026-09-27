@@ -48,8 +48,8 @@ def install(page):
 
 
 def open_panel(page, name):
-    page.get_by_text("Panels", exact=True).click()
-    page.get_by_role("button", name=name, exact=True).click()
+    tab = {"Objects": "Objects", "Build steps": "Builds"}[name]
+    page.locator("#inspector-tabs").get_by_role("tab", name=tab, exact=True).click()
 
 
 def test_tree_rename_visibility_lock_and_order(page, server):
@@ -186,7 +186,7 @@ def test_switching_to_objects_clears_preview(page):
     install(page)
     open_panel(page, "Build steps")
     page.get_by_label("Preview build step").fill("0")
-    page.get_by_role("tab", name="Open objects").click()
+    page.locator("#inspector-tabs").get_by_role("tab", name="Objects", exact=True).click()
     assert page.evaluate("!document.querySelector('[data-svgdeck-build-preview]')")
 
 

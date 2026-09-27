@@ -154,14 +154,17 @@ const editor = new SlideEditor($("stage"), {
                       size: state.prefs.size, fill: state.prefs.textFill }),
   ensureFont: (family) => ensureFamily(family),
   toolDone: (slot) => setTool("select", { keepEdit: true, slot }),
-  inputChanged: () => { updateToolButtons(); renderPanel(); },
+  inputChanged: () => { updateToolButtons(); renderPanel(); updateSelBar(); },
   usePressure: () => state.prefs.pressure,
   penFound: () => {
     state.prefs.penSeen = true; savePrefs();
     updateToolButtons();
     if (!state.prefs.penLinked) toast(`The Pencil has its own tool: ${TOOL_NAMES[editor.tools.pen]}. Tap a tool with the Pencil to change it.`, 6000);
   },
-  zoomChanged: (z) => { $("zoom-label").textContent = editor.fitMode ? "fit" : `${Math.round(z * 100)}%`; },
+  zoomChanged: (z) => {
+    $("zoom-label").textContent = editor.fitMode ? "Fit" : `${Math.round(z * 100)}%`;
+    placeSelBar();
+  },
 });
 
 function defaultFamily() {
@@ -202,7 +205,7 @@ async function save(id) {
         if (e.status === 409) {
           rec.conflict = true;
           setStatus("Conflict", "error");
-          toast("This slide was changed elsewhere. Open Panels → History and recovery, then Keep both versions to preserve your edits.", 10000);
+          toast("This slide was changed elsewhere. Open the deck menu → History and recovery, then Keep both versions to preserve your edits.", 10000);
         } else {
           setStatus("Not saved", "error");
           toast(`Saving failed: ${e.message}. Retrying…`);
@@ -309,6 +312,7 @@ async function openSlide(id) {
     toast(e.message, 8000);
   }
   history.replaceState(null, "", `#${index() + 1}`);
+  paintSlidePos();
   for (const li of $("thumbs").children) li.classList.toggle("current", li.dataset.id === id);
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   renderPanel();
@@ -350,6 +354,7 @@ async function moveSlide(delta) {
   renderStrip();
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   history.replaceState(null, "", `#${index() + 1}`);
+  paintSlidePos();
   renderPanel();
 }
 
@@ -371,7 +376,12 @@ const thumbObserver = new IntersectionObserver((entries) => {
   for (const e of entries) if (e.isIntersecting) renderThumb(e.target.dataset.id);
 }, { root: $("thumbs"), rootMargin: "300px" });
 
+function paintSlidePos() {
+  $("slide-pos").textContent = state.current ? `Slide ${index() + 1} of ${state.deck.slides.length}` : "";
+}
+
 function renderStrip() {
+  paintSlidePos();
   thumbObserver.disconnect();
   const ol = $("thumbs");
   ol.replaceChildren();
@@ -408,139 +418,209 @@ async function renderThumb(id, force = false) {
   li.querySelector(".thumb").replaceChildren(svg);
 }
 
-// --- toolbar -------------------------------------------------------------------------------
-function icon(path) {
-  return `<svg viewBox="0 0 24 24" class="icon"><path d="${path}"/></svg>`;
+// --- tool rail -------------------------------------------------------------------------------
+function icon(path, cls = "icon") {
+  return `<svg viewBox="0 0 24 24" class="${cls}"><path d="${path}"/></svg>`;
 }
 
-let toolPointer = null;
+const TOOL = Object.fromEntries(TOOLS.map(([id, title, path]) =>
+  [id, { title, path, name: title.split(" (")[0], key: /\((\w)\)$/.exec(title)?.[1] || "" }]));
+// Families share one rail slot and open a flyout; the slot shows the member used last.
+const FAMILIES = {
+  shapes: { name: "Shapes", tools: ["rect", "ellipse", "circle", "polygon", "line", "arrow"] },
+  paths: { name: "Path", tools: ["bezier", "nodes"] },
+};
+const RAIL = ["select", "pen", "erase", null, "shapes", "paths", null, "text", "media"];
+const familyOf = (tool) => Object.keys(FAMILIES).find((f) => FAMILIES[f].tools.includes(tool));
+const lastInFamily = { shapes: "rect", paths: "bezier" };
 
-function buildToolbar() {
-  const tools = $("tools");
-  for (const [id, title] of [["navigate", "Navigate"], ["insert", "Insert"], ["shapes", "Shapes"],
-      ["paths", "Paths"], ["arrange", "Arrange"], ["view", "View"], ["input", "Input"]]) {
-    tools.append(el("div", {class:"tool-category", role:"group", "aria-label":title},
-      el("span", {class:"category-label"}, title), el("div", {class:"category-tools", id:`tools-${id}`})));
-  }
-  const category = {select:"navigate", pan:"navigate", text:"insert", rect:"shapes", ellipse:"shapes",
-    circle:"shapes", polygon:"shapes", line:"paths", arrow:"paths", bezier:"paths", nodes:"paths", pen:"paths", erase:"paths"};
-  for (const [name, title, path] of TOOLS) {
-    const b = document.createElement("button");
-    b.className = "btn tool";
-    b.dataset.tool = name;
-    b.title = title;
-    b.setAttribute("aria-label", title);
-    b.innerHTML = icon(path);
-    b.append(document.createTextNode(title.split(" (")[0]));
-    // Tapped with the Pencil, a tool becomes the Pencil's; otherwise the finger's.
+let toolPointer = null;
+let flyout = null;
+
+/** Which input a tool button was tapped with: the Pencil's tap gives it the tool. */
+function takeSlot(fallback = "touch") {
+  const kind = toolPointer;
+  toolPointer = null;
+  if (!kind) return fallback;
+  if (kind === "pen" && !editor.penSeen) { editor.penSeen = true; editor.hooks.penFound(); }
+  return kind === "pen" ? "pen" : "touch";
+}
+
+function buildRail() {
+  const rail = $("tools");
+  for (const id of RAIL) {
+    if (!id) { rail.append(el("div", { class: "rail-sep", role: "presentation" })); continue; }
+    const b = el("button", { type: "button", class: "tool" });
+    if (FAMILIES[id]) {
+      Object.assign(b.dataset, { family: id, more: "" });
+      b.title = FAMILIES[id].name;
+      b.setAttribute("aria-haspopup", "menu");
+      b.setAttribute("aria-expanded", "false");
+    } else if (id === "media") {
+      b.id = "media-tool";
+      b.title = "Insert image or movie";
+      b.innerHTML = icon("M3 3h18v18H3zM21 15l-5-5L5 21M9 8.5h.01");
+      b.append(el("span", {}, "Media"));
+    } else {
+      b.dataset.tool = id;
+      b.title = TOOL[id].title;
+      b.innerHTML = icon(TOOL[id].path);
+      b.append(el("span", {}, TOOL[id].name));
+    }
     b.addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
     b.addEventListener("click", () => {
-      const pen = toolPointer === "pen";
-      toolPointer = null;
-      if (pen && !editor.penSeen) { editor.penSeen = true; editor.hooks.penFound(); }
-      setTool(name, { slot: pen ? "pen" : "touch" });
+      const slot = takeSlot();
+      if (id === "media") { $("media-file").click(); return; }
+      if (FAMILIES[id]) { toggleFlyout(id, b, slot); return; }
+      closeFlyout();
+      setTool(id, { slot });
     });
-    $(`tools-${category[name]}`).appendChild(b);
+    rail.append(b);
   }
-  const media = document.createElement("button");
-  media.className = "btn tool";
-  media.title = "Insert image or movie";
-  media.innerHTML = icon("M4 5h16v14H4zM4 15l5-5 4 4 3-3 4 4M15 9h.01");
-  media.append(document.createTextNode("Media"));
-  media.addEventListener("click", () => $("media-file").click());
-  $("tools-insert").appendChild(media);
   setTool("select");
 }
 
-// Toggles next to the tools: several objects by tapping, and the grid.
-function buildToggles() {
-  const tools = $("tools");
-  const multi = el("button", { class: "btn tool", id: "multi", title: "Select several: taps add to or remove from the selection",
-    "aria-pressed": "false", onclick: () => setAdditive(!editor.additive) });
-  multi.innerHTML = icon("M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z");
-  multi.append("Select several");
-  const group = el("button", { class: "btn tool", id: "group-selection", disabled: true,
-    title: "Select two or more objects, then group them", onclick: () => { setTool("select"); editor.group(); } }, "Group");
-  const actions = el("button", { class: "btn tool", id: "object-actions", "aria-haspopup": "menu", "aria-expanded": "false",
-    onclick: () => {
-      if (!editor.svg) return;
-      if (contextMenu) { closeContextMenu(); return; }
-      editor.endTextEdit(true);
-      const r = actions.getBoundingClientRect();
-      showContextMenu(r.left, r.bottom);
-    } }, "Actions");
-  const grid = el("button", { class: "btn tool", id: "grid", title: "Show or hide the grid",
-    "aria-pressed": String(state.prefs.grid.show), onclick: () => setGrid({ show: !state.prefs.grid.show }) });
-  grid.innerHTML = icon("M4 4v16M10 4v16M16 4v16M4 4h16M4 10h16M4 16h16");
-  grid.append("Grid");
-  const snap = el("button", { class: "btn tool", id: "snap", title: "Snap objects to the grid",
-    "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap }) }, "Snap");
-  $("tools-navigate").append(multi);
-  $("tools-arrange").append(group, actions,
-    el("button", {class:"btn tool", id:"crop-selection", hidden:true, onclick:() => mediaTools?.open()}, "Crop"),
-    el("button", {class:"btn tool", id:"align-tools", onclick:() => revealSection("Align")}, "Align"),
-    el("button", {class:"btn tool", id:"text-tools", onclick:() => revealSection("Text")}, "Format text"));
-  $("tools-view").append(grid, snap);
-  const pencil = el("button", { class: "btn tool", id: "pen-status", title: "Pencil and controller settings",
-    onclick: () => revealSection("Pencil") });
-  $("tools-input").append(pencil);
-  const panels = el("details", {class:"panel-menu"});
-  panels.append(el("summary", {class:"btn tool"}, "Panels"));
-  const choices = el("div", {class:"panel-menu-choices"});
-  for (const [label, fn] of [
-    ["Objects", () => objectPanels?.open("objects")],
-    ["Build steps", () => objectPanels?.open("builds")],
-    ["Crop and mask", () => mediaTools?.open()],
-    ["Speaker notes", () => notes?.open()],
-    ["History and recovery", () => recovery?.open()],
-    ["Commits and changes", () => commits?.open()],
-    ["Speaker view", () => present(true)],
-  ]) choices.append(el("button", {class:"btn", onclick:() => {panels.open=false;fn();}}, label));
-  panels.append(choices); $("tools-view").append(panels);
-  editor.smartSnap = state.prefs.smartSnap !== false;
-  const guides = el("button", {class:"btn tool", id:"smart-guides", "aria-pressed":String(editor.smartSnap),
-    title:"Snap moved objects to edges, centres and equal gaps; hold Alt to bypass",
-    onclick:() => {editor.smartSnap=!editor.smartSnap;state.prefs.smartSnap=editor.smartSnap;savePrefs();guides.setAttribute("aria-pressed",String(editor.smartSnap));}}, "Guides");
-  $("tools-view").append(guides);
+function closeFlyout() {
+  if (!flyout) return;
+  flyout.remove();
+  flyout = null;
+  for (const b of document.querySelectorAll("#tools [data-family]")) b.setAttribute("aria-expanded", "false");
+}
+
+function toggleFlyout(family, anchor, slot) {
+  const same = flyout?.dataset.family === family && flyout.dataset.slot === slot;
+  closeFlyout();
+  if (same) return;
+  const fam = FAMILIES[family];
+  flyout = el("div", { class: "flyout", id: "tool-flyout", role: "menu", "aria-label": fam.name, "data-family": family, "data-slot": slot },
+    el("div", { class: "flyout-title", role: "presentation" }, fam.name + (slot === "pen" ? " · for Pencil" : "")));
+  for (const t of fam.tools) {
+    const b = el("button", { type: "button", role: "menuitemradio", "data-tool": t, title: TOOL[t].title });
+    b.innerHTML = icon(TOOL[t].path);
+    b.append(el("span", { class: "name" }, TOOL[t].name), el("kbd", {}, TOOL[t].key));
+    b.addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
+    b.addEventListener("click", () => {
+      const s = takeSlot(slot);
+      closeFlyout();
+      setTool(t, { slot: s });
+    });
+    flyout.append(b);
+  }
+  flyout.append(el("div", { class: "flyout-hint", role: "presentation" }, "Tap with the Pencil to give it this tool."));
+  document.body.append(flyout);
+  const r = anchor.getBoundingClientRect();
+  flyout.style.left = `${r.right + 2}px`;
+  flyout.style.top = `${Math.max(8, Math.min(r.top, innerHeight - flyout.offsetHeight - 8))}px`;
+  anchor.setAttribute("aria-expanded", "true");
   updateToolButtons();
+}
+
+// The view bar floats over the stage: zoom, grid, snap, guides, selecting several, pan.
+function buildViewBar() {
+  editor.smartSnap = state.prefs.smartSnap !== false;
+  const toggle = (id, label, path, title, onclick, attrs = {}) => {
+    const b = el("button", { type: "button", class: "btn", id, title, "aria-pressed": "false", onclick, ...attrs });
+    b.innerHTML = icon(path);
+    b.append(el("span", { class: "label" }, label));
+    return b;
+  };
+  $("view-toggles").append(
+    toggle("grid", "Grid", "M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18", "Show or hide the grid",
+      () => setGrid({ show: !state.prefs.grid.show })),
+    toggle("snap", "Snap", "M6 15l-4-4 7-7a7.8 7.8 0 0 1 11 11l-7 7-4-4 6.4-6.4a2.1 2.1 0 0 0-3-3z", "Snap objects to the grid",
+      () => setGrid({ snap: !state.prefs.grid.snap })),
+    toggle("smart-guides", "Guides", "M12 2v20M2 12h20", "Snap moved objects to edges, centres and equal gaps; hold Alt to bypass",
+      () => setGuides(!editor.smartSnap)),
+    toggle("multi", "Several", "M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z", "Select several: taps add to or remove from the selection",
+      () => setAdditive(!editor.additive)),
+    toggle("pan-tool", "Pan", TOOL.pan.path, TOOL.pan.title, () => {
+      const slot = takeSlot();
+      setTool(editor.tools[slot] === "pan" ? "select" : "pan", { slot });
+    }, { "data-tool": "pan" }));
+  $("pan-tool").addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
+  paintViewBar();
+}
+
+function paintViewBar() {
+  $("grid").setAttribute("aria-pressed", String(!!state.prefs.grid.show));
+  $("snap").setAttribute("aria-pressed", String(!!state.prefs.grid.snap));
+  $("smart-guides").setAttribute("aria-pressed", String(!!editor.smartSnap));
+  $("multi").setAttribute("aria-pressed", String(!!editor.additive));
 }
 
 /** Pressed: the finger's tool. Pencil badge: the Pencil's own tool. */
 function updateToolButtons() {
   const own = editor.penSeen && !state.prefs.penLinked;
-  for (const b of document.querySelectorAll("#tools [data-tool]")) {
+  for (const b of document.querySelectorAll("#tools [data-family]")) {
+    const fam = FAMILIES[b.dataset.family];
+    const touch = fam.tools.includes(editor.tools.touch), pen = own && fam.tools.includes(editor.tools.pen);
+    if (touch) lastInFamily[b.dataset.family] = editor.tools.touch;
+    const shown = touch ? editor.tools.touch : pen ? editor.tools.pen : lastInFamily[b.dataset.family];
+    b.innerHTML = icon(TOOL[shown].path);
+    b.append(el("span", {}, fam.name));
+    b.setAttribute("aria-label", `${fam.name}: ${TOOL[shown].name}`);
+    b.setAttribute("aria-pressed", String(touch));
+    b.dataset.pen = String(pen);
+  }
+  for (const b of document.querySelectorAll("#tools [data-tool], #tool-flyout [data-tool], #pan-tool")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === editor.tools.touch));
     b.dataset.pen = String(own && b.dataset.tool === editor.tools.pen);
   }
   $("stage").dataset.tool = editor.tool;
-  const status = $("pen-status");
-  if (status) {
-    status.innerHTML = icon("M4 20l1-5L16 4l4 4L9 19zM14 6l4 4");
-    status.append(state.prefs.penLinked ? "Pencil: as finger" : `Pencil: ${TOOL_NAMES[editor.tools.pen] || editor.tools.pen}`);
-    status.closest(".tool-category").hidden = !editor.penSeen && !controller.pads.length;
-  }
+  paintInkBar();
 }
 
-function revealSection(title) {
-  document.body.classList.remove("no-panel");
-  renderPanel();
-  const target = [...$("panel").querySelectorAll("section")].find(s => s.querySelector("h3")?.textContent.startsWith(title));
-  if (target) target.scrollIntoView({block:"start"});
+/** The ink palette floats at the bottom while the finger or the Pencil draws. */
+const INKS = [["Black", "#000000"], ["Red", "#d62728"], ["Blue", "#1f77b4"], ["Grey", "#7c7c7c"], ["White", "#ffffff"]];
+const WEIGHTS = [["Fine", 5, 2], ["Medium", 10, 4], ["Bold", 18, 7]];
+function paintInkBar() {
+  const bar = $("ink-bar");
+  const drawing = editor.tools.touch === "pen" || (editor.penSeen && !state.prefs.penLinked && editor.tools.pen === "pen");
+  bar.hidden = !drawing;
+  if (!drawing) return;
+  const stroke = (state.prefs.stroke || "").toLowerCase(), width = +state.prefs.strokeWidth;
+  const parts = INKS.map(([name, hex]) => {
+    const b = el("button", { type: "button", title: `${name} ink`, "aria-label": `${name} ink`, "aria-pressed": String(stroke === hex),
+      class: stroke === hex ? "on" : "", onclick: () => { state.prefs.stroke = hex; savePrefs(); paintInkBar(); renderPanel(); } });
+    b.append(el("span", { class: "chip", style: `background:${hex}` }));
+    return b;
+  });
+  parts.push(el("span", { class: "vrule" }));
+  for (const [name, w, px] of WEIGHTS) {
+    const b = el("button", { type: "button", title: `${name} line`, "aria-label": `${name} line`, "aria-pressed": String(width === w),
+      class: width === w ? "on" : "", onclick: () => { state.prefs.strokeWidth = w; savePrefs(); paintInkBar(); renderPanel(); } });
+    b.append(el("span", { class: "weight", style: `height:${px}px` }));
+    parts.push(b);
+  }
+  if (editor.penSeen) {
+    const note = el("span", { class: "pencil-note" });
+    note.innerHTML = icon("M4 20l1-5L16 4l4 4L9 19z", "icon small");
+    note.append(state.prefs.penLinked ? "Pencil: as finger" : `Pencil: ${TOOL_NAMES[editor.tools.pen] || editor.tools.pen}`);
+    parts.push(el("span", { class: "vrule" }), note);
+  }
+  bar.replaceChildren(...parts);
 }
 
 function setAdditive(on) {
   if (on) setTool("select");
   editor.additive = on;
-  $("multi").setAttribute("aria-pressed", String(on));
-  if (on) toast("Tap objects to select them, then choose Group or open Actions.", 5000);
+  paintViewBar();
+  if (on) toast("Tap objects to select them, then choose Group or More.", 5000);
+}
+
+function setGuides(on) {
+  editor.smartSnap = on;
+  state.prefs.smartSnap = on;
+  savePrefs();
+  paintViewBar();
+  if (!editor.selection.length) renderPanel();
 }
 
 function setGrid(change) {
   Object.assign(state.prefs.grid, change);
   savePrefs();
   Object.assign(editor.grid, state.prefs.grid);
-  $("snap").setAttribute("aria-pressed", String(state.prefs.grid.snap));
-  $("grid").setAttribute("aria-pressed", String(state.prefs.grid.show));
+  paintViewBar();
   editor.drawOverlay();
   if (!editor.selection.length) renderPanel();
 }
@@ -551,6 +631,7 @@ function setTool(name, { keepEdit = false, slot = editor.input } = {}) {
   mediaTools?.finish?.();
   if (editor.pathDraft) editor.finishPath();
   closeContextMenu();
+  closeFlyout();
   editor.cancelGesture();
   editor.pointers.clear();
   editor.touchStart = null;
@@ -563,11 +644,12 @@ function setTool(name, { keepEdit = false, slot = editor.input } = {}) {
     state.prefs.penTool = editor.tools.pen;
     savePrefs();
   }
-  if (["polygon", "nodes", "bezier"].includes(name)) document.body.classList.remove("no-panel");
   if (slot === "pen" && !state.prefs.penLinked && editor.penSeen) editor.setInput("pen");
+  if (["polygon", "bezier"].includes(name)) showInspector("design");
   updateToolButtons();
   editor.drawOverlay();
   renderPanel();
+  updateSelBar();
 }
 
 function setPenLinked(on) {
@@ -578,6 +660,7 @@ function setPenLinked(on) {
   updateToolButtons();
   editor.drawOverlay();
   renderPanel();
+  renderSettings();
 }
 
 // --- other input devices --------------------------------------------------------------------
@@ -620,21 +703,246 @@ const controller = new Controller({
   save: savePrefs,
   onChange: () => {
     updateToolButtons();
-    if (!editor.selection.length && !editor.textEdit) renderPanel();
+    renderSettings();
   },
 });
 window.addEventListener("gamepadconnected", () => {
-  toast("Controller connected: its buttons switch tools. See Pencil and controller in the panel.", 5000);
+  toast("Controller connected: its buttons switch tools. See Pencil and controller in the deck menu.", 5000);
 });
 
 function updateActions() {
   if (editor.tools) updateToolButtons();
-  const count = editor.selection.length;
-  if ($("crop-selection")) $("crop-selection").hidden = !(count === 1 && editor.selection[0].localName === "image");
-  if ($("align-tools")) $("align-tools").disabled = !count;
-  if ($("text-tools")) $("text-tools").disabled = !editor.selection.some(e => e.localName === "text");
-  if ($("group-selection")) $("group-selection").disabled = count < 2;
-  if ($("object-actions")) $("object-actions").textContent = count ? `Actions (${count})` : "Actions";
+  updateSelBar();
+}
+
+// --- the contextual bar over the selection ------------------------------------------------------
+const ALIGN = [
+  ["left", "Align left edges", "M4 2v20M8 6h12v4H8zM8 14h8v4H8z"],
+  ["centre", "Align centres", "M12 2v20M6 6h12v4H6zM8 14h8v4H8z"],
+  ["right", "Align right edges", "M20 2v20M4 6h12v4H4zM8 14h8v4H8z"],
+  ["top", "Align top edges", "M2 4h20M6 8h4v12H6zM14 8h4v8h-4z"],
+  ["middle", "Align middles", "M2 12h20M6 6h4v12H6zM14 8h4v8h-4z"],
+  ["bottom", "Align bottom edges", "M2 20h20M6 4h4v12H6zM14 8h4v8h-4z"],
+];
+let alignOpen = false;
+
+/** A bar button. With an icon and no text, the title is its name. */
+function barButton(label, title, fn, { on, id, path, chip, cls, disabled } = {}) {
+  const b = el("button", { type: "button", class: "btn" + (cls ? ` ${cls}` : ""), title, id, disabled,
+    "aria-label": label ? null : title, "aria-pressed": on === undefined ? null : String(!!on) });
+  if (path) b.innerHTML = icon(path, "icon small");
+  if (chip) b.append(el("span", { class: "swatch-chip", style: `background:${chip}` }));
+  if (label) b.append(label);
+  b.addEventListener("click", fn);
+  return b;
+}
+const barSep = () => el("span", { class: "vrule", role: "separator" });
+const paint = (c) => (!c || c === "none" ? "transparent" : c);
+
+function selectionKind(sel) {
+  if (sel.length > 1) return `${sel.length} objects`;
+  const first = sel[0];
+  if (first.hasAttribute("data-video")) return "Movie";
+  if (first.getAttribute("data-ink") === "pressure") return "Ink stroke";
+  if (["line", "path", "polyline"].includes(first.localName) && editor.hasArrow(first, "end")) return "Arrow";
+  return { text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", line: "Line", path: "Path", polygon: "Polygon",
+    polyline: "Line", image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName;
+}
+
+function selBarItems() {
+  const sel = editor.selection;
+  if (editor.textEdit) {
+    const base = editor.textEdit.base;
+    return ["Editing text", [
+      barButton("B", "Bold (Ctrl+B)", () => editor.formatText("bold"), { cls: "b" }),
+      barButton("I", "Italic (Ctrl+I)", () => editor.formatText("italic"), { cls: "i" }),
+      barButton("U", "Underline (Ctrl+U)", () => editor.formatText("underline"), { cls: "u" }),
+      barButton("x₂", "Subscript", () => editor.formatText("subscript")),
+      barButton("x²", "Superscript", () => editor.formatText("superscript")),
+      barSep(),
+      barButton("", "Colour of the selected words", () => showInspector("design"), { chip: paint(base.fill) }),
+      barSep(),
+      barButton("Done", "Finish editing (Esc)", () => editor.endTextEdit(true), { on: true }),
+    ]];
+  }
+  if (!sel.length) return null;
+  const first = sel[0];
+  const alignBtn = barButton("Align", "Align", () => { alignOpen = !alignOpen; closeContextMenu(); updateSelBar(); },
+    { on: alignOpen, path: ALIGN[0][2] });
+  const more = barButton("", "More actions", () => {
+    if (contextMenu) { closeContextMenu(); return; }
+    const r = more.getBoundingClientRect();
+    if (alignOpen) { alignOpen = false; updateSelBar(); }
+    showContextMenu(r.left, r.bottom + 4);
+  }, { id: "object-actions", path: "M5 12h.01M12 12h.01M19 12h.01", cls: "dots" });
+  more.setAttribute("aria-haspopup", "menu");
+  more.setAttribute("aria-expanded", String(!!contextMenu));
+  const tail = [barSep(), alignBtn, more];
+
+  // Point editing takes over the bar while a shape shows its points.
+  const model = editor.usesTool("nodes") && sel.length === 1 && editor.nodeModel(first);
+  if (model && !editor.pathDraft) {
+    const chosen = editor.selectedNode();
+    const isPath = model.kind === "path";
+    const closed = model.subs[chosen ? chosen.sub : 0].closed;
+    const type = chosen?.node.type;
+    const done = barButton("Done", "Stop editing points", () => setTool("select"), { on: true });
+    return ["Points", [
+      ...(chosen && isPath ? [
+        barButton("Corner", "Handles move independently", () => editor.setNodeType("c"), { on: type === "c" }),
+        barButton("Smooth", "Handles stay in line", () => editor.setNodeType("s"), { on: type === "s" }),
+        barButton("Symmetric", "Handles stay in line and equally long", () => editor.setNodeType("z"), { on: type === "z" }),
+        barSep()] : []),
+      ...(chosen ? [
+        barButton("Add point", "Add a point halfway to the next one", () => editor.insertNodeAfterSelected()),
+        barButton("Delete point", "Delete the chosen point (Delete)", () => editor.deleteSelectedNode()),
+        barSep()] : [el("span", { class: "note" }, "Tap a point to choose it")]),
+      ...(chosen && isPath ? [
+        barButton("Straight", "Make the segment after this point a straight line", () => editor.setSegment("line")),
+        barButton("Curved", "Give the segment after this point curve handles", () => editor.setSegment("curve")),
+        barSep()] : []),
+      barButton("Subdivide", "Add a point in the middle of every segment, keeping the shape", () => editor.splitCurve()),
+      isPath && model.subs.length === 1 && !closed
+        ? barButton("Continue path", "Continue drawing from the end of this path", () => { setTool("bezier"); editor.extendCurve(); }) : null,
+      barButton(closed ? "Open path" : "Close path", closed ? "Open the outline at the chosen point" : "Join the ends", () => editor.toggleClosed()),
+      barSep(), done,
+    ].filter(Boolean)];
+  }
+
+  const kind = selectionKind(sel);
+  if (sel.length > 1) {
+    return [kind, [barButton("Group", "Group (Ctrl+G)", () => { setTool("select"); editor.group(); }, { id: "group-selection" }), ...tail]];
+  }
+  const cs = getComputedStyle(lookOf(first));
+  if (first.localName === "text") {
+    const glyphs = firstGlyphElement(first);
+    const tcs = getComputedStyle(glyphs);
+    const size = Math.round((parseFloat(tcs.fontSize) || 16) * editor.textScale(first));
+    const setSize = (v) => {
+      v = Math.max(1, v);
+      editor.change(() => editor.applyStyle(first, "font-size", `${+(v / editor.textScale(first)).toFixed(4)}px`));
+      state.prefs.size = v; savePrefs();
+    };
+    const weight = parseInt(tcs.fontWeight, 10) || 400;
+    const underlined = editor.lookAt(glyphs, first).decoration.includes("underline");
+    return [kind, [
+      barButton(tcs.fontFamily.split(",")[0].replace(/['"]/g, "").trim(), "Font", () => showInspector("design")),
+      barSep(),
+      barButton("−", "Smaller text", () => setSize(size - 2)),
+      el("span", { class: "note size", title: "Size in slide pixels" }, String(size)),
+      barButton("+", "Larger text", () => setSize(size + 2)),
+      barSep(),
+      barButton("B", "Bold", () => editor.setStyle("font-weight", weight >= 600 ? "400" : "700", [first]), { on: weight >= 600, cls: "b" }),
+      barButton("I", "Italic", () => editor.setStyle("font-style", tcs.fontStyle === "italic" ? "normal" : "italic", [first]),
+        { on: tcs.fontStyle === "italic", cls: "i" }),
+      barButton("U", "Underline", () => editor.setStyle("text-decoration-line", underlined ? "none" : "underline", [first]),
+        { on: underlined, cls: "u" }),
+      barSep(),
+      barButton("", "Text colour", () => showInspector("design"), { chip: paint(cs.fill) }),
+      ...tail]];
+  }
+  if (first.localName === "image") {
+    const movie = first.hasAttribute("data-video");
+    const flag = (attr) => (first.getAttribute(attr) ?? "true") !== "false";
+    return [kind, [
+      barButton("Crop", movie ? "Crop movie" : "Crop image", () => mediaTools?.open(), { id: "crop-selection",
+        path: "M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" }),
+      ...(movie ? [barSep(),
+        barButton("Autoplay", "Play automatically", () => editor.setAttr("data-autoplay", flag("data-autoplay") ? "false" : "true"),
+          { on: flag("data-autoplay") }),
+        barButton("Loop", "Loop the movie", () => editor.setAttr("data-loop", flag("data-loop") ? "false" : "true"), { on: flag("data-loop") }),
+        barButton(`Sync ${first.getAttribute("data-sync") || "none"}`, "Sync group: set it in the inspector", () => showInspector("design"))] : []),
+      ...tail]];
+  }
+  if (first.localName === "g" || first.localName === "a") {
+    return [kind, [
+      barButton("Edit inside", "Work inside the group (double-tap)", () => { setTool("select"); editor.enterGroup(first); }),
+      barButton("Ungroup", "Ungroup (Ctrl+Shift+G)", () => { setTool("select"); editor.ungroup(); }),
+      ...tail]];
+  }
+  const ink = first.getAttribute("data-ink") === "pressure";
+  const lineLike = ["line", "path", "polyline"].includes(first.localName) && !ink;
+  return [kind, [
+    ink ? barButton("Colour", "Ink colour", () => showInspector("design"), { chip: paint(cs.fill) })
+      : lineLike ? null : barButton("Fill", "Fill colour", () => showInspector("design"), { chip: paint(cs.fill) }),
+    ink ? null : barButton("Stroke", "Line colour", () => showInspector("design"), { chip: paint(cs.stroke) }),
+    editor.editableNodes(first) ? barButton("Edit points", "Edit anchors and control handles (N)", () => setTool("nodes"),
+      { path: TOOL.nodes.path }) : null,
+    ...tail].filter(Boolean)];
+}
+
+/** Draw the bar above the selection (below it near the top), right-aligned
+ *  for objects on the right half, so it never covers what it edits. */
+function updateSelBar() {
+  const bar = $("sel-bar");
+  const items = editor.svg ? selBarItems() : null;
+  if (!items) { bar.hidden = true; alignOpen = false; return; }
+  const [kind, buttons] = items;
+  $("sel-row").replaceChildren(el("span", { class: "sel-kind" }, kind), ...buttons);
+  const alignRow = $("align-row");
+  const sel = editor.selection;
+  alignRow.hidden = !(alignOpen && sel.length && !editor.textEdit);
+  if (!alignRow.hidden) {
+    const toSlide = sel.length === 1 || editor.alignToSlide;
+    alignRow.replaceChildren(
+      ...ALIGN.map(([how, title, path]) => barButton("", title, () => editor.align(how, toSlide), { path })),
+      ...(sel.length > 2 ? [barSep(),
+        barButton("Across", "Space evenly left to right", () => editor.distribute("x")),
+        barButton("Down", "Space evenly top to bottom", () => editor.distribute("y"))] : []),
+      barSep(),
+      sel.length > 1
+        ? barButton(toSlide ? "to slide" : "to selection", "Align to the slide or to the selection's bounds",
+          () => { editor.alignToSlide = !editor.alignToSlide; updateSelBar(); })
+        : el("span", { class: "note" }, "to slide"));
+  }
+  bar.hidden = false;
+  placeSelBar();
+}
+
+function placeSelBar() {
+  const bar = $("sel-bar");
+  if (bar.hidden) return;
+  const host = $("stage-wrap").getBoundingClientRect();
+  let box = null;
+  if (editor.textEdit?.box?.isConnected) box = editor.textEdit.box.getBoundingClientRect();
+  else if (editor.selection.length) {
+    let b = editor.selectionBox();
+    // Points and curve handles reach outside the outline's box: keep clear of them too.
+    if (b && editor.showingNodes()) {
+      const el = editor.selection[0], model = editor.nodeModel(el);
+      if (model) {
+        const pts = editor.nodeTargets(el, model).targets.map((t) => t.p);
+        const x0 = Math.min(b.x, ...pts.map((q) => q.x)), y0 = Math.min(b.y, ...pts.map((q) => q.y));
+        const x1 = Math.max(b.x + b.width, ...pts.map((q) => q.x)), y1 = Math.max(b.y + b.height, ...pts.map((q) => q.y));
+        b = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+      }
+    }
+    const page = editor.page.getBoundingClientRect();
+    if (b) box = { left: page.left + b.x * editor.zoom, top: page.top + b.y * editor.zoom,
+      right: page.left + (b.x + b.width) * editor.zoom, bottom: page.top + (b.y + b.height) * editor.zoom };
+  }
+  if (!box) { bar.style.left = "12px"; bar.style.right = ""; bar.style.top = "64px"; return; }
+  const h = bar.offsetHeight, w = bar.offsetWidth, margin = 12;
+  // Above the box, clear of the rotate handle (40 px up); below, clear of the edge handles.
+  const above = editor.tool === "select" && !editor.textEdit && !editor.showingNodes() ? 60 : 20;
+  let top = box.top - host.top - h - above;
+  if (top < 60) top = Math.min(box.bottom - host.top + 20, host.height - h - margin);
+  const right = (box.left + box.right) / 2 - host.left > host.width / 2;
+  bar.classList.toggle("right", right);
+  let left = right ? box.right - host.left - w : box.left - host.left;
+  left = Math.max(margin, Math.min(left, host.width - w - margin));
+  bar.style.left = `${left}px`;
+  bar.style.top = `${Math.max(60, top)}px`;
+}
+
+// Hide the bar while a finger or the Pencil is moving something.
+$("stage").addEventListener("pointerdown", () => document.body.classList.add("gesturing"));
+for (const type of ["pointerup", "pointercancel"]) {
+  window.addEventListener(type, () => {
+    if (!document.body.classList.contains("gesturing")) return;
+    document.body.classList.remove("gesturing");
+    requestAnimationFrame(updateSelBar);
+  });
 }
 
 // The same commands are available to mouse, touch and keyboard users.
@@ -650,31 +958,41 @@ function closeContextMenu(restoreFocus = false) {
 
 function showContextMenu(x, y) {
   closeContextMenu();
+  closeFlyout();
   menuFocus = document.activeElement;
   const selection = editor.selection;
   const count = selection.length;
   const menu = el("div", { class: "context-menu", id: "context-menu", role: "menu", "aria-label": "Object actions" });
   contextMenu = menu;
   menu.append(el("div", { class: "menu-title", role: "presentation" }, count ? `${count} object${count === 1 ? "" : "s"} selected` : "Slide actions"));
-  const action = (label, fn, enabled = true) => {
-    menu.append(el("button", { type: "button", role: "menuitem", disabled: !enabled,
-      onclick: () => { closeContextMenu(); fn(); } }, label));
+  const action = (label, fn, { enabled = true, key = "", danger = false } = {}) => {
+    menu.append(el("button", { type: "button", role: "menuitem", disabled: !enabled, class: danger ? "danger" : null,
+      onclick: () => { closeContextMenu(); fn(); } }, label, key ? el("span", { class: "key", "aria-hidden": "true" }, key) : null));
   };
-  action(editor.additive ? "Finish selecting several" : "Select several", () => setAdditive(!editor.additive));
-  action("Select all", () => { setTool("select"); editor.selectAll(); });
-  action("Group", () => { setTool("select"); editor.group(); }, count > 1);
-  if (selection.some((item) => item.localName === "g")) action("Ungroup", () => { setTool("select"); editor.ungroup(); });
+  const sep = () => menu.append(el("div", { class: "menu-sep", role: "separator" }));
+  if (count) {
+    action("Copy", () => copySelection(false), { key: "⌘C" });
+    action("Cut", () => copySelection(true), { key: "⌘X" });
+  }
+  if (clipboardData()) action("Paste", pasteClipboard, { key: "⌘V" });
+  if (count) action("Duplicate", () => editor.duplicate(), { key: "⌘D" });
+  sep();
+  action("Group", () => { setTool("select"); editor.group(); }, { enabled: count > 1, key: "⌘G" });
+  if (selection.some((item) => item.localName === "g")) action("Ungroup", () => { setTool("select"); editor.ungroup(); }, { key: "⇧⌘G" });
   if (count === 1 && selection[0].localName === "g") action("Edit group", () => { setTool("select"); editor.enterGroup(selection[0]); });
   if (editor.context !== editor.svg) action("Leave group", () => editor.exitGroup());
+  action(editor.additive ? "Finish selecting several" : "Select several", () => setAdditive(!editor.additive));
+  action("Select all", () => { setTool("select"); editor.selectAll(); }, { key: "⌘A" });
   if (count) {
-    action("Copy", () => copySelection(false));
-    action("Cut", () => copySelection(true));
-    action("Duplicate", () => editor.duplicate());
+    sep();
     action("Bring to front", () => editor.order("front"));
+    action("Bring forward", () => editor.order("forward"));
+    action("Send backward", () => editor.order("backward"));
     action("Send to back", () => editor.order("back"));
-    action("Delete", () => editor.deleteSelection());
+    sep();
+    action("Lock", () => editor.lock());
+    action("Delete", () => editor.deleteSelection(), { key: "⌫", danger: true });
   }
-  if (clipboardData()) action("Paste", pasteClipboard);
   if (count < 2) menu.append(el("p", { class: "menu-hint", role: "presentation" }, "To group: choose Select several, tap each object, then Group."));
   menu.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); closeContextMenu(true); }
@@ -692,13 +1010,88 @@ function showContextMenu(x, y) {
   const rect = menu.getBoundingClientRect();
   menu.style.left = `${Math.max(8, Math.min(x, innerWidth - rect.width - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(y, innerHeight - rect.height - 8))}px`;
-  $("object-actions").setAttribute("aria-expanded", "true");
+  $("object-actions")?.setAttribute("aria-expanded", "true");
   menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
 }
+
+// --- menus: slide actions, the document menu ------------------------------------------------------
+function toggleMenu(menu, button, open = menu.hidden) {
+  menu.hidden = !open;
+  button.setAttribute("aria-expanded", String(open));
+  if (open) menu.querySelector("button")?.focus({ preventScroll: true });
+}
+function closeMenus() {
+  toggleMenu($("slide-menu"), $("slide-menu-btn"), false);
+  toggleMenu($("doc-menu"), $("doc-menu-btn"), false);
+}
+
+function buildDocMenu() {
+  const menu = $("doc-menu");
+  const item = (id, path, name, sub, fn) => {
+    const b = el("button", { type: "button", role: "menuitem", id, onclick: () => { closeMenus(); fn(); } });
+    b.innerHTML = icon(path);
+    b.append(el("span", { class: "item-text" }, el("span", {}, name), sub ? el("span", { class: "item-sub" }, sub) : null));
+    return b;
+  };
+  const sep = () => el("div", { class: "menu-sep", role: "separator" });
+  const pencil = state.prefs.penLinked ? "Pencil acts as a finger" : `Pencil: ${TOOL_NAMES[editor.tools.pen] || editor.tools.pen}`;
+  menu.replaceChildren(
+    item("commit-deck", "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8M2 12h6M16 12h6", "Commit snapshot…", "An immutable copy of the whole deck", () => commits?.open()),
+    item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
+    sep(),
+    item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", exportDeck),
+    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Notes, next slide, timer", () => present(true)),
+    sep(),
+    item(null, "M4 6h16M4 12h16M4 18h16", "Deck settings", `Fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
+    item("pen-status", "M4 20l1-5L16 4l4 4L9 19z", "Pencil and controller",
+      pencil + (controller.pads.length ? " · controller connected" : ""), () => openSettings("pencil")),
+    sep(),
+    item(null, "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z", "All decks", "", () => { location.href = "/"; }));
+}
+
 document.addEventListener("pointerdown", (e) => {
   if (contextMenu && !contextMenu.contains(e.target) && !e.target.closest("#object-actions")) closeContextMenu();
+  if (flyout && !flyout.contains(e.target) && !e.target.closest("#tools [data-family]")) closeFlyout();
+  if (!e.target.closest("#doc-menu, #doc-menu-btn, #slide-menu, #slide-menu-btn")) closeMenus();
 }, true);
-window.addEventListener("resize", () => closeContextMenu());
+window.addEventListener("resize", () => { closeContextMenu(); closeFlyout(); placeSelBar(); });
+
+// --- inspector tabs and settings dialogs --------------------------------------------------------
+let inspectorTab = "design";
+function showInspector(tab = inspectorTab) {
+  document.body.classList.remove("no-panel");
+  $("toggle-panel").setAttribute("aria-pressed", "true");
+  inspectorTab = tab;
+  for (const b of document.querySelectorAll("#inspector-tabs [data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
+  for (const body of document.querySelectorAll("#inspector [data-tab-body]")) body.hidden = !body.dataset.tabBody.split(" ").includes(tab);
+  if (tab === "objects" || tab === "builds") objectPanels?.open(tab);
+  else if (tab === "notes") notes?.open(false);
+  else renderPanel();
+}
+
+let settingsKind = null;
+function openSettings(kind) {
+  settingsKind = kind;
+  renderSettings();
+  const dialog = $("settings-dialog");
+  if (!dialog.open) dialog.showModal();
+}
+function renderSettings() {
+  const dialog = $("settings-dialog");
+  if (!settingsKind || !state.deck) return;
+  $("settings-title").textContent = settingsKind === "pencil" ? "Pencil and controller" : "Deck settings";
+  $("settings-body").replaceChildren(...(settingsKind === "pencil" ? [pencilSection()] : [
+    section("Slides", el("p", { class: "hint" }, `${state.deck.slides.length} slides, ${(state.deck.size || [1920, 1080]).join(" × ")} pixels.`)),
+    section("Fonts", el("p", { class: "hint" }, `${families().length} families in the library.`),
+      buttonRow([["Upload font…", "Add an .otf or .ttf file to the font library", () => $("font-file").click()]])),
+  ]));
+}
+
+async function exportDeck() {
+  try { await flush(); } catch (error) { return; }
+  toast("Preparing the export…");
+  location.href = `/api/decks/${DECK}/export.zip`;
+}
 
 async function uploadMedia(files) {
   const target = state.current;
@@ -746,6 +1139,10 @@ function el(tag, attrs = {}, ...children) {
   }
   for (const c of children.flat()) if (c != null) e.append(c);
   return e;
+}
+
+function heading(title, sub) {
+  return el("div", { class: "heading" }, el("strong", {}, title), sub ? el("small", {}, sub) : null);
 }
 
 function section(title, ...content) {
@@ -802,45 +1199,40 @@ function renderPanel() {
   if (editor.usesTool("nodes") && !editor.pathDraft) parts.push(pointsSection(sel));
   if (editor.textEdit) {
     const base = editor.textEdit.base;
-    parts.push(section("Editing text",
-      buttonRow([["Bold", "Bold (Ctrl+B)", () => editor.formatText("bold")],
-                 ["Italic", "Italic (Ctrl+I)", () => editor.formatText("italic")],
-                 ["Underline", "Underline (Ctrl+U)", () => editor.formatText("underline")],
-                 ["x₂", "Subscript", () => editor.formatText("subscript")],
-                 ["x²", "Superscript", () => editor.formatText("superscript")]]),
-      row("Colour", colorControl(base.fill, (c) => editor.formatText("foreColor", c), false)),
+    parts.unshift(heading("Editing text", "Bold, italic and Done are in the bar above the text"));
+    parts.push(section("Colour",
+      colorControl(base.fill, (c) => editor.formatText("foreColor", c), false),
       el("p", { class: "hint" }, "Select words to format them; with nothing selected, the whole text changes. " +
-        "Font, size and alignment are set after editing."),
-      buttonRow([["Done", "Finish editing (Esc)", () => editor.endTextEdit(true)]])));
+        "Font, size and alignment are set after editing.")));
     panel.replaceChildren(...parts);
     return;
   }
   if (!sel.length) {
     const svg = editor.svg;
     const bg = svg && (svg.querySelector('[data-label="background"]') || svg.querySelector("[data-locked='true']"));
-    parts.push(section(`Slide ${index() + 1} of ${state.deck.slides.length}`,
-      bg ? row("Background", colorControl(getComputedStyle(bg).fill, (c) => editor.setStyle("fill", c, [bg]), false)) : null,
-      buttonRow([["Select all", "Select every object (Ctrl+A)", () => editor.selectAll()],
-                 ["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()],
-                 clipboardData() ? ["Paste", "Paste copied objects (Ctrl+V)", pasteClipboard] : null].filter(Boolean))));
+    parts.unshift(heading(`Slide ${index() + 1}`, "Nothing selected"));
+    if (bg) parts.push(section("Background", colorControl(getComputedStyle(bg).fill, (c) => editor.setStyle("fill", c, [bg]), false)));
     const grid = state.prefs.grid;
     const check = (on, text, fn) => el("label", { class: "check" },
       el("input", { type: "checkbox", checked: on, onchange: (e) => fn(e.target.checked) }), text);
-    parts.push(section("Grid",
+    parts.push(section("Grid and guides",
+      row("Spacing", numberControl(grid.size, { min: 1, max: 960, step: 1, suffix: "px" }, (v) => setGrid({ size: Math.max(1, v) }))),
+      buttonRow([10, 20, 40, 60, 120].map((s) => [String(s), `${s} px grid`, () => setGrid({ size: s }), grid.size === s])),
       check(grid.show, "Show grid", (on) => setGrid({ show: on })),
       check(grid.snap, "Snap to grid", (on) => setGrid({ snap: on })),
-      row("Spacing", numberControl(grid.size, { min: 1, max: 960, step: 1, suffix: "px" }, (v) => setGrid({ size: Math.max(1, v) }))),
-      buttonRow([10, 20, 40, 60, 120].map((s) => [String(s), `${s} px grid`, () => setGrid({ size: s }), grid.size === s]))));
+      check(editor.smartSnap, "Guides to other objects", (on) => setGuides(on))));
+    parts.push(section("Slide",
+      buttonRow([["Select all", "Select every object (Ctrl+A)", () => editor.selectAll()],
+                 ["Unlock all", "Make locked objects selectable again", () => editor.unlockAll()],
+                 clipboardData() ? ["Paste", "Paste copied objects (Ctrl+V)", pasteClipboard] : null,
+                 ["Duplicate slide", "Add a copy of this slide after it", duplicateSlide]].filter(Boolean))));
     parts.push(section("New shapes",
       row("Fill", colorControl(state.prefs.fill, (c) => { state.prefs.fill = c; savePrefs(); renderPanel(); }, true)),
-      row("Line", colorControl(state.prefs.stroke, (c) => { state.prefs.stroke = c; savePrefs(); renderPanel(); }, true)),
-      row("Width", numberControl(state.prefs.strokeWidth, { min: 0.5, max: 100, step: 0.5 }, (v) => { state.prefs.strokeWidth = v; savePrefs(); }))));
+      row("Line", colorControl(state.prefs.stroke, (c) => { state.prefs.stroke = c; savePrefs(); renderPanel(); paintInkBar(); }, true)),
+      row("Width", numberControl(state.prefs.strokeWidth, { min: 0.5, max: 100, step: 0.5 }, (v) => { state.prefs.strokeWidth = v; savePrefs(); paintInkBar(); }))));
     parts.push(section("New text",
       row("Colour", colorControl(state.prefs.textFill, (c) => { state.prefs.textFill = c; savePrefs(); renderPanel(); }, false)),
       row("Size", numberControl(state.prefs.size, { min: 4, max: 400 }, (v) => { state.prefs.size = v; savePrefs(); }))));
-    parts.push(pencilSection());
-    parts.push(section("Fonts", el("p", { class: "hint" }, `${families().length} families in the library.`),
-      buttonRow([["Upload font…", "Add an .otf or .ttf file to the font library", () => $("font-file").click()]])));
     parts.push(el("p", { class: "hint" }, "Double-tap text to edit it, or a group to work inside it. Two fingers pan and zoom."));
     panel.replaceChildren(...parts.filter(Boolean));
     return;
@@ -856,6 +1248,8 @@ function renderPanel() {
   const label = isMovie ? "Movie" : sel.length > 1 ? `${sel.length} objects` : ({
     text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", line: "Line", path: "Path",
     image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName);
+  parts.unshift(heading(label, sel.length > 1 ? "Group, align and arrange are in the bar" :
+    first.localName === "text" ? "Double-tap to edit" : isMovie ? (first.getAttribute("data-video") || "").split("/").pop() : null));
   if (sel.length === 1 && first.localName === "image") {
     parts.push(section("Crop",
       buttonRow([[isMovie ? "Crop movie" : "Crop image", "Drag the crop handles on the slide", () => mediaTools?.open()]]),
@@ -869,7 +1263,7 @@ function renderPanel() {
       row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else if (!kinds.has("image") || kinds.size > 1) {
-    parts.push(section(label,
+    parts.push(section("Style",
       !texts.length || kinds.size > 1 ? row("Fill", colorControl(cs.fill, (c) => { editor.setStyle("fill", c); if (c !== "none") { state.prefs.fill = c; savePrefs(); } }, true)) : null,
       row(texts.length && kinds.size === 1 ? "Colour" : "Line", texts.length && kinds.size === 1
         ? colorControl(cs.fill, (c) => { editor.setStyle("fill", c); state.prefs.textFill = c; savePrefs(); }, false)
@@ -879,7 +1273,7 @@ function renderPanel() {
       row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else {
-    parts.push(section(label, row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100),
+    parts.push(section("Style", row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100),
       { min: 0, max: 100, step: 5, suffix: "%" }, (v) => editor.setStyle("opacity", String(v / 100))))));
   }
 
@@ -905,7 +1299,7 @@ function renderPanel() {
     const size = Math.round((parseFloat(tcs.fontSize) || 16) * scale * 10) / 10;
     const anchor = tcs.textAnchor;
     const underlined = editor.lookAt(glyphs, texts[0]).decoration.includes("underline");
-    parts.push(section("Text",
+    parts.push(section("Font",
       buttonRow([
         ["Bold", "Toggle bold", () => editor.setStyle("font-weight", weight >= 600 ? "400" : "700", texts), weight >= 600],
         ["Italic", "Toggle italic", () => editor.setStyle("font-style", tcs.fontStyle === "italic" ? "normal" : "italic", texts), tcs.fontStyle === "italic"],
@@ -922,9 +1316,6 @@ function renderPanel() {
       buttonRow([["Edit text", "Or double-tap the text", () => editor.editText(texts[0], false)]])));
   }
 
-  if (sel.length === 1 && editor.editableNodes(first) && !editor.usesTool("nodes")) {
-    parts.push(section("Points", buttonRow([["Edit points", "Edit anchors and control handles (N)", () => setTool("nodes")]])));
-  }
   if (lines.length) {
     parts.push(section("Arrowheads", buttonRow([
       ["Start", "Arrowhead at the start", () => editor.setArrow("start", !editor.hasArrow(lines[0], "start")), editor.hasArrow(lines[0], "start")],
@@ -945,63 +1336,29 @@ function renderPanel() {
       el("p", { class: "hint" }, "Movies with the same sync group continue across slides without restarting.")));
   }
 
-  const alignTarget = el("select", {"aria-label":"Alignment reference"},
-    el("option", {value:"selection", selected:!editor.alignToSlide}, "Selection bounds"),
-    el("option", {value:"slide", selected:!!editor.alignToSlide}, "Slide"));
-  alignTarget.onchange = () => {editor.alignToSlide = alignTarget.value === "slide";};
-  parts.push(section(sel.length > 1 ? "Align" : "Align on slide",
-    sel.length > 1 ? row("Relative to", alignTarget) : null,
-    buttonRow([["Left", "Align left edges", () => editor.align("left", editor.alignToSlide)], ["Centre", "Align centres", () => editor.align("centre", editor.alignToSlide)],
-               ["Right", "Align right edges", () => editor.align("right", editor.alignToSlide)]]),
-    buttonRow([["Top", "Align top edges", () => editor.align("top", editor.alignToSlide)], ["Middle", "Align middles", () => editor.align("middle", editor.alignToSlide)],
-               ["Bottom", "Align bottom edges", () => editor.align("bottom", editor.alignToSlide)]]),
-    sel.length > 2 ? row("Spread", buttonRow([["Across", "Space evenly left to right", () => editor.distribute("x")],
-                                              ["Down", "Space evenly top to bottom", () => editor.distribute("y")]])) : null,
-    sel.length === 1 ? el("p", { class: "hint" }, "To align objects with each other, select several: turn on Select several in the toolbar, or drag around them.") : null));
-
-  parts.push(section("Arrange",
-    buttonRow([["To front", "Bring to front", () => editor.order("front")], ["Forward", "Bring forward", () => editor.order("forward")],
-               ["Backward", "Send backward", () => editor.order("backward")], ["To back", "Send to back", () => editor.order("back")]]),
-    buttonRow([["Copy", "Ctrl+C — paste on any slide", () => copySelection(false)],
-               ["Cut", "Ctrl+X", () => copySelection(true)],
-               clipboardData() ? ["Paste", "Ctrl+V", pasteClipboard] : null].filter(Boolean)),
-    buttonRow([["Duplicate", "Ctrl+D", () => editor.duplicate()],
-               sel.length > 1 ? ["Group", "Ctrl+G", () => editor.group()] : null,
-               kinds.has("g") ? ["Ungroup", "Ctrl+Shift+G", () => editor.ungroup()] : null,
-               ["Lock", "Make unselectable (e.g. backgrounds)", () => editor.lock()],
-               ["Delete", "Delete", () => editor.deleteSelection()]].filter(Boolean))));
+  const steps = new Set(sel.map((e) => Number.parseInt(e.getAttribute("data-step") || "0", 10) || 0));
+  const step = steps.size === 1 ? [...steps][0] : 0;
+  const setStep = (n) => editor.setAttr("data-step", n > 0 ? String(n) : null);
+  parts.push(section("Build step",
+    el("div", { class: "num" },
+      el("button", { class: "btn small", title: "Earlier build step", onclick: () => setStep(Math.max(0, step - 1)) }, "−"),
+      el("strong", { class: "step-value" }, steps.size === 1 ? (step ? `Step ${step}` : "On entry") : "Mixed"),
+      el("button", { class: "btn small", title: "Later build step", onclick: () => setStep(step + 1) }, "+")),
+    el("p", { class: "hint" }, "Objects appear on this click while presenting. The Builds tab shows the whole order.")));
   panel.replaceChildren(...parts.filter(Boolean));
 }
 
-/** Point editing: the chosen point's type, adding and removing points. */
+/** Point editing: the buttons are in the bar; the inspector explains. */
 function pointsSection(sel) {
   const target = sel.length === 1 && editor.nodeModel(sel[0]);
   if (!target) return section("Edit points", el("p", { class: "hint" }, "Select a path, curve or polygon to edit its points."));
   const chosen = editor.selectedNode();
-  const isPath = target.kind === "path";
   const total = target.subs.reduce((n, s) => n + s.nodes.length, 0);
-  const closed = target.subs[chosen ? chosen.sub : 0].closed;
-  const type = chosen?.node.type;
   return section("Edit points",
-    el("p", { class: "hint" }, "Tap a point to choose it, then drag it or its handles. Double-tap the outline to add a point there."),
     chosen ? row("Point", el("span", {}, `${chosen.i + 1} of ${target.subs[chosen.sub].nodes.length}` +
-      (target.subs.length > 1 ? ` (part ${chosen.sub + 1} of ${target.subs.length})` : ""))) : null,
-    chosen && isPath ? row("Type", buttonRow([
-      ["Corner", "Handles move independently", () => editor.setNodeType("c"), type === "c"],
-      ["Smooth", "Handles stay in line", () => editor.setNodeType("s"), type === "s"],
-      ["Symmetric", "Handles stay in line and equally long", () => editor.setNodeType("z"), type === "z"]])) : null,
-    chosen ? buttonRow([
-      ["Add point", "Add a point halfway to the next one", () => editor.insertNodeAfterSelected()],
-      ["Delete point", "Delete the chosen point (Delete)", () => editor.deleteSelectedNode()]]) : null,
-    chosen && isPath ? row("Segment", buttonRow([
-      ["Straight", "Make the segment after this point a straight line", () => editor.setSegment("line")],
-      ["Curved", "Give the segment after this point curve handles", () => editor.setSegment("curve")]])) : null,
-    buttonRow([
-      ["Subdivide", "Add a point in the middle of every segment, keeping the shape", () => editor.splitCurve()],
-      isPath && target.subs.length === 1 && !closed ? ["Continue path", "Continue drawing from the end of this path", () => { setTool("bezier"); editor.extendCurve(); }] : null,
-      [closed ? "Open path" : "Close path", closed ? "Open the outline at the chosen point" : "Join the ends", () => editor.toggleClosed()],
-    ].filter(Boolean)),
-    !chosen ? el("p", { class: "hint" }, `${total} points.`) : null);
+      (target.subs.length > 1 ? ` (part ${chosen.sub + 1} of ${target.subs.length})` : ""))) : el("p", { class: "hint" }, `${total} points.`),
+    el("p", { class: "hint" }, "Tap a point to choose it, then drag it or its handles. Double-tap the outline to add a point there. " +
+      "Point type, adding, deleting and opening are in the bar above the shape."));
 }
 
 /** Pencil tool and the bindings of other input devices. */
@@ -1018,7 +1375,7 @@ function pencilSection() {
     learn.classList.add("on");
     controller.learn(actionSelect.value, (input) => {
       if (input) toast(`${inputLabel(input)} → ${actionLabel(actionSelect.value)}`);
-      renderPanel();
+      renderSettings();
     });
   } }, "Assign a key or button");
   return section("Pencil and controller",
@@ -1040,7 +1397,7 @@ function pencilSection() {
     buttonRow([["Default controller layout", "Restore the default controller buttons", () => {
       for (const k of Object.keys(state.prefs.bindings)) if (k.startsWith("pad:")) delete state.prefs.bindings[k];
       Object.assign(state.prefs.bindings, DEFAULT_BINDINGS);
-      savePrefs(); renderPanel();
+      savePrefs(); renderSettings();
     }]]));
 }
 
@@ -1096,9 +1453,11 @@ function installFaces(faces) {
 // --- keyboard ------------------------------------------------------------------------------------
 document.addEventListener("keyup", (e) => { controller.keyup(e); });
 document.addEventListener("keydown", (e) => {
+  // Learning a binding comes first: it happens in the Pencil and controller
+  // dialog, and Escape there cancels the learning, not the dialog.
+  if (controller.learning) { if (e.key === "Escape") e.preventDefault(); controller.keydown(e); return; }
   const modal = document.querySelector("dialog[open]");
   if (modal && !(modal.classList.contains("media-tools") && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) return;
-  if (controller.learning) { controller.keydown(e); return; }
   if (e.target.closest("input, textarea, select") || editor.textEdit) return;
   if (controller.keydown(e)) return;
   const mod = e.ctrlKey || e.metaKey;
@@ -1131,7 +1490,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (k === "escape") {
-    if (editor.nodeSel && editor.selectedNode()) { editor.nodeSel = null; editor.drawOverlay(); renderPanel(); return; }
+    if (editor.nodeSel && editor.selectedNode()) { editor.nodeSel = null; editor.drawOverlay(); renderPanel(); updateSelBar(); return; }
     if (!editor.exitGroup()) editor.select([]);
     setTool("select");
     return;
@@ -1203,31 +1562,44 @@ async function present(speaker = false) {
 }
 
 function wire() {
-  $("commit-deck").onclick = () => commits?.open();
   $("undo").onclick = undo;
   $("redo").onclick = redo;
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
   $("zoom-out").onclick = () => editor.zoomBy(0.8);
   $("zoom-fit").onclick = () => editor.fit();
   $("present").onclick = () => present();
-  $("export").onclick = async (e) => {
-    e.preventDefault();
-    try { await flush(); } catch (error) { return; }
-    toast("Preparing the export…");
-    location.href = `/api/decks/${DECK}/export.zip`;
+  const side = (cls, button) => {
+    document.body.classList.toggle(cls);
+    $(button).setAttribute("aria-pressed", String(!document.body.classList.contains(cls)));
   };
-  $("toggle-strip").onclick = () => document.body.classList.toggle("no-strip");
-  $("toggle-panel").onclick = () => document.body.classList.toggle("no-panel");
+  $("toggle-strip").onclick = () => side("no-strip", "toggle-strip");
+  $("toggle-panel").onclick = () => {
+    if (document.body.classList.contains("no-panel")) showInspector();
+    else side("no-panel", "toggle-panel");
+  };
+  for (const b of document.querySelectorAll("#inspector-tabs [data-tab]")) b.onclick = () => showInspector(b.dataset.tab);
+  $("doc-menu-btn").onclick = () => { buildDocMenu(); toggleMenu($("doc-menu"), $("doc-menu-btn")); };
+  $("slide-menu-btn").onclick = () => toggleMenu($("slide-menu"), $("slide-menu-btn"));
+  $("slide-menu").addEventListener("click", (e) => { if (e.target.closest("button")) closeMenus(); });
+  for (const menu of ["doc-menu", "slide-menu"]) {
+    $(menu).addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { closeMenus(); $(`${menu}-btn`).focus(); }
+    });
+  }
   $("slide-add").onclick = () => addSlide(blankSlide());
-  $("slide-dup").onclick = async () => {
-    await flush();
-    await addSlide(state.slides.get(state.current).text, state.deck.slides[index()].notes);
-  };
+  $("slide-dup").onclick = duplicateSlide;
   $("slide-up").onclick = () => moveSlide(-1);
   $("slide-down").onclick = () => moveSlide(1);
   $("slide-del").onclick = deleteSlide;
+  $("settings-close").onclick = () => $("settings-dialog").close();
+  $("settings-dialog").addEventListener("close", () => { settingsKind = null; });
+  $("settings-dialog").addEventListener("cancel", (e) => { if (controller.learning) e.preventDefault(); });
   $("exit-group").onclick = () => editor.exitGroup();
-  $("panel").addEventListener("pointerdown", () => { if (editor.textEdit) editor.textEdit.holding = true; }, true);
+  $("inspector").addEventListener("pointerdown", () => { if (editor.textEdit) editor.textEdit.holding = true; }, true);
+  $("sel-bar").addEventListener("pointerdown", (e) => {
+    // Formatting while editing text must not end the edit.
+    if (editor.textEdit) { editor.textEdit.holding = true; e.preventDefault(); }
+  }, true);
   $("media-file").onchange = (e) => { uploadMedia([...e.target.files]); e.target.value = ""; };
   $("font-file").onchange = async (e) => {
     const file = e.target.files[0];
@@ -1239,22 +1611,52 @@ function wire() {
       installFaces(state.faces);
       toast(`Added ${face.name} to the font library.`);
       renderPanel();
+      renderSettings();
     } catch (err) { toast(`Could not add the font: ${err.message}`, 8000); }
   };
-  if (innerWidth < 900) document.body.classList.add("no-strip", "no-panel");
+  // Narrow windows (a phone, iPad Split View) give the stage the room: the
+  // strip and inspector close, and open again from the top bar.
+  const narrow = matchMedia("(max-width: 899px)");
+  const collapse = () => {
+    if (!narrow.matches) return;
+    document.body.classList.add("no-strip", "no-panel");
+    $("toggle-strip").setAttribute("aria-pressed", "false");
+    $("toggle-panel").setAttribute("aria-pressed", "false");
+  };
+  narrow.addEventListener("change", collapse);
+  collapse();
+}
+
+async function duplicateSlide() {
+  await flush();
+  await addSlide(state.slides.get(state.current).text, state.deck.slides[index()].notes);
 }
 
 async function main() {
   wire();
-  notes = installNotes({state,putDeck,toast});
-  objectPanels = installObjects({editor,state,toast,settle:settleCurrentSlide});
+  notes = installNotes({state,putDeck,toast,mount:$("notes-mount")});
+  const objects = installObjects({editor,state,toast,settle:settleCurrentSlide,mount:$("objects-mount")});
+  // Objects, builds and notes opened from anywhere show in the inspector's tabs.
+  objectPanels = { render: objects.render, open(mode = "objects") {
+    const tab = mode === "builds" ? "builds" : "objects";
+    if (inspectorTab !== tab || document.body.classList.contains("no-panel")) showInspector(tab);
+    else objects.open(tab);
+  } };
+  const openNotes = notes.open;
+  notes.open = (focus = true) => {
+    if (inspectorTab !== "notes" || document.body.classList.contains("no-panel")) {
+      inspectorTab = "notes";
+      showInspector("notes");
+    }
+    openNotes(focus);
+  };
   mediaTools = installMediaTools({editor,toast,settle:settleCurrentSlide});
   recovery = installRecovery({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus,putDeck});
   commits = installCommits({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus});
   editor.tools.pen = state.prefs.penLinked ? "select" : state.prefs.penTool || "pen";
   editor.penSeen = !!state.prefs.penSeen;
-  buildToolbar();
-  buildToggles();
+  buildRail();
+  buildViewBar();
   Object.assign(editor.grid, state.prefs.grid);
   try {
     const [deck, faces] = await Promise.all([api.deck(), api.fonts()]);
@@ -1269,7 +1671,6 @@ async function main() {
   installFaces(state.faces);
   $("deck-title").textContent = state.deck.title || DECK;
   document.title = `${state.deck.title || DECK} · svgdeck`;
-  $("export").href = `/api/decks/${DECK}/export.zip`;
   renderStrip();
   const m = /^#(\d+)$/.exec(location.hash);
   const start = state.deck.slides[m ? Math.min(+m[1] - 1, state.deck.slides.length - 1) : 0];
@@ -1278,5 +1679,5 @@ async function main() {
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool,
+window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool, exportDeck,
   get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;}, get commits() {return commits;} };
