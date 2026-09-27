@@ -2,15 +2,20 @@
 // Pointer events throughout, so mouse, finger and Apple Pencil share one path.
 import {
   SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, simplify, smoothPath, polylinePath, toHex,
+  parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline,
 } from "./geom.js";
 
 const HANDLE_PX = { mouse: 12, pen: 14, touch: 24 };  // handle hit radius, screen pixels
 const ROTATE_OFFSET_PX = 40;   // rotate handle distance above the box
 const TAP_PX = { mouse: 5, pen: 8, touch: 14 };      // movement below this is a tap
 const DOUBLE_TAP_MS = 350;
+const MAX_EDIT_NODES = 600;     // more points than this are not offered for editing
+const ALL_HANDLES_UP_TO = 16;   // bigger paths show handles near the chosen point only
 const BAKEABLE = new Set(["rect", "image", "ellipse", "circle", "line"]);
 const SKIP = new Set(["defs", "title", "desc", "metadata", "style", "script"]);
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+const ERASABLE = new Set(["path", "line", "polyline"]);  // strokes, not shapes, text or media
+const ERASER_PX = 7;  // eraser reach around the pointer, screen pixels
 const INHERITED_PRESENTATION = new Set([
   "color", "color-interpolation", "color-interpolation-filters", "color-rendering", "cursor", "direction",
   "fill", "fill-opacity", "fill-rule", "font-family", "font-size", "font-size-adjust", "font-stretch",
@@ -142,7 +147,12 @@ export class SlideEditor {
     this.zoom = 1;
     this.pan = { x: 0, y: 0 };
     this.fitMode = true;
-    this.tool = "select";
+    // Two tool slots: the Apple Pencil has its own, fingers and the mouse
+    // share the other. `input` is the slot of the latest pointer, and
+    // `tool` is that slot's tool.
+    this.tools = { touch: "select", pen: "pen" };
+    this.input = "touch";
+    this.penSeen = false;
     this.selection = [];
     this.context = null;
     this.gesture = null;
@@ -170,6 +180,25 @@ export class SlideEditor {
       if (te && sel.rangeCount && te.box.contains(sel.anchorNode)) te.range = sel.getRangeAt(0).cloneRange();
     });
     new ResizeObserver(() => { if (this.fitMode) this.fit(); else this.layout(); }).observe(host);
+  }
+
+  get tool() { return this.tools[this.input]; }
+  set tool(name) { this.tools[this.input] = name; }
+
+  slotFor(pointerType) { return pointerType === "pen" && this.penSeen ? "pen" : "touch"; }
+
+  /** Whether either input has this tool (the pen only once one was used). */
+  usesTool(name) {
+    return this.tools.touch === name || (this.penSeen && this.tools.pen === name);
+  }
+
+  /** Make a slot current: its tool now decides what the overlay offers. */
+  setInput(slot) {
+    if (slot === this.input) return;
+    this.input = slot;
+    this.host.dataset.tool = this.tool;
+    this.drawOverlay();
+    this.hooks.inputChanged?.(slot);
   }
 
   // --- loading and saving --------------------------------------------------
@@ -403,7 +432,7 @@ export class SlideEditor {
   }
 
   hitHandle(p, pointerType = "mouse") {
-    if (!this.selection.length || this.tool !== "select") return null;
+    if (!this.selection.length || this.tool !== "select" || this.showingNodes()) return null;
     const radius = HANDLE_PX[pointerType] || HANDLE_PX.mouse;
     const line = this.lineMode();
     if (line) {
@@ -464,22 +493,28 @@ export class SlideEditor {
       make("rect", { x: Math.min(g.start.x, g.now.x), y: Math.min(g.start.y, g.now.y),
         width: Math.abs(g.now.x - g.start.x), height: Math.abs(g.now.y - g.start.y), class: "ov-marquee", "stroke-width": px });
     }
-    if (this.tool === "nodes" && this.selection.length === 1) {
-      const el = this.selection[0], nodes = this.editableNodes(el);
-      if (nodes) {
-        const points = nodes.points.map(p => toRoot(el, this.svg).transformPoint(new DOMPoint(p.x, p.y)));
-        if (nodes.curve) for (let i = 0; i < points.length - 1; i++) {
-          if (i % 3 === 1) continue;
-          make("line", {x1: points[i].x, y1: points[i].y, x2: points[i+1].x, y2: points[i+1].y, class: "ov-box", "stroke-width": px});
-        }
-        points.forEach((p, i) => {
-          const control = nodes.curve && i % 3;
-          make(control ? "circle" : "rect", control ?
-            {cx:p.x, cy:p.y, r:7*px, class:"ov-handle", "data-node":i, "stroke-width":2*px} :
-            {x:p.x-8*px,y:p.y-8*px,width:16*px,height:16*px,rx:2*px,class:"ov-handle", "data-node":i,"stroke-width":2*px});
-        });
-        return;
+    if (this.showingNodes()) {
+      const el = this.selection[0], model = this.nodeModel(el);
+      const { targets, map } = this.nodeTargets(el, model);
+      const ns = this.nodeSel?.el === el ? this.nodeSel : null;
+      for (const t of targets) if (t.part !== "node") {
+        make("line", { x1: t.anchor.x, y1: t.anchor.y, x2: t.p.x, y2: t.p.y, class: "ov-box", "stroke-width": px });
       }
+      for (const t of targets) {
+        if (t.part !== "node") {
+          make("circle", { cx: t.p.x, cy: t.p.y, r: 6 * px, class: "ov-handle", "data-node": `${t.sub}:${t.i}:${t.part}`, "stroke-width": 2 * px });
+          continue;
+        }
+        const chosen = ns && ns.sub === t.sub && ns.i === t.i;
+        const r = (chosen ? 9 : 7) * px, type = t.node.type;
+        const attrs = { class: "ov-handle" + (chosen ? " ov-chosen" : ""), "data-node": `${t.sub}:${t.i}`, "stroke-width": 2 * px };
+        // Shapes tell the point types apart: square corner, circle symmetric, diamond smooth.
+        if (model.kind === "path" && type === "z") make("circle", { cx: t.p.x, cy: t.p.y, r, ...attrs });
+        else if (model.kind === "path" && type === "s") {
+          make("path", { d: `M${t.p.x},${t.p.y - r * 1.3}L${t.p.x + r * 1.3},${t.p.y}L${t.p.x},${t.p.y + r * 1.3}L${t.p.x - r * 1.3},${t.p.y}Z`, ...attrs });
+        } else make("rect", { x: t.p.x - r, y: t.p.y - r, width: 2 * r, height: 2 * r, rx: 1.5 * px, ...attrs });
+      }
+      return;
     }
     if (!this.selection.length) return;
     for (const el of this.selection.length > 1 ? this.selection : []) {
@@ -496,7 +531,7 @@ export class SlideEditor {
     const box = this.selectionBox();
     if (!box || this.textEdit) return;
     make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px });
-    if (this.tool !== "select") return;
+    if (!this.usesTool("select")) return;
     const pos = this.handlePositions(box);
     make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px });
     make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px });
@@ -505,6 +540,11 @@ export class SlideEditor {
       make("rect", { x: hx - 7 * px, y: hy - 7 * px, width: 14 * px, height: 14 * px, rx: 3 * px,
         class: "ov-handle", "stroke-width": 1.5 * px });
     }
+  }
+
+  /** Node handles replace the box when either input edits points. */
+  showingNodes() {
+    return this.usesTool("nodes") && this.selection.length === 1 && !!this.editableNodes(this.selection[0]);
   }
 
   // --- transforms ---------------------------------------------------------------
@@ -619,6 +659,8 @@ export class SlideEditor {
     }
     if (this.gesture) return;
     if (this.textEdit) { this.endTextEdit(true); return; }
+    if (e.pointerType === "pen" && !this.penSeen) { this.penSeen = true; this.hooks.penFound?.(); }
+    this.setInput(this.slotFor(e.pointerType));
 
     const p = this.point(e);
     // The chosen tool applies to every pointer. Pan is explicit; a previous
@@ -631,17 +673,25 @@ export class SlideEditor {
 
     const base = { id: e.pointerId, pointerType: e.pointerType, start: p, now: p, client: { x: e.clientX, y: e.clientY },
       moved: false, shift: e.shiftKey };
+    // A path being drawn with one input ends when the other one starts
+    // something else (panning and pinching leave it open).
+    if (this.pathDraft && this.tool !== "bezier") this.finishPath();
     switch (this.tool) {
       case "select": return this.downSelect(e, p, base);
       case "nodes": return this.downNode(e, p, base);
       case "bezier": return this.downPath(p, base);
-      case "pen": return this.downPen(p, base);
+      case "pen": return this.downPen(p, base, e);
+      case "erase":
+        this.begin();
+        this.gesture = { kind: "erase", ...base, removed: [] };
+        this.eraseAt(e);
+        return;
       case "text": this.gesture = { kind: "text", ...base }; return;
       default: this.gesture = { kind: "create", shape: this.tool, ...base }; return;
     }
   }
 
-  pathNode(p) { return {x:p.x,y:p.y,in:{...p},out:{...p}}; }
+  pathNode(p) { return {x:p.x,y:p.y,in:{x:p.x,y:p.y},out:{x:p.x,y:p.y},type:"c"}; }
 
   pathData(nodes, closed = false) {
     const point = p => `${+p.x.toFixed(3)},${+p.y.toFixed(3)}`;
@@ -684,9 +734,9 @@ export class SlideEditor {
       if (draft.source) {
         const inverse=toRoot(path,this.svg).inverse();
         const convert=p=>{const q=inverse.transformPoint(new DOMPoint(p.x,p.y)); return {x:q.x,y:q.y};};
-        nodes=nodes.map(n=>({...convert(n),in:convert(n.in),out:convert(n.out)}));
+        nodes=nodes.map(n=>({...convert(n),in:convert(n.in),out:convert(n.out),type:n.type}));
       }
-      path.setAttribute("d",this.pathData(nodes,closed));
+      this.writeModel(path, {kind:"path", subs:[{nodes, closed}]});
       if (!draft.source) this.adopt(path);
       this.selection = [path];
     });
@@ -705,81 +755,336 @@ export class SlideEditor {
     else { this.drawOverlay(); this.hooks.select(this.selection); }
   }
 
-  // Native SVG geometry remains the source of truth; there is no stale sidecar.
-  curvePoints(el) {
-    if (el?.localName !== "path") return null;
-    const d = (el.getAttribute("d") || "").replace(/Z\s*$/i, "");
-    const num = "[-+]?(?:\\d*\\.\\d+|\\d+\\.?\\d*)(?:[eE][-+]?\\d+)?";
-    const pair = `${num}[ ,]+${num}`;
-    if (!new RegExp(`^\\s*M\\s*${pair}(?:\\s*C\\s*${pair}[ ,]+${pair}[ ,]+${pair})+\\s*$`).test(d)) return null;
-    const values = d.match(new RegExp(num, "g")).map(Number);
-    if (!values.every(Number.isFinite)) return null;
-    return Array.from({length: values.length / 2}, (_, i) => ({x:values[2*i], y:values[2*i+1]}));
-  }
+  // --- point editing ---------------------------------------------------------
+  // Paths, polygons and polylines are edited as nodes. The SVG geometry stays
+  // the source of truth; only the node types (corner, smooth, symmetric) are
+  // kept alongside, in data-nodetypes, since they cannot be read back exactly.
 
-  writeCurve(el, points) {
-    const p = points.map(q => `${+q.x.toFixed(3)},${+q.y.toFixed(3)}`);
-    el.setAttribute("d", `M${p[0]} ` + Array.from({length:(p.length-1)/3}, (_,i) => `C${p.slice(i*3+1,i*3+4).join(" ")}`).join(" ") + (/Z\s*$/i.test(el.getAttribute("d") || "") ? " Z" : ""));
-  }
-
-  editableNodes(el) {
-    const curve = this.curvePoints(el);
-    if (curve) return {curve: true, points: curve};
+  /** An element's nodes: {kind: "path"|"poly", subs: [{nodes, closed}]}. */
+  nodeModel(el) {
+    if (el?.localName === "path") {
+      const subs = parsePath(el.getAttribute("d"));
+      if (!subs) return null;
+      const count = subs.reduce((n, sub) => n + sub.nodes.length, 0);
+      if (count > MAX_EDIT_NODES) return null;
+      const stored = el.getAttribute("data-nodetypes") || "";
+      let k = 0;
+      for (const sub of subs) for (const n of sub.nodes) {
+        const c = stored.length === count ? stored[k] : "";
+        n.type = c && "csz".includes(c) ? c : inferNodeType(n);
+        k++;
+      }
+      return { kind: "path", subs };
+    }
     if (["polygon", "polyline"].includes(el?.localName)) {
-      return {curve: false, points: Array.from(el.points, p => ({x:p.x,y:p.y}))};
+      const nodes = Array.from(el.points, (q) => ({ ...nodeAt(q), type: "c" }));
+      if (!nodes.length || nodes.length > MAX_EDIT_NODES) return null;
+      return { kind: "poly", subs: [{ nodes, closed: el.localName === "polygon" }] };
     }
     return null;
   }
 
+  writeModel(el, model) {
+    if (model.kind === "path") {
+      el.setAttribute("d", pathFromNodes(model.subs));
+      // Kept when they say more than the handles do: a corner whose handles
+      // happen to be in line would otherwise read back as smooth.
+      const nodes = model.subs.flatMap((sub) => sub.nodes);
+      const types = nodes.map((n) => n.type || "c").join("");
+      if (/[sz]/.test(types) || nodes.some((n) => (n.type || "c") !== inferNodeType(n))) el.setAttribute("data-nodetypes", types);
+      else el.removeAttribute("data-nodetypes");
+    } else {
+      el.setAttribute("points", model.subs[0].nodes.map((n) => `${+n.x.toFixed(3)},${+n.y.toFixed(3)}`).join(" "));
+    }
+  }
+
+  cloneModel(model) {
+    return { kind: model.kind, subs: model.subs.map((sub) => ({ closed: sub.closed,
+      nodes: sub.nodes.map((n) => ({ x: n.x, y: n.y, in: { ...n.in }, out: { ...n.out }, type: n.type })) })) };
+  }
+
+  /** Flat Bézier points of a one-piece path: anchor, out, in, anchor, ... */
+  curvePoints(el) {
+    const model = el?.localName === "path" && this.nodeModel(el);
+    if (!model || model.subs.length !== 1) return null;
+    const { nodes, closed } = model.subs[0];
+    const out = [{ x: nodes[0].x, y: nodes[0].y }];
+    const list = closed ? [...nodes, nodes[0]] : nodes;
+    for (let i = 1; i < list.length; i++) out.push({ ...list[i - 1].out }, { ...list[i].in }, { x: list[i].x, y: list[i].y });
+    return out;
+  }
+
+  editableNodes(el) {
+    return this.nodeModel(el);
+  }
+
+  /** The chosen point of the selected object, if any. */
+  selectedNode() {
+    const ns = this.nodeSel, el = this.selection.length === 1 && this.selection[0];
+    if (!ns || ns.el !== el) return null;
+    const model = this.nodeModel(el);
+    const node = model?.subs[ns.sub]?.nodes[ns.i];
+    return node ? { el, model, sub: ns.sub, i: ns.i, node } : null;
+  }
+
+  /** Grabbable points in slide coordinates: nodes, and the handles shown. */
+  nodeTargets(el, model) {
+    const m = toRoot(el, this.svg);
+    const map = (q) => { const v = m.transformPoint(new DOMPoint(q.x, q.y)); return { x: v.x, y: v.y }; };
+    const total = model.subs.reduce((n, sub) => n + sub.nodes.length, 0);
+    const ns = this.nodeSel?.el === el ? this.nodeSel : null;
+    const targets = [];
+    model.subs.forEach((sub, si) => sub.nodes.forEach((n, i) => {
+      const p = map(n);
+      targets.push({ sub: si, i, part: "node", p, node: n });
+      if (model.kind !== "path") return;
+      const near = total <= ALL_HANDLES_UP_TO || (ns && ns.sub === si &&
+        [ns.i - 1, ns.i, ns.i + 1].some((j) => (j + sub.nodes.length) % sub.nodes.length === i));
+      if (!near) return;
+      for (const part of ["in", "out"]) {
+        if (!sub.closed && ((part === "in" && i === 0) || (part === "out" && i === sub.nodes.length - 1))) continue;
+        const h = map(n[part]);
+        if (Math.hypot(h.x - p.x, h.y - p.y) * this.zoom < 3) continue;  // retracted
+        targets.push({ sub: si, i, part, p: h, anchor: p, node: n });
+      }
+    }));
+    return { targets, map, matrix: m };
+  }
+
   downNode(e, p, base) {
     const el = this.selection.length === 1 && this.selection[0];
-    const nodes = this.editableNodes(el);
-    if (nodes) {
-      const m = toRoot(el, this.svg);
-      let index = -1, distance = e.pointerType === "touch" ? 22 : 12;
-      nodes.points.forEach((q, i) => {
-        const v = m.transformPoint(new DOMPoint(q.x,q.y));
-        const d = Math.hypot(v.x-p.x,v.y-p.y) * this.zoom;
-        if (d < distance) {index = i; distance = d;}
-      });
-      if (index >= 0) {
+    const model = el && this.nodeModel(el);
+    if (model) {
+      const { targets, map, matrix } = this.nodeTargets(el, model);
+      const radius = e.pointerType === "touch" ? 22 : 12;
+      let hit = null, score = Infinity;
+      for (const t of targets) {
+        const d = Math.hypot(t.p.x - p.x, t.p.y - p.y) * this.zoom;
+        // Nodes win over handles lying on top of them.
+        const s = d - (t.part === "node" ? 6 : 0);
+        if (d < radius && s < score) { hit = t; score = s; }
+      }
+      if (hit) {
+        this.nodeSel = { el, sub: hit.sub, i: hit.i };
         this.begin();
-        this.gesture = {kind:"node", ...base, ...nodes, el, index, inverse:m.inverse(), original:el.getAttribute(nodes.curve ? "d" : "points")};
+        this.gesture = { kind: "node", ...base, el, model, sub: hit.sub, i: hit.i, part: hit.part,
+          inverse: matrix.inverse(), attr: model.kind === "path" ? "d" : "points",
+          original: el.getAttribute(model.kind === "path" ? "d" : "points"), types: el.getAttribute("data-nodetypes") };
+        this.lastSegmentTap = null;
+        this.drawOverlay();
+        this.hooks.select(this.selection);
+        return;
+      }
+      // On the outline: a double tap adds a point there.
+      const seg = this.nearestSegment(model, map, p);
+      if (seg && seg.dist * this.zoom < radius) {
+        const now = performance.now(), last = this.lastSegmentTap;
+        if (last && now - last.t < DOUBLE_TAP_MS && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 24) {
+          this.lastSegmentTap = null;
+          this.insertNode(seg.sub, seg.i, seg.t);
+        } else {
+          this.lastSegmentTap = { t: now, x: e.clientX, y: e.clientY };
+          if (this.nodeSel) { this.nodeSel = null; this.drawOverlay(); this.hooks.select(this.selection); }
+        }
         return;
       }
     }
+    this.nodeSel = null;
     const picked = this.pick(e,p);
     this.select(picked ? [picked] : []);
-    if (picked && !this.editableNodes(picked)) this.hooks.toast("Choose a Bézier curve or polygon to edit its points.");
+    if (picked && !this.editableNodes(picked)) this.hooks.toast("Choose a path, curve or polygon to edit its points.");
+  }
+
+  /** The segment of a model closest to p (slide coordinates). */
+  nearestSegment(model, map, p) {
+    let best = null;
+    model.subs.forEach((sub, si) => {
+      const n = sub.nodes.length, count = sub.closed ? n : n - 1;
+      for (let i = 0; i < count; i++) {
+        const r = nearestOnSegment(sub.nodes[i], sub.nodes[(i + 1) % n], p, map);
+        if (!best || r.dist < best.dist) best = { sub: si, i, t: r.t, dist: r.dist };
+      }
+    });
+    return best;
+  }
+
+  /** Change the selected object's nodes as one undoable step. */
+  editNodes(fn) {
+    const el = this.selection.length === 1 && this.selection[0];
+    const model = el && this.nodeModel(el);
+    if (!model) return false;
+    let ok = false;
+    this.change(() => { ok = fn(model, el) !== false; if (ok) this.writeModel(el, model); });
+    return ok;
+  }
+
+  /** Add a point on segment i (from node i to the next) of subpath sub at t. */
+  insertNode(sub, i, t = 0.5) {
+    this.editNodes((model, el) => {
+      const nodes = model.subs[sub].nodes, a = nodes[i], b = nodes[(i + 1) % nodes.length];
+      const n = splitSegment(a, b, t);
+      n.type = model.kind === "path" && inferNodeType(n) !== "c" ? "s" : "c";
+      nodes.splice(i + 1, 0, n);
+      this.nodeSel = { el, sub, i: i + 1 };
+    });
+  }
+
+  /** Add a point halfway along the segment after the chosen point. */
+  insertNodeAfterSelected() {
+    const sel = this.selectedNode();
+    if (!sel) return;
+    const { nodes, closed } = sel.model.subs[sel.sub];
+    const i = !closed && sel.i === nodes.length - 1 ? sel.i - 1 : sel.i;
+    if (i >= 0) this.insertNode(sel.sub, i, 0.5);
+  }
+
+  deleteSelectedNode() {
+    const sel = this.selectedNode();
+    if (!sel) return false;
+    const { nodes, closed } = sel.model.subs[sel.sub];
+    const min = closed ? 3 : 2;
+    if (nodes.length <= min) {
+      this.hooks.toast(`A ${closed ? "closed" : "open"} outline needs at least ${min} points; delete the object instead.`);
+      return true;
+    }
+    this.editNodes((model, el) => {
+      const list = model.subs[sel.sub].nodes;
+      list.splice(sel.i, 1);
+      // An open end has no handle beyond it.
+      if (!closed) {
+        list[0].in = { x: list[0].x, y: list[0].y };
+        const last = list[list.length - 1];
+        last.out = { x: last.x, y: last.y };
+      }
+      this.nodeSel = { el, sub: sel.sub, i: Math.min(sel.i, list.length - 1) };
+    });
+    return true;
+  }
+
+  /** Corner ("c"), smooth ("s") or symmetric ("z") for the chosen point.
+   *  Smooth and symmetric pull out missing handles along the outline. */
+  setNodeType(type) {
+    const sel = this.selectedNode();
+    if (!sel || sel.model.kind !== "path") return;
+    this.editNodes((model) => {
+      const sub = model.subs[sel.sub], n = sub.nodes[sel.i];
+      n.type = type;
+      if (type === "c") return;
+      const len = (h) => Math.hypot(h.x - n.x, h.y - n.y);
+      const count = sub.nodes.length;
+      const prev = sel.i > 0 ? sub.nodes[sel.i - 1] : sub.closed ? sub.nodes[count - 1] : null;
+      const next = sel.i < count - 1 ? sub.nodes[sel.i + 1] : sub.closed ? sub.nodes[0] : null;
+      // Direction of the outline through the point.
+      let dx = 0, dy = 0;
+      if (len(n.out) > 1e-6) { dx += (n.out.x - n.x) / len(n.out); dy += (n.out.y - n.y) / len(n.out); }
+      if (len(n.in) > 1e-6) { dx -= (n.in.x - n.x) / len(n.in); dy -= (n.in.y - n.y) / len(n.in); }
+      if (Math.hypot(dx, dy) < 1e-6) {
+        const a = prev || n, b = next || n;
+        dx = b.x - a.x; dy = b.y - a.y;
+      }
+      const d = Math.hypot(dx, dy);
+      if (d < 1e-9) return;
+      dx /= d; dy /= d;
+      let lin = len(n.in) || (prev ? Math.hypot(n.x - prev.x, n.y - prev.y) / 3 : 0);
+      let lout = len(n.out) || (next ? Math.hypot(next.x - n.x, next.y - n.y) / 3 : 0);
+      if (type === "z" && prev && next) lin = lout = (lin + lout) / 2;
+      if (prev) n.in = { x: n.x - dx * lin, y: n.y - dy * lin };
+      if (next) n.out = { x: n.x + dx * lout, y: n.y + dy * lout };
+    });
+  }
+
+  /** Make the segment after the chosen point straight or curved. */
+  setSegment(kind) {
+    const sel = this.selectedNode();
+    if (!sel || sel.model.kind !== "path") return;
+    this.editNodes((model) => {
+      const sub = model.subs[sel.sub], count = sub.nodes.length;
+      let i = sel.i;
+      if (!sub.closed && i === count - 1) i -= 1;
+      if (i < 0) return false;
+      const a = sub.nodes[i], b = sub.nodes[(i + 1) % count];
+      if (kind === "line") {
+        a.out = { x: a.x, y: a.y }; b.in = { x: b.x, y: b.y };
+        for (const n of [a, b]) if (n.type !== "c") n.type = "c";
+      } else {
+        a.out = { x: a.x + (b.x - a.x) / 3, y: a.y + (b.y - a.y) / 3 };
+        b.in = { x: a.x + 2 * (b.x - a.x) / 3, y: a.y + 2 * (b.y - a.y) / 3 };
+      }
+    });
+  }
+
+  /** Close an open outline, or open a closed one at the chosen point. */
+  toggleClosed() {
+    const el = this.selection[0];
+    const model = this.nodeModel(el);
+    if (!model) return;
+    const sel = this.selectedNode();
+    const si = sel ? sel.sub : 0;
+    if (model.kind === "poly") {
+      // polygon <-> polyline keeps every attribute.
+      this.change(() => {
+        const other = document.createElementNS(SVGNS, el.localName === "polygon" ? "polyline" : "polygon");
+        for (const a of Array.from(el.attributes)) other.setAttributeNS(a.namespaceURI, a.name, a.value);
+        if (other.localName === "polyline" && !el.style.fill && !el.getAttribute("fill")) other.style.setProperty("fill", "none");
+        el.replaceWith(other);
+        this.selection = [other];
+        this.nodeSel = null;
+      });
+      return;
+    }
+    this.editNodes((m, path) => {
+      const sub = m.subs[si];
+      if (sub.closed) {
+        // Open at the chosen point: it becomes both ends.
+        const k = sel ? sel.i : 0;
+        const nodes = [...sub.nodes.slice(k), ...sub.nodes.slice(0, k)];
+        const start = nodes[0];
+        nodes.push({ x: start.x, y: start.y, in: { ...start.in }, out: { x: start.x, y: start.y }, type: "c" });
+        start.in = { x: start.x, y: start.y };
+        start.type = "c";
+        sub.nodes = nodes;
+        sub.closed = false;
+        this.nodeSel = { el: path, sub: si, i: 0 };
+      } else {
+        if (sub.nodes.length < 3) return false;
+        sub.closed = true;
+      }
+    });
   }
 
   extendCurve(reverse = false) {
-    const el = this.selection[0], points = this.curvePoints(el);
-    if (!points) return;
-    if (/Z\s*$/i.test(el.getAttribute("d") || "")) { this.hooks.toast("This path is closed; edit its existing points or draw a new path."); return; }
-    if (reverse) points.reverse();
-    const matrix = toRoot(el,this.svg);
-    const convert = p => {const q=matrix.transformPoint(new DOMPoint(p.x,p.y)); return {x:q.x,y:q.y};};
-    const nodes = [];
-    for (let i=0;i<points.length;i+=3) nodes.push({...convert(points[i]),
-      in:convert(points[i-1] || points[i]),out:convert(points[i+1] || points[i])});
-    this.pathDraft = {nodes,source:el,hover:null,initialData:this.pathData(nodes)};
+    const el = this.selection[0], model = this.nodeModel(el);
+    if (!model || model.kind !== "path" || model.subs.length !== 1) return;
+    if (model.subs[0].closed) { this.hooks.toast("This path is closed; edit its existing points or draw a new path."); return; }
+    const nodes = model.subs[0].nodes.map((n) => (reverse ? { ...n, in: n.out, out: n.in } : n));
+    if (reverse) nodes.reverse();
+    const matrix = toRoot(el, this.svg);
+    const convert = (p) => { const q = matrix.transformPoint(new DOMPoint(p.x, p.y)); return { x: q.x, y: q.y }; };
+    const draft = nodes.map((n) => ({ ...convert(n), in: convert(n.in), out: convert(n.out), type: n.type }));
+    this.pathDraft = { nodes: draft, source: el, hover: null, initialData: this.pathData(draft) };
     this.drawOverlay(); this.hooks.select(this.selection);
   }
 
   splitCurve() {
-    const el = this.selection[0], points = this.curvePoints(el);
-    if (!points) return;
-    if (points.length > 193) { this.hooks.toast("This curve already has many anchors; drag its existing points to refine it."); return; }
-    // De Casteljau subdivision preserves the exact curve while adding anchors.
-    const mid = (a,b) => ({x:(a.x+b.x)/2,y:(a.y+b.y)/2});
-    const out = [points[0]];
-    for (let i=0; i<points.length-1; i+=3) {
-      const [a,b,c,d] = points.slice(i,i+4), ab=mid(a,b), bc=mid(b,c), cd=mid(c,d);
-      const abc=mid(ab,bc), bcd=mid(bc,cd), center=mid(abc,bcd);
-      out.push(ab,abc,center,bcd,cd,d);
-    }
-    this.change(() => this.writeCurve(el,out));
+    const el = this.selection[0], model = this.nodeModel(el);
+    if (!model) return;
+    const total = model.subs.reduce((n, sub) => n + sub.nodes.length, 0);
+    if (total * 2 > MAX_EDIT_NODES) { this.hooks.toast("This outline already has many points; drag its existing points to refine it."); return; }
+    // Each segment is split in half without changing the shape.
+    this.editNodes((m) => {
+      for (const sub of m.subs) {
+        const out = [], n = sub.nodes.length, count = sub.closed ? n : n - 1;
+        for (let i = 0; i < n; i++) {
+          out.push(sub.nodes[i]);
+          if (i < count) {
+            const mid = splitSegment(sub.nodes[i], sub.nodes[(i + 1) % n], 0.5);
+            mid.type = m.kind === "path" && inferNodeType(mid) !== "c" ? "s" : "c";
+            out.push(mid);
+          }
+        }
+        sub.nodes = out;
+      }
+    });
   }
 
   downSelect(e, p, base) {
@@ -826,24 +1131,60 @@ export class SlideEditor {
     this.gesture = { kind: "move", ...base, target: el, snaps: null };
   }
 
-  downPen(p, base) {
+  downPen(p, base, e) {
     const path = document.createElementNS(SVGNS, "path");
     const style = this.hooks.shapeStyle();
-    path.setAttribute("fill", "none");
-    path.setAttribute("stroke", style.stroke === "none" ? "#000000" : style.stroke);
-    path.setAttribute("stroke-width", style.strokeWidth);
-    path.setAttribute("stroke-linecap", "round");
-    path.setAttribute("stroke-linejoin", "round");
+    const color = style.stroke === "none" ? "#000000" : style.stroke;
+    // The Pencil's pressure sets the width: the stroke is a filled outline.
+    const pressure = base.pointerType === "pen" && this.hooks.usePressure?.() !== false;
+    if (pressure) {
+      path.setAttribute("fill", color);
+      path.setAttribute("stroke", "none");
+      path.setAttribute("data-ink", "pressure");
+    } else {
+      path.setAttribute("fill", "none");
+      path.setAttribute("stroke", color);
+      path.setAttribute("stroke-width", style.strokeWidth);
+      path.setAttribute("stroke-linecap", "round");
+      path.setAttribute("stroke-linejoin", "round");
+    }
     this.begin();
     this.adopt(path);
-    this.gesture = { kind: "draw", ...base, path, points: [[p.x, p.y]] };
-    path.setAttribute("d", polylinePath(this.gesture.points));
+    this.gesture = { kind: "draw", ...base, path, pressure, width: style.strokeWidth, level: null, points: [] };
+    this.addInkPoint(this.gesture, p, e);
+    this.drawInk(this.gesture, false);
+  }
+
+  /** Pressure is smoothed a little: the Pencil's readings jitter. */
+  addInkPoint(g, q, e) {
+    let level = 0.5;
+    if (g.pressure) {
+      const raw = e?.pressure > 0 ? e.pressure : 0.5;
+      level = g.level === null ? raw : g.level + (raw - g.level) * 0.35;
+      g.level = level;
+    }
+    g.points.push([q.x, q.y, level]);
+  }
+
+  drawInk(g, final) {
+    if (!g.pressure) {
+      g.path.setAttribute("d", final ? smoothPath(simplify(g.points, 1.2 / this.zoom)) : polylinePath(g.points));
+      return;
+    }
+    // In the stroke's own units (it may be inside a scaled group).
+    const scale = this.scaleOf(g.path) || 1;
+    const inverse = toRoot(g.path, this.svg).inverse();
+    const local = (pts) => pts.map(([x, y, w]) => { const v = inverse.transformPoint(new DOMPoint(x, y)); return [v.x, v.y, w]; });
+    const pts = final ? simplify(g.points, 0.6 / this.zoom) : g.points;
+    g.path.setAttribute("d", inkOutline(local(pts), g.width / scale, final));
   }
 
   onMove(e) {
     const ptr = this.pointers.get(e.pointerId);
     if (ptr) { ptr.x = e.clientX; ptr.y = e.clientY; }
     const g = this.gesture;
+    // Pencil hover (and the mouse) show what that input is about to do.
+    if (!g && !e.buttons && e.pointerType !== "touch") this.setInput(this.slotFor(e.pointerType));
     if (!g) {
       if (this.pathDraft) { this.pathDraft.hover = this.snapPoint(this.point(e)); this.drawOverlay(); }
       return;
@@ -856,6 +1197,11 @@ export class SlideEditor {
       g.last = { x: e.clientX, y: e.clientY };
       this.fitMode = false;
       this.layout();
+      return;
+    }
+    if (g.kind === "erase") {
+      const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+      for (const ev of events.length ? events : [e]) this.eraseAt(ev);
       return;
     }
     const p = this.point(e);
@@ -876,24 +1222,33 @@ export class SlideEditor {
         const q = this.snapPoint(p), a = g.node;
         a.out = {x:q.x,y:q.y};
         a.in = {x:2*a.x-q.x,y:2*a.y-q.y};
+        a.type = "z";
         break;
       }
       case "node": {
-        const q = g.inverse.transformPoint(new DOMPoint(p.x, p.y));
-        const points = g.points.map(v => ({...v}));
-        const dx = q.x - points[g.index].x, dy = q.y - points[g.index].y;
-        points[g.index] = {x: q.x, y: q.y};
-        if (g.curve && g.index % 3 === 0) {
-          for (const i of [g.index - 1, g.index + 1]) if (points[i]) { points[i].x += dx; points[i].y += dy; }
+        const model = this.cloneModel(g.model);
+        const n = model.subs[g.sub].nodes[g.i];
+        // Move by the pointer's displacement, so a point grabbed a little off
+        // its centre does not jump; a node snaps where it lands.
+        const grabbed = g.part === "node" ? n : n[g.part];
+        const start = g.inverse.inverse().transformPoint(new DOMPoint(grabbed.x, grabbed.y));
+        let target = { x: start.x + p.x - g.start.x, y: start.y + p.y - g.start.y };
+        if (g.part === "node") target = this.snapPoint(target);
+        const q = g.inverse.transformPoint(new DOMPoint(target.x, target.y));
+        if (g.part === "node") {
+          const dx = q.x - n.x, dy = q.y - n.y;
+          for (const h of [n, n.in, n.out]) { h.x += dx; h.y += dy; }
+        } else {
+          n[g.part] = { x: q.x, y: q.y };
+          const other = g.part === "in" ? "out" : "in";
+          const vx = n.x - q.x, vy = n.y - q.y, v = Math.hypot(vx, vy);
+          // Smooth points keep the other handle opposite; symmetric ones mirror it.
+          if (v > 1e-9 && (n.type === "s" || n.type === "z")) {
+            const len = n.type === "z" ? v : Math.hypot(n[other].x - n.x, n[other].y - n.y);
+            n[other] = { x: n.x + vx / v * len, y: n.y + vy / v * len };
+          }
         }
-        if (g.curve && /Z\s*$/i.test(g.original) && (g.index === 0 || g.index === points.length-1)) {
-          const other = g.index === 0 ? points.length-1 : 0;
-          points[other] = {...points[g.index]};
-          const handle = other === 0 ? 1 : other-1;
-          points[handle].x += dx; points[handle].y += dy;
-        }
-        if (g.curve) this.writeCurve(g.el, points);
-        else g.el.setAttribute("points", points.map(v => `${v.x},${v.y}`).join(" "));
+        this.writeModel(g.el, model);
         break;
       }
       case "resize": this.moveResize(g, p, e.shiftKey); break;
@@ -922,15 +1277,33 @@ export class SlideEditor {
       case "create": this.moveCreate(g, p, e.shiftKey); break;
       case "draw": {
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
-        for (const ev of events.length ? events : [e]) {
-          const q = this.point(ev);
-          g.points.push([q.x, q.y]);
-        }
-        g.path.setAttribute("d", polylinePath(g.points));
+        for (const ev of events.length ? events : [e]) this.addInkPoint(g, this.point(ev), ev);
+        this.drawInk(g, false);
         return;
       }
     }
     this.drawOverlay();
+  }
+
+  /** Remove the strokes under a pointer position (and a few pixels around). */
+  eraseAt(e) {
+    const g = this.gesture;
+    const hits = new Set();
+    for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      for (let el of document.elementsFromPoint(e.clientX + dx * ERASER_PX, e.clientY + dy * ERASER_PX)) {
+        if (!this.svg.contains(el) || el === this.svg) continue;
+        while (el && el.parentNode !== this.context) el = el.parentNode;
+        if (el && ERASABLE.has(el.localName) && this.selectable(el)) hits.add(el);
+      }
+    }
+    for (const el of hits) {
+      g.removed.push({ el, parent: el.parentNode, next: el.nextSibling });
+      el.remove();
+    }
+    if (hits.size) {
+      this.selection = this.selection.filter((el) => !hits.has(el));
+      this.drawOverlay();
+    }
   }
 
   moveResize(g, p, free) {
@@ -1004,8 +1377,9 @@ export class SlideEditor {
     if (constrain || shape === "circle") { const s = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * s; dy = Math.sign(dy || 1) * s; }
     const x = Math.min(a.x, a.x + dx), y = Math.min(a.y, a.y + dy), w = Math.abs(dx), h = Math.abs(dy);
     if (shape === "bezier") {
-      this.writeCurve(el, [{ x: a.x, y: a.y }, { x: a.x + dx / 3, y: a.y - 100 },
-        { x: a.x + 2 * dx / 3, y: b.y + 100 }, { x: b.x, y: b.y }]);
+      this.writeModel(el, { kind: "path", subs: [{ closed: false, nodes: [
+        { x: a.x, y: a.y, in: { x: a.x, y: a.y }, out: { x: a.x + dx / 3, y: a.y - 100 }, type: "c" },
+        { x: b.x, y: b.y, in: { x: a.x + 2 * dx / 3, y: b.y + 100 }, out: { x: b.x, y: b.y }, type: "c" }] }] });
     } else if (shape === "polygon") {
       const n = this.polygonSides || 5;
       el.setAttribute("points", Array.from({length: n}, (_, i) => {
@@ -1067,6 +1441,9 @@ export class SlideEditor {
         }
         return;
       case "none": return;
+      case "erase":
+        if (g.removed.length) this.commit(); else this.before = null;
+        return;
       case "marquee": {
         if (!g.moved) { this.tap(e, p, null); this.drawOverlay(); return; }
         const x0 = Math.min(g.start.x, p.x), y0 = Math.min(g.start.y, p.y);
@@ -1091,20 +1468,19 @@ export class SlideEditor {
         if (g.shape === "arrow") this.refreshArrows(g.el);
         this.selection = [g.el];
         this.commit();
-        this.hooks.toolDone?.();
+        this.hooks.toolDone?.(this.input);
         return;
       }
       case "text": {
         const t = this.newText(this.snapPoint(p));
         this.select([t]);
         this.editText(t, true);
-        this.hooks.toolDone?.();
+        this.hooks.toolDone?.(this.input);
         return;
       }
       case "draw": {
-        if (g.points.length === 1) g.points.push([g.points[0][0] + 0.01, g.points[0][1]]);
-        const eps = 1.2 / this.zoom;
-        g.path.setAttribute("d", smoothPath(simplify(g.points, eps)));
+        if (g.points.length === 1 && !g.pressure) g.points.push([g.points[0][0] + 0.01, g.points[0][1], g.points[0][2]]);
+        this.drawInk(g, true);
         this.commit();
         return;
       }
@@ -1137,8 +1513,12 @@ export class SlideEditor {
       g.line.setAttribute(`x${g.which}`, g.original[0]);
       g.line.setAttribute(`y${g.which}`, g.original[1]);
     }
-    if (g.kind === "node") g.el.setAttribute(g.curve ? "d" : "points", g.original);
+    if (g.kind === "node") {
+      g.el.setAttribute(g.attr, g.original);
+      if (g.types === null) g.el.removeAttribute("data-nodetypes"); else g.el.setAttribute("data-nodetypes", g.types);
+    }
     if (g.kind === "draw") g.path.remove();
+    if (g.kind === "erase") for (const r of g.removed.reverse()) r.parent.insertBefore(r.el, r.next);
     if (g.kind === "create" && g.el) g.el.remove();
     this.before = null;
     this.drawOverlay();

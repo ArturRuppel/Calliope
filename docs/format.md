@@ -72,6 +72,8 @@ Movies are always muted.
 |---|---|
 | `data-locked="true"` | the editor does not select it (slide backgrounds) |
 | `data-label` | a name for the object (from Inkscape labels; `background` marks the slide background) |
+| `data-nodetypes` | on a path: the type of each point, in order, for point editing: `c` corner, `s` smooth, `z` symmetric. Written only when the handles alone would not tell (like Inkscape's `sodipodi:nodetypes`) |
+| `data-ink="pressure"` | a Pencil stroke drawn with pressure: a filled outline, so its colour is the fill |
 
 ### Builds
 

@@ -40,18 +40,27 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   them, or tap for a default size. Circles stay circular; choose 3–32 polygon
   sides in the properties panel before drawing. Edit points (N) lets you move
   polygon vertices independently to make irregular shapes.
-- **Paths:** line (L), arrow (A), freehand Draw (P), Bézier (B), Edit points (N).
+- **Paths:** line (L), arrow (A), freehand Draw (P), Erase (X), Bézier (B),
+  Edit points (N). Erase removes the strokes and lines it passes over (not
+  shapes, text or media), as one undo step.
   Bézier follows Inkscape's pen workflow: click for connected straight segments,
   or drag at each node to pull symmetric handles for curved segments. Enter,
   right-click, double-click the last node, or **Finish path** completes it.
   Click the first node or **Close path** to close it; Escape cancels and
   Backspace removes the last node. **Continue path**, or clicking an endpoint
   of a selected open curve with Bézier, resumes drawing from that endpoint.
-  **Edit points** drags anchors and control handles; **Add anchors** subdivides
-  segments without changing their shape. Pending paths finish when switching
-  tools, presenting/exporting, or leaving the app. They remain a single undo
-  operation. Point editing supports these cubic paths, freehand strokes,
-  polygons and polylines; other SVG commands remain selectable and transformable.
+  Pending paths finish when switching tools, presenting/exporting, or leaving
+  the app. They remain a single undo operation.
+- **Edit points** works on every path (imported ones too: lines, arcs and
+  quadratic curves become cubic segments when edited), polygon and polyline.
+  Tap a point to choose it, then drag it or its two handles. Each point is a
+  **Corner** (handles move independently), **Smooth** (handles stay in line)
+  or **Symmetric** (in line and equally long); Smooth and Symmetric pull out
+  missing handles along the outline. Double-tap the outline to add a point
+  there; **Add point** adds one halfway to the next, Delete removes the chosen
+  point. **Straight** and **Curved** change the segment after it; **Open
+  path** opens a closed outline at the chosen point, **Close path** joins the
+  ends, **Subdivide** doubles the points without changing the shape.
 - **Insert:** text (T) and Media for pictures and movies (movies are converted
   to H.264 mp4 on upload so every browser can play them).
 - **Arrange:** Group, Actions, Align and Format text. Align opens edge/centre
@@ -78,10 +87,26 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   editing, the panel makes selected words bold, italic, underlined, sub/superscript or
   another colour.
 - Choose **Pan** to drag the page without changing objects; choose **Select**
-  to move objects, or a drawing tool to draw. The chosen tool works with a
-  finger, mouse or Apple Pencil. Two fingers drag to pan or pinch to zoom in
-  any tool; a brief two-finger tap opens Actions. Touches while the Pencil is
-  down are ignored as palm contact.
+  to move objects, or a drawing tool to draw. Two fingers drag to pan or pinch
+  to zoom in any tool; a brief two-finger tap opens Actions. Touches while the
+  Pencil is down are ignored as palm contact.
+- **The Apple Pencil has its own tool.** Tap a tool with the Pencil to give it
+  to the Pencil (its button gets a pencil badge); tap with a finger to give it
+  to the finger and the mouse. The Pencil starts with Draw, so it draws while
+  a finger selects and moves. With the Pencil, letter keys change the Pencil's
+  tool. The Pencil's pressure sets the line width of Draw strokes (they are
+  saved as filled outlines, `data-ink="pressure"`; their colour is the fill).
+  Both can be turned off under **Pencil and controller** in the panel (nothing
+  selected), which the **Input** group of the toolbar opens.
+- **Controllers and key devices switch tools.** A gamepad works out of the
+  box (press a button to connect it): A Draw, B Erase, X Select, Y Edit points,
+  D-pad up Bézier, D-pad down finger Select, LB/RB undo/redo, LT pans with the
+  Pencil while held, RT returns to the previous Pencil tool, D-pad left/right
+  change slide. Anything that types keys (macro pad, foot pedal, presentation
+  clicker) can be bound too: choose an action under **Pencil and controller**,
+  press **Assign a key or button**, then press it. Actions set the Pencil's
+  or the finger's tool, set a Pencil tool only while held, or run undo, redo,
+  delete, fit and slide changes. Bindings are kept per browser.
 - Everything saves automatically (the status shows Saved). Undo/redo per
   slide. If the same slide was changed elsewhere, saving stops and says so
   rather than overwriting.
@@ -92,7 +117,10 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
 
 ## Presenting
 
-The bottom controls offer Previous, Next, Fullscreen and **Slide overview**.
+The controls are a small bar of icons (previous, slide number, next,
+overview, back to editor, full screen). They show for three seconds at the
+start and then hide; a mouse move, the Tab key, or on a touch screen a tap
+along the bottom edge brings them back. The idle mouse cursor hides too.
 Press **O** or **Escape** to toggle the overview; tap a thumbnail to jump to
 that slide. Overview pauses active movies until returning to the presentation.
 The live service also has **Back to editor**, returning to the current slide.

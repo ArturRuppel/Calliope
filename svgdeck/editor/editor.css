@@ -67,6 +67,7 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .ov-group { fill: none; stroke: #9aa5b1; stroke-dasharray: 6 4; }
 .ov-marquee { fill: rgba(47, 111, 219, .08); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
+.ov-handle.ov-chosen { fill: var(--accent); }
 /* Line ends: hollow rings, so arrowheads under them stay visible. */
 .ov-gridline { fill: none; stroke: rgba(47, 111, 219, .28); }
 .ov-end { fill: rgba(47, 111, 219, .12); stroke: var(--accent); }
@@ -131,3 +132,15 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 @media (max-width: 600px) {
   .tool-category { max-width: 100%; }
 }
+
+/* The Pencil's own tool carries a small pencil badge. */
+.tools .btn[data-tool] { position: relative; }
+.tools .btn[data-pen="true"]::after { content: ""; position: absolute; top: 1px; right: 1px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4 20l1-5L16 4l4 4L9 19z'/%3E%3C/svg%3E") center / 9px no-repeat; }
+.tools .btn[data-pen="true"]:not([aria-pressed="true"]) { border-color: var(--accent); border-style: dashed; }
+.stage[data-tool="erase"] { cursor: cell; }
+.bindings { list-style: none; margin: 6px 0; padding: 0; font-size: 12px; }
+.bindings li { display: grid; grid-template-columns: 7.5rem 1fr auto; gap: 6px; align-items: center; padding: 2px 0;
+  border-bottom: 1px solid var(--line); }
+.bindings .btn.small { height: 26px; padding: 0 7px; }
+.binding-input { font-weight: 600; overflow-wrap: anywhere; }

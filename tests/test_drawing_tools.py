@@ -44,7 +44,7 @@ def test_bezier_handles_subdivision_extension_and_undo(page, server):
     assert selected(page,'e.curvePoints(s)[1].y') == pytest.approx(control['y']+100,abs=2)
     assert selected(page,'e.curvePoints(s)[0].y') == pytest.approx(300,abs=2)
     length = selected(page,'s.getTotalLength()')
-    page.get_by_role('button',name='Add anchors',exact=True).click()
+    page.get_by_role('button',name='Subdivide',exact=True).click()
     assert selected(page,'e.curvePoints(s).length') == 7
     assert selected(page,'s.getTotalLength()') == pytest.approx(length,abs=.1)
     page.get_by_role('button',name='Continue path',exact=True).click()

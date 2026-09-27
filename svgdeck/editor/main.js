@@ -1,6 +1,7 @@
 // svgdeck editor: deck state, saving, undo, slide strip, toolbar, properties.
 import { SlideEditor, firstGlyphElement, cssFamily } from "./canvas.js";
 import { prefixIds, toHex } from "./geom.js";
+import { Controller, DEFAULT_BINDINGS, TOOL_NAMES, actionGroups, actionLabel, inputLabel } from "./inputs.js";
 
 const DECK = document.body.dataset.deck;
 const $ = (id) => document.getElementById(id);
@@ -18,9 +19,10 @@ const TOOLS = [
   ["nodes", "Edit points (N)", "M4 18L8 5l12 5M6 3h4v4H6zM18 8h4v4h-4zM2 16h4v4H2z"],
   ["line", "Line (L)", "M5 19L19 5"],
   ["arrow", "Arrow (A)", "M5 19L19 5M11 5h8v8"],
-  ["pen", "Draw (P) — Pencil or finger", "M4 20c3-1 4-5 7-8s5-6 9-8M16 4l4 4"],
+  ["pen", "Draw (P)", "M4 20c3-1 4-5 7-8s5-6 9-8M16 4l4 4"],
+  ["erase", "Erase (X)", "M15 4l5 5-10 10H6l-3-3zM9 10l5 5M10 19h10"],
 ];
-const KEYS = { c: "circle", g: "polygon", b: "bezier", n: "nodes", v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen" };
+const KEYS = { c: "circle", g: "polygon", b: "bezier", n: "nodes", v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen", x: "erase" };
 
 const api = {
   async json(method, url, body) {
@@ -61,7 +63,8 @@ const state = {
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
-                     weight: 400, size: 48, recent: [], grid: { show: false, snap: false, size: 20 } };
+                     weight: 400, size: 48, recent: [], grid: { show: false, snap: false, size: 20 },
+                     penTool: "pen", penLinked: false, penSeen: false, pressure: true, bindings: { ...DEFAULT_BINDINGS } };
   try { return { ...defaults, ...JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}") }; } catch (e) { return defaults; }
 }
 function savePrefs() {
@@ -113,7 +116,14 @@ const editor = new SlideEditor($("stage"), {
   textStyle: () => ({ family: state.prefs.family || defaultFamily(), weight: state.prefs.weight,
                       size: state.prefs.size, fill: state.prefs.textFill }),
   ensureFont: (family) => ensureFamily(family),
-  toolDone: () => setTool("select", { keepEdit: true }),
+  toolDone: (slot) => setTool("select", { keepEdit: true, slot }),
+  inputChanged: () => { updateToolButtons(); renderPanel(); },
+  usePressure: () => state.prefs.pressure,
+  penFound: () => {
+    state.prefs.penSeen = true; savePrefs();
+    updateToolButtons();
+    if (!state.prefs.penLinked) toast(`The Pencil has its own tool: ${TOOL_NAMES[editor.tools.pen]}. Tap a tool with the Pencil to change it.`, 6000);
+  },
   zoomChanged: (z) => { $("zoom-label").textContent = editor.fitMode ? "fit" : `${Math.round(z * 100)}%`; },
 });
 
@@ -346,15 +356,17 @@ function icon(path) {
   return `<svg viewBox="0 0 24 24" class="icon"><path d="${path}"/></svg>`;
 }
 
+let toolPointer = null;
+
 function buildToolbar() {
   const tools = $("tools");
   for (const [id, title] of [["navigate", "Navigate"], ["insert", "Insert"], ["shapes", "Shapes"],
-      ["paths", "Paths"], ["arrange", "Arrange"], ["view", "View"]]) {
+      ["paths", "Paths"], ["arrange", "Arrange"], ["view", "View"], ["input", "Input"]]) {
     tools.append(el("div", {class:"tool-category", role:"group", "aria-label":title},
       el("span", {class:"category-label"}, title), el("div", {class:"category-tools", id:`tools-${id}`})));
   }
   const category = {select:"navigate", pan:"navigate", text:"insert", rect:"shapes", ellipse:"shapes",
-    circle:"shapes", polygon:"shapes", line:"paths", arrow:"paths", bezier:"paths", nodes:"paths", pen:"paths"};
+    circle:"shapes", polygon:"shapes", line:"paths", arrow:"paths", bezier:"paths", nodes:"paths", pen:"paths", erase:"paths"};
   for (const [name, title, path] of TOOLS) {
     const b = document.createElement("button");
     b.className = "btn tool";
@@ -363,7 +375,14 @@ function buildToolbar() {
     b.setAttribute("aria-label", title);
     b.innerHTML = icon(path);
     b.append(document.createTextNode(title.split(" (")[0]));
-    b.addEventListener("click", () => setTool(name));
+    // Tapped with the Pencil, a tool becomes the Pencil's; otherwise the finger's.
+    b.addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
+    b.addEventListener("click", () => {
+      const pen = toolPointer === "pen";
+      toolPointer = null;
+      if (pen && !editor.penSeen) { editor.penSeen = true; editor.hooks.penFound(); }
+      setTool(name, { slot: pen ? "pen" : "touch" });
+    });
     $(`tools-${category[name]}`).appendChild(b);
   }
   const media = document.createElement("button");
@@ -404,6 +423,26 @@ function buildToggles() {
     el("button", {class:"btn tool", id:"align-tools", onclick:() => revealSection("Align")}, "Align"),
     el("button", {class:"btn tool", id:"text-tools", onclick:() => revealSection("Text")}, "Format text"));
   $("tools-view").append(grid, snap);
+  const pencil = el("button", { class: "btn tool", id: "pen-status", title: "Pencil and controller settings",
+    onclick: () => revealSection("Pencil") });
+  $("tools-input").append(pencil);
+  updateToolButtons();
+}
+
+/** Pressed: the finger's tool. Pencil badge: the Pencil's own tool. */
+function updateToolButtons() {
+  const own = editor.penSeen && !state.prefs.penLinked;
+  for (const b of document.querySelectorAll("#tools [data-tool]")) {
+    b.setAttribute("aria-pressed", String(b.dataset.tool === editor.tools.touch));
+    b.dataset.pen = String(own && b.dataset.tool === editor.tools.pen);
+  }
+  $("stage").dataset.tool = editor.tool;
+  const status = $("pen-status");
+  if (status) {
+    status.innerHTML = icon("M4 20l1-5L16 4l4 4L9 19zM14 6l4 4");
+    status.append(state.prefs.penLinked ? "Pencil: as finger" : `Pencil: ${TOOL_NAMES[editor.tools.pen] || editor.tools.pen}`);
+    status.closest(".tool-category").hidden = !editor.penSeen && !controller.pads.length;
+  }
 }
 
 function revealSection(title) {
@@ -430,22 +469,88 @@ function setGrid(change) {
   if (!editor.selection.length) renderPanel();
 }
 
-function setTool(name, { keepEdit = false } = {}) {
+/** Give a tool to the finger ("touch": also the mouse) or the Pencil. By
+ *  default the input used last; linked, both change together. */
+function setTool(name, { keepEdit = false, slot = editor.input } = {}) {
   if (editor.pathDraft) editor.finishPath();
   closeContextMenu();
   editor.cancelGesture();
   editor.pointers.clear();
   editor.touchStart = null;
   if (editor.textEdit && !keepEdit) editor.endTextEdit(true);
-  editor.tool = name;
+  const previous = editor.tools.pen;
+  if (state.prefs.penLinked) { editor.tools.touch = name; editor.tools.pen = name; }
+  else editor.tools[slot] = name;
+  if (editor.tools.pen !== previous && !state.prefs.penLinked) {
+    state.penPrevious = previous;
+    state.prefs.penTool = editor.tools.pen;
+    savePrefs();
+  }
   if (["polygon", "nodes", "bezier"].includes(name)) document.body.classList.remove("no-panel");
-  for (const b of document.querySelectorAll("#tools [data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === name));
-  $("stage").dataset.tool = name;
+  if (slot === "pen" && !state.prefs.penLinked && editor.penSeen) editor.setInput("pen");
+  updateToolButtons();
   editor.drawOverlay();
   renderPanel();
 }
 
+function setPenLinked(on) {
+  state.prefs.penLinked = on;
+  if (on) editor.tools.pen = editor.tools.touch;
+  else editor.tools.pen = state.prefs.penTool || "pen";
+  savePrefs();
+  updateToolButtons();
+  editor.drawOverlay();
+  renderPanel();
+}
+
+// --- other input devices --------------------------------------------------------------------
+const held = new Map();  // penhold action -> tool to go back to
+function runAction(action, phase) {
+  const [kind, tool] = action.split(":");
+  if (kind === "penhold") {
+    if (phase === "down" && !held.has(action)) {
+      held.set(action, editor.tools.pen);
+      setTool(tool, { slot: "pen", keepEdit: true });
+    } else if (phase === "up" && held.has(action)) {
+      setTool(held.get(action), { slot: "pen", keepEdit: true });
+      held.delete(action);
+    }
+    return;
+  }
+  if (phase !== "down") return;
+  if (kind === "pen" || kind === "touch") {
+    setTool(tool, { slot: kind === "pen" ? "pen" : "touch" });
+    toast(actionLabel(action), 1200);
+    return;
+  }
+  switch (action) {
+    case "pen-swap":
+      if (state.penPrevious) { setTool(state.penPrevious, { slot: "pen" }); toast(actionLabel(`pen:${editor.tools.pen}`), 1200); }
+      break;
+    case "undo": undo(); break;
+    case "redo": redo(); break;
+    case "delete": if (!(editor.usesTool("nodes") && editor.deleteSelectedNode())) editor.deleteSelection(); break;
+    case "fit": editor.fit(); break;
+    case "next-slide": { const s = state.deck.slides[index() + 1]; if (s) openSlide(s.id); break; }
+    case "prev-slide": { const s = state.deck.slides[index() - 1]; if (s) openSlide(s.id); break; }
+  }
+}
+
+const controller = new Controller({
+  run: runAction,
+  bindings: state.prefs.bindings,
+  save: savePrefs,
+  onChange: () => {
+    updateToolButtons();
+    if (!editor.selection.length && !editor.textEdit) renderPanel();
+  },
+});
+window.addEventListener("gamepadconnected", () => {
+  toast("Controller connected: its buttons switch tools. See Pencil and controller in the panel.", 5000);
+});
+
 function updateActions() {
+  if (editor.tools) updateToolButtons();
   const count = editor.selection.length;
   if ($("align-tools")) $("align-tools").disabled = !count;
   if ($("text-tools")) $("text-tools").disabled = !editor.selection.some(e => e.localName === "text");
@@ -594,21 +699,18 @@ function renderPanel() {
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
-  if (editor.tool === "polygon") parts.push(section("Polygon tool",
+  if (editor.usesTool("polygon")) parts.push(section("Polygon tool",
     row("Sides", numberControl(editor.polygonSides || 5, {min:3,max:32,step:1}, v => {editor.polygonSides = Math.max(3,Math.min(32,Math.round(v)));})),
     el("p", {class:"hint"}, "Drag to draw a polygon. Use Edit points to move individual vertices.")));
-  if (["bezier", "nodes"].includes(editor.tool)) parts.push(section("Curve and point editing",
-    el("p", {class:"hint"}, "Click to add connected nodes; drag at a node to pull curve handles. Enter, double-click or right-click finishes. Click the first node to close. Escape cancels; Backspace removes the last node."),
+  if (editor.usesTool("bezier") || editor.pathDraft) parts.push(section("Drawing a path",
+    el("p", {class:"hint"}, "Tap to add points; drag while placing a point to pull out its curve handles. Enter, double-tap or right-click finishes. Tap the first point to close. Escape cancels; Backspace removes the last point."),
     editor.pathDraft ? buttonRow([
       ["Finish path", "Finish path (Enter)", () => editor.finishPath()],
-      ["Close path", "Connect back to the first node", () => editor.finishPath(true)],
-      ["Remove last node", "Remove last node (Backspace)", () => editor.removePathNode()],
+      ["Close path", "Connect back to the first point", () => editor.finishPath(true)],
+      ["Remove last node", "Remove last point (Backspace)", () => editor.removePathNode()],
       ["Cancel path", "Cancel path (Escape)", () => editor.cancelPath()],
-    ]) : null,
-    sel.length === 1 && editor.curvePoints(sel[0]) ? buttonRow([
-      ["Add anchors", "Split each segment without changing its shape", () => editor.splitCurve()],
-      ["Continue path", "Continue drawing from the end of this path", () => {setTool("bezier"); editor.extendCurve();}],
     ]) : null));
+  if (editor.usesTool("nodes") && !editor.pathDraft) parts.push(pointsSection(sel));
   if (editor.textEdit) {
     const base = editor.textEdit.base;
     parts.push(section("Editing text",
@@ -647,6 +749,7 @@ function renderPanel() {
     parts.push(section("New text",
       row("Colour", colorControl(state.prefs.textFill, (c) => { state.prefs.textFill = c; savePrefs(); renderPanel(); }, false)),
       row("Size", numberControl(state.prefs.size, { min: 4, max: 400 }, (v) => { state.prefs.size = v; savePrefs(); }))));
+    parts.push(pencilSection());
     parts.push(section("Fonts", el("p", { class: "hint" }, `${families().length} families in the library.`),
       buttonRow([["Upload font…", "Add an .otf or .ttf file to the font library", () => $("font-file").click()]])));
     parts.push(el("p", { class: "hint" }, "Double-tap text to edit it, or a group to work inside it. Two fingers pan and zoom."));
@@ -658,13 +761,20 @@ function renderPanel() {
   const cs = getComputedStyle(lookOf(first));
   const kinds = new Set(sel.map((e) => e.localName));
   const isMovie = sel.length === 1 && first.hasAttribute("data-video");
+  const inks = sel.every((e) => e.getAttribute("data-ink") === "pressure");
   const texts = sel.filter((e) => e.localName === "text");
-  const lines = sel.filter((e) => ["line", "path", "polyline"].includes(e.localName));
+  const lines = sel.filter((e) => ["line", "path", "polyline"].includes(e.localName) && !e.hasAttribute("data-ink"));
   const label = isMovie ? "Movie" : sel.length > 1 ? `${sel.length} objects` : ({
     text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", line: "Line", path: "Path",
     image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName);
 
-  if (!kinds.has("image") || kinds.size > 1) {
+  if (inks) {
+    // Pressure strokes are filled outlines: their colour is the fill.
+    parts.push(section(sel.length > 1 ? `${sel.length} ink strokes` : "Ink stroke",
+      row("Colour", colorControl(cs.fill, (c) => { editor.setStyle("fill", c); state.prefs.stroke = c; savePrefs(); }, false)),
+      row("Opacity", numberControl(Math.round((parseFloat(cs.opacity) || 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
+        (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
+  } else if (!kinds.has("image") || kinds.size > 1) {
     parts.push(section(label,
       !texts.length || kinds.size > 1 ? row("Fill", colorControl(cs.fill, (c) => { editor.setStyle("fill", c); if (c !== "none") { state.prefs.fill = c; savePrefs(); } }, true)) : null,
       row(texts.length && kinds.size === 1 ? "Colour" : "Line", texts.length && kinds.size === 1
@@ -718,7 +828,7 @@ function renderPanel() {
       buttonRow([["Edit text", "Or double-tap the text", () => editor.editText(texts[0], false)]])));
   }
 
-  if (sel.length === 1 && editor.editableNodes(first) && editor.tool !== "nodes") {
+  if (sel.length === 1 && editor.editableNodes(first) && !editor.usesTool("nodes")) {
     parts.push(section("Points", buttonRow([["Edit points", "Edit anchors and control handles (N)", () => setTool("nodes")]])));
   }
   if (lines.length) {
@@ -767,6 +877,77 @@ function renderPanel() {
                ["Lock", "Make unselectable (e.g. backgrounds)", () => editor.lock()],
                ["Delete", "Delete", () => editor.deleteSelection()]].filter(Boolean))));
   panel.replaceChildren(...parts.filter(Boolean));
+}
+
+/** Point editing: the chosen point's type, adding and removing points. */
+function pointsSection(sel) {
+  const target = sel.length === 1 && editor.nodeModel(sel[0]);
+  if (!target) return section("Edit points", el("p", { class: "hint" }, "Select a path, curve or polygon to edit its points."));
+  const chosen = editor.selectedNode();
+  const isPath = target.kind === "path";
+  const total = target.subs.reduce((n, s) => n + s.nodes.length, 0);
+  const closed = target.subs[chosen ? chosen.sub : 0].closed;
+  const type = chosen?.node.type;
+  return section("Edit points",
+    el("p", { class: "hint" }, "Tap a point to choose it, then drag it or its handles. Double-tap the outline to add a point there."),
+    chosen ? row("Point", el("span", {}, `${chosen.i + 1} of ${target.subs[chosen.sub].nodes.length}` +
+      (target.subs.length > 1 ? ` (part ${chosen.sub + 1} of ${target.subs.length})` : ""))) : null,
+    chosen && isPath ? row("Type", buttonRow([
+      ["Corner", "Handles move independently", () => editor.setNodeType("c"), type === "c"],
+      ["Smooth", "Handles stay in line", () => editor.setNodeType("s"), type === "s"],
+      ["Symmetric", "Handles stay in line and equally long", () => editor.setNodeType("z"), type === "z"]])) : null,
+    chosen ? buttonRow([
+      ["Add point", "Add a point halfway to the next one", () => editor.insertNodeAfterSelected()],
+      ["Delete point", "Delete the chosen point (Delete)", () => editor.deleteSelectedNode()]]) : null,
+    chosen && isPath ? row("Segment", buttonRow([
+      ["Straight", "Make the segment after this point a straight line", () => editor.setSegment("line")],
+      ["Curved", "Give the segment after this point curve handles", () => editor.setSegment("curve")]])) : null,
+    buttonRow([
+      ["Subdivide", "Add a point in the middle of every segment, keeping the shape", () => editor.splitCurve()],
+      isPath && target.subs.length === 1 && !closed ? ["Continue path", "Continue drawing from the end of this path", () => { setTool("bezier"); editor.extendCurve(); }] : null,
+      [closed ? "Open path" : "Close path", closed ? "Open the outline at the chosen point" : "Join the ends", () => editor.toggleClosed()],
+    ].filter(Boolean)),
+    !chosen ? el("p", { class: "hint" }, `${total} points.`) : null);
+}
+
+/** Pencil tool and the bindings of other input devices. */
+function pencilSection() {
+  const linked = state.prefs.penLinked;
+  const toolSelect = el("select", { "aria-label": "Pencil tool", disabled: linked },
+    Object.entries(TOOL_NAMES).map(([id, name]) => el("option", { value: id, selected: id === editor.tools.pen }, name)));
+  toolSelect.onchange = () => runAction(`pen:${toolSelect.value}`, "down");
+  const bindings = Object.entries(state.prefs.bindings).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  const actionSelect = el("select", { "aria-label": "Action to assign" }, actionGroups().map(([label, ids]) =>
+    el("optgroup", { label }, ids.map((id) => el("option", { value: id }, actionLabel(id))))));
+  const learn = el("button", { class: "btn small", onclick: () => {
+    learn.textContent = "Press a key or controller button… (Esc cancels)";
+    learn.classList.add("on");
+    controller.learn(actionSelect.value, (input) => {
+      if (input) toast(`${inputLabel(input)} → ${actionLabel(actionSelect.value)}`);
+      renderPanel();
+    });
+  } }, "Assign a key or button");
+  return section("Pencil and controller",
+    el("label", { class: "check" }, el("input", { type: "checkbox", checked: !linked,
+      onchange: (e) => setPenLinked(!e.target.checked) }), "The Pencil has its own tool"),
+    row("Pencil", toolSelect),
+    el("label", { class: "check" }, el("input", { type: "checkbox", checked: state.prefs.pressure,
+      onchange: (e) => { state.prefs.pressure = e.target.checked; savePrefs(); } }), "Pressure changes the line width"),
+    el("p", { class: "hint" }, "Tap a tool with the Pencil to give it to the Pencil; tap with a finger to give it to your finger and the mouse. " +
+      (editor.penSeen ? "" : "(Pencil not used yet in this browser.)")),
+    el("p", { class: "hint" }, controller.pads.length ? `Controller: ${controller.pads.join(", ")}` :
+      "Controllers and key devices (macro pads, pedals, clickers) can switch tools. Press a controller button to connect it."),
+    el("ul", { class: "bindings" }, bindings.map(([input, action]) => el("li", {},
+      el("span", { class: "binding-input" }, inputLabel(input)), el("span", {}, actionLabel(action)),
+      el("button", { class: "btn small", title: `Remove ${inputLabel(input)}`, "aria-label": `Remove ${inputLabel(input)}`,
+        onclick: () => controller.unbind(input) }, "✕")))),
+    row("Action", actionSelect),
+    learn,
+    buttonRow([["Default controller layout", "Restore the default controller buttons", () => {
+      for (const k of Object.keys(state.prefs.bindings)) if (k.startsWith("pad:")) delete state.prefs.bindings[k];
+      Object.assign(state.prefs.bindings, DEFAULT_BINDINGS);
+      savePrefs(); renderPanel();
+    }]]));
 }
 
 /** The element whose style shows an object's look: a text's first glyph, a
@@ -819,8 +1000,11 @@ function installFaces(faces) {
 }
 
 // --- keyboard ------------------------------------------------------------------------------------
+document.addEventListener("keyup", (e) => { controller.keyup(e); });
 document.addEventListener("keydown", (e) => {
+  if (controller.learning) { controller.keydown(e); return; }
   if (e.target.closest("input, textarea, select") || editor.textEdit) return;
+  if (controller.keydown(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
   if (editor.pathDraft && ["enter", "escape", "backspace", "delete"].includes(k)) {
@@ -845,8 +1029,17 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (mod) return;
-  if (k === "delete" || k === "backspace") { e.preventDefault(); editor.deleteSelection(); return; }
-  if (k === "escape") { if (!editor.exitGroup()) editor.select([]); setTool("select"); return; }
+  if (k === "delete" || k === "backspace") {
+    e.preventDefault();
+    if (!(editor.usesTool("nodes") && editor.deleteSelectedNode())) editor.deleteSelection();
+    return;
+  }
+  if (k === "escape") {
+    if (editor.nodeSel && editor.selectedNode()) { editor.nodeSel = null; editor.drawOverlay(); renderPanel(); return; }
+    if (!editor.exitGroup()) editor.select([]);
+    setTool("select");
+    return;
+  }
   if (k.startsWith("arrow") && editor.selection.length) {
     e.preventDefault();
     const d = e.shiftKey ? 10 : 1;
@@ -861,7 +1054,10 @@ document.addEventListener("keydown", (e) => {
     else if (s.localName === "g") { e.preventDefault(); editor.enterGroup(s); }
     return;
   }
-  if (KEYS[k]) setTool(KEYS[k]);
+  if (KEYS[k]) {
+    setTool(KEYS[k]);
+    if (editor.input === "pen") toast(actionLabel(`pen:${KEYS[k]}`), 1200);
+  }
 });
 
 // The clipboard lives in localStorage, so it works across slides and decks.
@@ -952,6 +1148,8 @@ function wire() {
 
 async function main() {
   wire();
+  editor.tools.pen = state.prefs.penLinked ? "select" : state.prefs.penTool || "pen";
+  editor.penSeen = !!state.prefs.penSeen;
   buildToolbar();
   buildToggles();
   Object.assign(editor.grid, state.prefs.grid);
@@ -977,4 +1175,4 @@ async function main() {
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush };
+window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool };

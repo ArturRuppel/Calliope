@@ -112,10 +112,13 @@ exported `index.html`. Font files are licensed and never go into this repo.
   sub/superscript and colour on selected words), align and distribute,
   grid snapping with adjustable spacing, select several by tapping.
 - Build steps.
-- Pencil pressure, eraser.
+- Done 2026-09-27: Pencil pressure, eraser; the Pencil and the finger keep
+  their own tools; gamepads and key devices switch tools; point editing on
+  every path with corner/smooth/symmetric points, adding and deleting points;
+  small auto-hiding presenter controls.
 - Snapping to other objects, guides.
 - Clip to a rectangle or ellipse.
-- Bézier path editing.
+- Bézier path editing (done, see above).
 - Reusable pieces: title bar, scale bar, citation line, slide number.
 - Copy objects between slides and decks.
 
