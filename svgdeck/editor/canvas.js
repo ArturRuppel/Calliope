@@ -2118,6 +2118,47 @@ export class SlideEditor {
     });
   }
 
+  /** Turn the selection as one piece around the centre of its box. */
+  rotateBy(deg) {
+    const box = this.selectionBox();
+    if (!box) return;
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(cx, cy).rotateSelf(deg).translateSelf(-cx, -cy)));
+  }
+
+  /** Mirror the selection as one piece: "x" flips left–right, "y" top–bottom. */
+  flip(axis) {
+    const box = this.selectionBox();
+    if (!box) return;
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    const [sx, sy] = axis === "x" ? [-1, 1] : [1, -1];
+    this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(cx, cy).scaleSelf(sx, sy).translateSelf(-cx, -cy)));
+  }
+
+  /** An object's rotation on the slide in degrees, -180 to 180. */
+  angleOf(el) {
+    const m = toRoot(el, this.svg);
+    const flipped = m.a * m.d - m.b * m.c < 0;
+    // A mirrored object reads its angle from the unmirrored y axis.
+    const deg = flipped ? Math.atan2(-m.c, m.d) * 180 / Math.PI : Math.atan2(m.b, m.a) * 180 / Math.PI;
+    return Math.abs(deg) < 1e-6 ? 0 : deg;
+  }
+
+  /** Turn each selected object around its own centre to the given angle. */
+  setAngle(deg) {
+    const snaps = this.snapshot();
+    this.change(() => {
+      for (const s of snaps) {
+        const b = rootBox(s.el, this.svg);
+        if (!b) continue;
+        const d = deg - this.angleOf(s.el);
+        if (Math.abs(d) < 0.01) continue;  // transforms are stored to six decimals
+        const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+        this.applyDelta([s], new DOMMatrix().translateSelf(cx, cy).rotateSelf(d).translateSelf(-cx, -cy));
+      }
+    });
+  }
+
   lock() {
     this.change(() => { for (const el of this.selection) el.setAttribute("data-locked", "true"); this.selection = []; });
   }

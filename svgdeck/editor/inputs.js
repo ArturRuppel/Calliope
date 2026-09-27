@@ -4,7 +4,7 @@
 //   pen:<tool>      the Pencil's tool          touch:<tool>  the finger's tool
 //   penhold:<tool>  the Pencil's tool while held, then back
 //   pen-swap        the Pencil's previous tool
-//   undo, redo, delete, fit, next-slide, prev-slide
+//   undo, redo, delete, fit, next-slide, prev-slide, rotate-left, rotate-right, flip-x, flip-y
 
 export const TOOL_NAMES = {
   select: "Select", pan: "Pan", pen: "Draw", erase: "Erase", bezier: "Bézier", nodes: "Edit points",
@@ -14,6 +14,7 @@ export const TOOL_NAMES = {
 const COMMANDS = {
   "pen-swap": "Pencil: previous tool", undo: "Undo", redo: "Redo", delete: "Delete selection",
   fit: "Fit slide", "next-slide": "Next slide", "prev-slide": "Previous slide",
+  "rotate-left": "Rotate 90° left", "rotate-right": "Rotate 90° right", "flip-x": "Flip horizontal", "flip-y": "Flip vertical",
 };
 
 export function actionLabel(id) {
@@ -31,7 +32,8 @@ export function actionGroups() {
     ["Pencil tool", tools.map((t) => `pen:${t}`).concat("pen-swap")],
     ["Pencil tool while held", ["erase", "select", "pan", "nodes", "pen"].map((t) => `penhold:${t}`)],
     ["Finger tool", tools.map((t) => `touch:${t}`)],
-    ["Commands", ["undo", "redo", "delete", "fit", "next-slide", "prev-slide"]],
+    ["Commands", ["undo", "redo", "delete", "fit", "next-slide", "prev-slide",
+      "rotate-left", "rotate-right", "flip-x", "flip-y"]],
   ];
 }
 

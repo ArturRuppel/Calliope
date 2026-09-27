@@ -692,6 +692,10 @@ function runAction(action, phase) {
     case "redo": redo(); break;
     case "delete": if (!(editor.usesTool("nodes") && editor.deleteSelectedNode())) editor.deleteSelection(); break;
     case "fit": editor.fit(); break;
+    case "rotate-left": editor.rotateBy(-90); break;
+    case "rotate-right": editor.rotateBy(90); break;
+    case "flip-x": editor.flip("x"); break;
+    case "flip-y": editor.flip("y"); break;
     case "next-slide": { const s = state.deck.slides[index() + 1]; if (s) openSlide(s.id); break; }
     case "prev-slide": { const s = state.deck.slides[index() - 1]; if (s) openSlide(s.id); break; }
   }
@@ -976,6 +980,13 @@ function showContextMenu(x, y) {
   }
   if (clipboardData()) action("Paste", pasteClipboard, { key: "⌘V" });
   if (count) action("Duplicate", () => editor.duplicate(), { key: "⌘D" });
+  if (count) {
+    sep();
+    action("Rotate 90° left", () => editor.rotateBy(-90));
+    action("Rotate 90° right", () => editor.rotateBy(90));
+    action("Flip horizontal", () => editor.flip("x"));
+    action("Flip vertical", () => editor.flip("y"));
+  }
   sep();
   action("Group", () => { setTool("select"); editor.group(); }, { enabled: count > 1, key: "⌘G" });
   if (selection.some((item) => item.localName === "g")) action("Ungroup", () => { setTool("select"); editor.ungroup(); }, { key: "⇧⌘G" });
@@ -1174,6 +1185,12 @@ function buttonRow(buttons) {
     el("button", { class: "btn small" + (on ? " on" : ""), title, onclick: fn }, label)));
 }
 
+function iconButton(title, d, fn) {
+  const b = el("button", { type: "button", class: "btn small", title, "aria-label": title, onclick: fn });
+  b.innerHTML = icon(d);
+  return b;
+}
+
 function families() {
   return [...new Set(state.faces.map((f) => f.family))].sort();
 }
@@ -1334,6 +1351,18 @@ function renderPanel() {
     parts.push(section("Playback", check("data-autoplay", "Play automatically", true), check("data-loop", "Loop", true),
       row("Sync group", sync),
       el("p", { class: "hint" }, "Movies with the same sync group continue across slides without restarting.")));
+  }
+
+  if (!editor.lineMode()) {
+    const angles = sel.map((e) => Math.round(editor.angleOf(e) * 10) / 10);
+    const angle = angles.every((a) => a === angles[0]) ? angles[0] : 0;
+    parts.push(section("Rotate and flip",
+      row("Angle", numberControl(angle, { min: -360, max: 360, step: 1, suffix: "°" }, (v) => editor.setAngle(((v + 180) % 360 + 360) % 360 - 180))),
+      el("div", { class: "buttons" },
+        iconButton("Rotate 90° left", "M4 12a8 8 0 1 0 2.3-5.7M4 4v5h5", () => editor.rotateBy(-90)),
+        iconButton("Rotate 90° right", "M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5", () => editor.rotateBy(90)),
+        iconButton("Flip horizontal", "M12 3v3M12 10.5v3M12 18v3M9 6L3 18h6zM15 6l6 12h-6z", () => editor.flip("x")),
+        iconButton("Flip vertical", "M3 12h3M10.5 12h3M18 12h3M6 9l12-6v6zM6 15l12 6v-6z", () => editor.flip("y")))));
   }
 
   const steps = new Set(sel.map((e) => Number.parseInt(e.getAttribute("data-step") || "0", 10) || 0));

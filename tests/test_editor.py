@@ -420,6 +420,16 @@ def rect_boxes(page):
                   return [Math.round(b.x + s.e), Math.round(b.y + s.f), Math.round(b.width), Math.round(b.height)]; })""")
 
 
+def rect_boxes_rotated(page):
+    """Slide-space bounding boxes, which stay right for rotated rects."""
+    return page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('rect:not([data-locked])'))
+      .map(r => { const b = r.getBBox(), m = svgdeckEditor.editor.svg.getCTM().inverse().multiply(r.getCTM());
+                  const p = [[b.x, b.y], [b.x + b.width, b.y + b.height], [b.x, b.y + b.height], [b.x + b.width, b.y]]
+                    .map(([x, y]) => new DOMPoint(x, y).matrixTransform(m));
+                  const xs = p.map(q => q.x), ys = p.map(q => q.y);
+                  return [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)].map(Math.round); })""")
+
+
 def test_bold_on_selected_words_while_editing(page, server):
     page.keyboard.press("t")
     page.mouse.click(*to_screen(page, 300, 300))
@@ -506,6 +516,37 @@ def test_align_and_distribute(page, server):
     align(page, "Align centres")
     b = [b for b in rect_boxes(page) if b[2] == 100 and b[3] == 100][0]
     assert b[0] == 910
+
+
+def test_rotate_and_flip(page, server):
+    add_rects(page, [[100, 100, 200, 100], [500, 100, 100, 100]])
+    page.evaluate("svgdeckEditor.editor.selectAll()")
+
+    def menu(name):
+        page.click("#object-actions")
+        page.locator("#context-menu").get_by_role("menuitem", name=name).click()
+
+    # Flipping mirrors the pair around their shared centre (x 100..600) and keeps plain rects.
+    menu("Flip horizontal")
+    assert sorted(rect_boxes(page)) == [[100, 100, 100, 100], [400, 100, 200, 100]]
+    assert "transform" not in saved_slide(page, server)
+    # A quarter turn turns the pair as one piece around its centre (350, 150).
+    menu("Rotate 90° right")
+    assert page.evaluate("svgdeckEditor.editor.selection.map(e => Math.round(svgdeckEditor.editor.angleOf(e)))") == [90, 90]
+    assert sorted(rect_boxes_rotated(page)) == [[300, -100, 100, 100], [300, 200, 100, 200]]
+    # The angle field turns each object around its own centre.
+    page.get_by_role("tab", name="Design").click()
+    field = page.locator("#panel section", has_text="Rotate and flip").locator("input[type=number]")
+    assert field.input_value() == "90"
+    field.fill("30")
+    field.dispatch_event("change")
+    assert page.evaluate("svgdeckEditor.editor.selection.map(e => Math.round(svgdeckEditor.editor.angleOf(e)))") == [30, 30]
+    # A mirror counts as a left-right flip, so a vertical flip adds half a turn.
+    page.locator("#panel").get_by_title("Flip vertical", exact=True).click()
+    assert page.evaluate("svgdeckEditor.editor.selection.map(e => Math.round(svgdeckEditor.editor.angleOf(e)))") == [150, 150]
+    for _ in range(4):
+        page.keyboard.press("Control+z")
+    assert sorted(rect_boxes(page)) == [[100, 100, 200, 100], [500, 100, 100, 100]]
 
 
 def test_saving_does_not_fetch_media_from_the_wrong_place(page, server):
