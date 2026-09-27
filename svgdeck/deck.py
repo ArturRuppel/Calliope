@@ -87,13 +87,14 @@ def font_faces(fonts: list[dict], files: dict[str, str] | None = None) -> str:
     return "\n".join(rules)
 
 
-def render_page(deck: Deck, font_files: dict[str, str] | None = None) -> str:
+def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None) -> str:
     """The self-contained player page: player, styles and all slides inline.
 
     Media and fonts stay as files next to the page (media/, fonts/)."""
     data = dict(deck.meta, slides=deck.slide_sources())
     # "</" would end the <script> element early.
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
+    options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("</", "<\\/")
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -114,7 +115,7 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None) -> str:
 </script>
 <script>
 SvgDeck.start(document.getElementById("svgdeck"),
-  JSON.parse(document.getElementById("svgdeck-data").textContent), {{slideBase: "slides/"}});
+  JSON.parse(document.getElementById("svgdeck-data").textContent), {options});
 </script>
 </body>
 </html>

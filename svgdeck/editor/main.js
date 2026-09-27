@@ -101,7 +101,7 @@ const editor = new SlideEditor($("stage"), {
     rec.redo = [];
     markDirty(state.current, after);
   },
-  select() { closeContextMenu(); updateActions(); renderPanel(); updateBreadcrumb(); },
+  select() { closeContextMenu(); updateActions(); renderPanel(); updateBreadcrumb(); refreshStatus(); },
   contextMenu: (x, y) => showContextMenu(x, y),
   textChanged(text) {
     const rec = state.slides.get(state.current);
@@ -178,10 +178,12 @@ function refreshStatus() {
   else if (recs.some((r) => r.saving)) setStatus("Saving…", "busy");
   else if (recs.some((r) => r.saveError)) setStatus("Not saved", "error");
   else if (recs.some((r) => r.dirty)) setStatus("Unsaved", "dirty");
+  else if (editor.pathDraft) setStatus("Drawing path…", "busy");
   else setStatus("Saved", "ok");
 }
 
 async function flush() {
+  editor.finishPath();
   editor.syncTextEdit();
   while (true) {
     const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
@@ -191,7 +193,7 @@ async function flush() {
 }
 
 window.addEventListener("beforeunload", (e) => {
-  if ([...state.slides.values()].some((r) => r.dirty || r.saving)) { e.preventDefault(); e.returnValue = ""; }
+  if (editor.pathDraft?.nodes.length || [...state.slides.values()].some((r) => r.dirty || r.saving)) { e.preventDefault(); e.returnValue = ""; }
 });
 document.addEventListener("visibilitychange", () => { if (document.hidden) flush().catch(() => {}); });
 
@@ -429,13 +431,14 @@ function setGrid(change) {
 }
 
 function setTool(name, { keepEdit = false } = {}) {
+  if (editor.pathDraft) editor.finishPath();
   closeContextMenu();
   editor.cancelGesture();
   editor.pointers.clear();
   editor.touchStart = null;
   if (editor.textEdit && !keepEdit) editor.endTextEdit(true);
   editor.tool = name;
-  if (["polygon", "nodes"].includes(name)) document.body.classList.remove("no-panel");
+  if (["polygon", "nodes", "bezier"].includes(name)) document.body.classList.remove("no-panel");
   for (const b of document.querySelectorAll("#tools [data-tool]")) b.setAttribute("aria-pressed", String(b.dataset.tool === name));
   $("stage").dataset.tool = name;
   editor.drawOverlay();
@@ -595,10 +598,16 @@ function renderPanel() {
     row("Sides", numberControl(editor.polygonSides || 5, {min:3,max:32,step:1}, v => {editor.polygonSides = Math.max(3,Math.min(32,Math.round(v)));})),
     el("p", {class:"hint"}, "Drag to draw a polygon. Use Edit points to move individual vertices.")));
   if (["bezier", "nodes"].includes(editor.tool)) parts.push(section("Curve and point editing",
-    el("p", {class:"hint"}, "Drag with Bézier to create a curve. Choose Edit points to drag anchors or round control handles. Moving an anchor carries its handles with it."),
+    el("p", {class:"hint"}, "Click to add connected nodes; drag at a node to pull curve handles. Enter, double-click or right-click finishes. Click the first node to close. Escape cancels; Backspace removes the last node."),
+    editor.pathDraft ? buttonRow([
+      ["Finish path", "Finish path (Enter)", () => editor.finishPath()],
+      ["Close path", "Connect back to the first node", () => editor.finishPath(true)],
+      ["Remove last node", "Remove last node (Backspace)", () => editor.removePathNode()],
+      ["Cancel path", "Cancel path (Escape)", () => editor.cancelPath()],
+    ]) : null,
     sel.length === 1 && editor.curvePoints(sel[0]) ? buttonRow([
       ["Add anchors", "Split each segment without changing its shape", () => editor.splitCurve()],
-      ["Extend curve", "Add a segment at the end of the curve", () => editor.extendCurve()],
+      ["Continue path", "Continue drawing from the end of this path", () => {setTool("bezier"); editor.extendCurve();}],
     ]) : null));
   if (editor.textEdit) {
     const base = editor.textEdit.base;
@@ -814,6 +823,14 @@ document.addEventListener("keydown", (e) => {
   if (e.target.closest("input, textarea, select") || editor.textEdit) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  if (editor.pathDraft && ["enter", "escape", "backspace", "delete"].includes(k)) {
+    e.preventDefault();
+    if (k === "enter") editor.finishPath(e.shiftKey);
+    else if (k === "escape") editor.cancelPath();
+    else editor.removePathNode();
+    return;
+  }
+  if (editor.pathDraft && mod && k === "z") { e.preventDefault(); editor.removePathNode(); return; }
   if (mod && k === "z") { e.preventDefault(); (e.shiftKey ? redo : undo)(); return; }
   if (mod && k === "y") { e.preventDefault(); redo(); return; }
   if (mod && k === "d") { e.preventDefault(); editor.duplicate(); return; }

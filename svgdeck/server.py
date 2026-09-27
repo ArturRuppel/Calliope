@@ -80,7 +80,7 @@ def create_app(data: Path) -> FastAPI:
 
     @app.get("/d/{name}/", response_class=HTMLResponse)
     def present(name: str):
-        return render_page(Deck.load(deck_dir(name)))
+        return render_page(Deck.load(deck_dir(name)), editor_url=f"/edit/{name}")
 
     @app.get("/d/{name}/{path:path}")
     def deck_file(name: str, path: str):

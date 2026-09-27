@@ -174,6 +174,7 @@ export class SlideEditor {
 
   // --- loading and saving --------------------------------------------------
   load(text, { keepView = false } = {}) {
+    this.pathDraft = null;
     this.endTextEdit(false);
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
     if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") {
@@ -439,6 +440,21 @@ export class SlideEditor {
       o.appendChild(el);
       return el;
     };
+    if (this.pathDraft) {
+      const draft = this.pathDraft;
+      const nodes = [...draft.nodes];
+      if (this.gesture?.kind === "path-node") nodes.push(this.gesture.node);
+      else if (draft.hover) nodes.push(this.pathNode(draft.hover));
+      if (nodes.length > 1) make("path", {d:this.pathData(nodes), class:"ov-box", "stroke-width":2*px});
+      for (const [i,n] of nodes.entries()) {
+        make("rect", {x:n.x-5*px,y:n.y-5*px,width:10*px,height:10*px,class:"ov-handle", "stroke-width":2*px});
+        if (n.out.x !== n.x || n.out.y !== n.y) {
+          make("line", {x1:n.in.x,y1:n.in.y,x2:n.out.x,y2:n.out.y,class:"ov-box","stroke-width":px});
+          for (const h of [n.in,n.out]) make("circle",{cx:h.x,cy:h.y,r:4*px,class:"ov-handle","stroke-width":px});
+        }
+      }
+      return;
+    }
     if (this.context !== this.svg) {
       const b = rootBox(this.context, this.svg);
       if (b) make("rect", { x: b.x, y: b.y, width: b.width, height: b.height, class: "ov-group", "stroke-width": px });
@@ -555,6 +571,7 @@ export class SlideEditor {
 
   // --- pointer handling ---------------------------------------------------------
   openContextMenu(x, y, preserveSelection = false) {
+    if (this.pathDraft) { this.finishPath(); return; }
     if (!this.svg) return;
     this.endTextEdit(true);
     this.lastTap = null;
@@ -617,16 +634,81 @@ export class SlideEditor {
     switch (this.tool) {
       case "select": return this.downSelect(e, p, base);
       case "nodes": return this.downNode(e, p, base);
+      case "bezier": return this.downPath(p, base);
       case "pen": return this.downPen(p, base);
       case "text": this.gesture = { kind: "text", ...base }; return;
       default: this.gesture = { kind: "create", shape: this.tool, ...base }; return;
     }
   }
 
+  pathNode(p) { return {x:p.x,y:p.y,in:{...p},out:{...p}}; }
+
+  pathData(nodes, closed = false) {
+    const point = p => `${+p.x.toFixed(3)},${+p.y.toFixed(3)}`;
+    let d = `M${point(nodes[0])}`;
+    const list = closed ? [...nodes,nodes[0]] : nodes;
+    for (let i=1;i<list.length;i++) d += ` C${point(list[i-1].out)} ${point(list[i].in)} ${point(list[i])}`;
+    return d + (closed ? " Z" : "");
+  }
+
+  downPath(p, base) {
+    p = this.snapPoint(p);
+    if (!this.pathDraft) {
+      const el = this.selection.length === 1 && this.selection[0], points = this.curvePoints(el);
+      if (points && !/Z\s*$/i.test(el.getAttribute("d"))) {
+        const m=toRoot(el,this.svg);
+        for (const [index,reverse] of [[0,true],[points.length-1,false]]) {
+          const q=m.transformPoint(new DOMPoint(points[index].x,points[index].y));
+          if (Math.hypot(q.x-p.x,q.y-p.y)*this.zoom < 14) {this.extendCurve(reverse); return;}
+        }
+      }
+      this.pathDraft = {nodes:[],hover:null}; this.select([]);
+    }
+    const draft = this.pathDraft, first = draft.nodes[0], last = draft.nodes.at(-1);
+    const near = a => a && Math.hypot(a.x-p.x,a.y-p.y)*this.zoom < (base.pointerType === "touch" ? 18 : 10);
+    if (draft.nodes.length > 2 && near(first)) { this.finishPath(true); return; }
+    if (draft.nodes.length > 1 && near(last) && performance.now()-draft.lastAt < 450) { this.finishPath(); return; }
+    this.gesture = {kind:"path-node",...base,node:this.pathNode(p)};
+    draft.hover = null;
+    this.drawOverlay();
+  }
+
+  finishPath(closed = false) {
+    const draft = this.pathDraft;
+    if (!draft) return;
+    this.cancelGesture();
+    this.pathDraft = null;
+    if (draft.nodes.length > 1 && !(draft.source && !closed && this.pathData(draft.nodes) === draft.initialData)) this.change(() => {
+      const path = draft.source || this.newShape("bezier");
+      let nodes = draft.nodes;
+      if (draft.source) {
+        const inverse=toRoot(path,this.svg).inverse();
+        const convert=p=>{const q=inverse.transformPoint(new DOMPoint(p.x,p.y)); return {x:q.x,y:q.y};};
+        nodes=nodes.map(n=>({...convert(n),in:convert(n.in),out:convert(n.out)}));
+      }
+      path.setAttribute("d",this.pathData(nodes,closed));
+      if (!draft.source) this.adopt(path);
+      this.selection = [path];
+    });
+    this.drawOverlay();
+    this.hooks.select(this.selection);
+  }
+
+  cancelPath() {
+    this.cancelGesture(); this.pathDraft = null; this.drawOverlay(); this.hooks.select(this.selection);
+  }
+
+  removePathNode() {
+    if (!this.pathDraft) return;
+    this.pathDraft.nodes.pop();
+    if (!this.pathDraft.nodes.length) this.cancelPath();
+    else { this.drawOverlay(); this.hooks.select(this.selection); }
+  }
+
   // Native SVG geometry remains the source of truth; there is no stale sidecar.
   curvePoints(el) {
     if (el?.localName !== "path") return null;
-    const d = el.getAttribute("d") || "";
+    const d = (el.getAttribute("d") || "").replace(/Z\s*$/i, "");
     const num = "[-+]?(?:\\d*\\.\\d+|\\d+\\.?\\d*)(?:[eE][-+]?\\d+)?";
     const pair = `${num}[ ,]+${num}`;
     if (!new RegExp(`^\\s*M\\s*${pair}(?:\\s*C\\s*${pair}[ ,]+${pair}[ ,]+${pair})+\\s*$`).test(d)) return null;
@@ -637,7 +719,7 @@ export class SlideEditor {
 
   writeCurve(el, points) {
     const p = points.map(q => `${+q.x.toFixed(3)},${+q.y.toFixed(3)}`);
-    el.setAttribute("d", `M${p[0]} ` + Array.from({length:(p.length-1)/3}, (_,i) => `C${p.slice(i*3+1,i*3+4).join(" ")}`).join(" "));
+    el.setAttribute("d", `M${p[0]} ` + Array.from({length:(p.length-1)/3}, (_,i) => `C${p.slice(i*3+1,i*3+4).join(" ")}`).join(" ") + (/Z\s*$/i.test(el.getAttribute("d") || "") ? " Z" : ""));
   }
 
   editableNodes(el) {
@@ -671,13 +753,18 @@ export class SlideEditor {
     if (picked && !this.editableNodes(picked)) this.hooks.toast("Choose a Bézier curve or polygon to edit its points.");
   }
 
-  extendCurve() {
+  extendCurve(reverse = false) {
     const el = this.selection[0], points = this.curvePoints(el);
     if (!points) return;
-    const end = points.at(-1), previous = points.at(-2);
-    const dx = end.x-previous.x, dy=end.y-previous.y;
-    points.push({x:end.x+dx,y:end.y+dy}, {x:end.x+160,y:end.y}, {x:end.x+240,y:end.y});
-    this.change(() => this.writeCurve(el,points));
+    if (/Z\s*$/i.test(el.getAttribute("d") || "")) { this.hooks.toast("This path is closed; edit its existing points or draw a new path."); return; }
+    if (reverse) points.reverse();
+    const matrix = toRoot(el,this.svg);
+    const convert = p => {const q=matrix.transformPoint(new DOMPoint(p.x,p.y)); return {x:q.x,y:q.y};};
+    const nodes = [];
+    for (let i=0;i<points.length;i+=3) nodes.push({...convert(points[i]),
+      in:convert(points[i-1] || points[i]),out:convert(points[i+1] || points[i])});
+    this.pathDraft = {nodes,source:el,hover:null,initialData:this.pathData(nodes)};
+    this.drawOverlay(); this.hooks.select(this.selection);
   }
 
   splitCurve() {
@@ -757,7 +844,10 @@ export class SlideEditor {
     const ptr = this.pointers.get(e.pointerId);
     if (ptr) { ptr.x = e.clientX; ptr.y = e.clientY; }
     const g = this.gesture;
-    if (!g) return;
+    if (!g) {
+      if (this.pathDraft) { this.pathDraft.hover = this.snapPoint(this.point(e)); this.drawOverlay(); }
+      return;
+    }
     if (g.kind === "pinch") return this.movePinch();
     if (g.id !== e.pointerId) return;
     if (g.kind === "pan") {
@@ -782,6 +872,12 @@ export class SlideEditor {
         this.applyDelta(g.snaps, new DOMMatrix().translateSelf(dx, dy));
         break;
       }
+      case "path-node": {
+        const q = this.snapPoint(p), a = g.node;
+        a.out = {x:q.x,y:q.y};
+        a.in = {x:2*a.x-q.x,y:2*a.y-q.y};
+        break;
+      }
       case "node": {
         const q = g.inverse.transformPoint(new DOMPoint(p.x, p.y));
         const points = g.points.map(v => ({...v}));
@@ -789,6 +885,12 @@ export class SlideEditor {
         points[g.index] = {x: q.x, y: q.y};
         if (g.curve && g.index % 3 === 0) {
           for (const i of [g.index - 1, g.index + 1]) if (points[i]) { points[i].x += dx; points[i].y += dy; }
+        }
+        if (g.curve && /Z\s*$/i.test(g.original) && (g.index === 0 || g.index === points.length-1)) {
+          const other = g.index === 0 ? points.length-1 : 0;
+          points[other] = {...points[g.index]};
+          const handle = other === 0 ? 1 : other-1;
+          points[handle].x += dx; points[handle].y += dy;
         }
         if (g.curve) this.writeCurve(g.el, points);
         else g.el.setAttribute("points", points.map(v => `${v.x},${v.y}`).join(" "));
@@ -943,6 +1045,13 @@ export class SlideEditor {
     this.gesture = null;
     const p = this.point(e);
     switch (g.kind) {
+      case "path-node":
+        this.pathDraft.nodes.push(g.node);
+        this.pathDraft.hover = null;
+        this.pathDraft.lastAt = performance.now();
+        this.drawOverlay();
+        this.hooks.select(this.selection);
+        return;
       case "pan": return;
       case "move": case "resize": case "rotate": case "endpoint": case "node":
         this.commit();

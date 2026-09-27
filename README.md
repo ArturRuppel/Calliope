@@ -41,12 +41,17 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   sides in the properties panel before drawing. Edit points (N) lets you move
   polygon vertices independently to make irregular shapes.
 - **Paths:** line (L), arrow (A), freehand Draw (P), Bézier (B), Edit points (N).
-  Drag with Bézier to place a cubic curve. Choose Edit points, then drag square
-  anchors or round control handles. Moving an anchor also moves its adjacent
-  handles. **Add anchors** subdivides each segment without changing the curve;
-  **Extend curve** adds another segment at its end. Point editing supports
-  these cubic curves, freehand strokes, polygons and polylines; other imported
-  SVG path commands remain selectable and transformable.
+  Bézier follows Inkscape's pen workflow: click for connected straight segments,
+  or drag at each node to pull symmetric handles for curved segments. Enter,
+  right-click, double-click the last node, or **Finish path** completes it.
+  Click the first node or **Close path** to close it; Escape cancels and
+  Backspace removes the last node. **Continue path**, or clicking an endpoint
+  of a selected open curve with Bézier, resumes drawing from that endpoint.
+  **Edit points** drags anchors and control handles; **Add anchors** subdivides
+  segments without changing their shape. Pending paths finish when switching
+  tools, presenting/exporting, or leaving the app. They remain a single undo
+  operation. Point editing supports these cubic paths, freehand strokes,
+  polygons and polylines; other SVG commands remain selectable and transformable.
 - **Insert:** text (T) and Media for pictures and movies (movies are converted
   to H.264 mp4 on upload so every browser can play them).
 - **Arrange:** Group, Actions, Align and Format text. Align opens edge/centre
@@ -87,6 +92,13 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
 
 ## Presenting
 
+The bottom controls offer Previous, Next, Fullscreen and **Slide overview**.
+Press **O** or **Escape** to toggle the overview; tap a thumbnail to jump to
+that slide. Overview pauses active movies until returning to the presentation.
+The live service also has **Back to editor**, returning to the current slide.
+Offline exports retain the overview and navigation without an editor dependency.
+
+
 Arrows / space / page keys / click or swipe to move, a number then
 Enter to jump, `b` or `.` for a blank screen, `f` or double-click for full
 screen. The address bar shows `#slide.step`.
@@ -108,3 +120,12 @@ Playwright's WebKit does not run on Arch (sancho); it runs on rocinante
 `libgav1-1` and `libyuv0` unpacked from `apt-get download` into the WebKit
 build's `minibrowser-wpe/lib/` (no sudo needed). Headless WebKit there freezes
 on video, so movie tests only run in Chromium.
+
+## Persistent local service
+
+The installed `svgdeck.service` user unit starts under `default.target`, restarts
+on failure, and binds only the Tailscale address on port 8490. User lingering
+keeps it running across logouts and starts the user manager at boot. Switchboard
+registers the unit with a health URL and `client_url` for its **Open** button.
+These machine-local settings stay outside the repository; decks and licensed
+fonts remain in the separate data directory.

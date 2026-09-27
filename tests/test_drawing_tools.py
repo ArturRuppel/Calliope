@@ -3,6 +3,12 @@ import pytest
 from test_editor import page, server, drag, to_screen, add_rects, saved_slide
 
 
+def draw_curve(page, a, b):
+    drag(page, a, (a[0]+100,a[1]-100))
+    drag(page, b, (b[0]+100,b[1]+100))
+    page.keyboard.press('Enter')
+
+
 def selected(page, expression):
     return page.evaluate(f'(() => {{const e=svgdeckEditor.editor, s=e.selection[0]; return {expression};}})()')
 
@@ -29,7 +35,7 @@ def test_circle_and_polygon_creation_and_vertex_edit(page, server):
 
 def test_bezier_handles_subdivision_extension_and_undo(page, server):
     page.keyboard.press('b')
-    drag(page, (250,300), (750,500))
+    draw_curve(page, (250,300), (750,500))
     assert selected(page,'e.curvePoints(s).length') == 4
     original = selected(page,'s.getAttribute("d")')
     page.keyboard.press('n')
@@ -41,7 +47,9 @@ def test_bezier_handles_subdivision_extension_and_undo(page, server):
     page.get_by_role('button',name='Add anchors',exact=True).click()
     assert selected(page,'e.curvePoints(s).length') == 7
     assert selected(page,'s.getTotalLength()') == pytest.approx(length,abs=.1)
-    page.get_by_role('button',name='Extend curve',exact=True).click()
+    page.get_by_role('button',name='Continue path',exact=True).click()
+    click_node(page,1000,600)
+    page.keyboard.press('Enter')
     assert selected(page,'e.curvePoints(s).length') == 10
     svg = saved_slide(page,server)
     assert ' C' in svg
@@ -51,7 +59,7 @@ def test_bezier_handles_subdivision_extension_and_undo(page, server):
 
 def test_nodes_respect_transformed_groups_and_cancel(page):
     page.keyboard.press('b')
-    drag(page,(200,300),(600,500))
+    draw_curve(page,(200,300),(600,500))
     page.evaluate('''() => {const e=svgdeckEditor.editor,p=e.selection[0];
       const g=document.createElementNS(p.namespaceURI,'g');e.svg.append(g);g.append(p);
       g.setAttribute('transform','translate(100 50) scale(.8)');e.enterGroup(g);e.select([p]);}''')
@@ -98,6 +106,7 @@ def test_grouped_toolbar_and_canvas_remain_usable(page,width,height,tmp_path):
         assert page.get_by_role('group',name=name,exact=True).count() == 1
     page.click('[data-tool="bezier"]')
     assert page.evaluate('svgdeckEditor.editor.tool') == 'bezier'
+    page.evaluate('document.body.classList.add("no-panel")')
     stage=page.locator('#stage').bounding_box()
     assert stage['height'] > height*.5
     assert stage['width'] > width*.9
@@ -127,7 +136,7 @@ def test_curve_handle_touch_drag_and_two_finger_cancel(page):
     from test_touch_tools import touch
     from test_editor import BROWSER
     if BROWSER != 'chromium': pytest.skip('CDP touch injection requires Chromium')
-    page.keyboard.press('b');drag(page,(250,300),(750,500));page.keyboard.press('n')
+    page.keyboard.press('b');draw_curve(page,(250,300),(750,500));page.keyboard.press('n')
     session=page.context.new_cdp_session(page)
     point=selected(page,'e.curvePoints(s)[1]')
     x,y=to_screen(page,point['x'],point['y'])
@@ -146,3 +155,87 @@ def test_curve_handle_touch_drag_and_two_finger_cancel(page):
     touch(session,'touchEnd',[])
     assert selected(page,'s.getAttribute("d")') == original
     assert page.locator('#context-menu').count() == 0
+
+
+def click_node(page,x,y):
+    page.mouse.click(*to_screen(page,x,y))
+
+
+def test_connected_straight_and_curved_nodes_finish_as_one_undo(page,server):
+    before=page.evaluate('svgdeckEditor.editor.serialize()')
+    page.keyboard.press('b')
+    click_node(page,200,300);click_node(page,450,300)
+    drag(page,(650,500),(750,500))
+    click_node(page,950,300)
+    assert page.evaluate('svgdeckEditor.editor.pathDraft.nodes.length') == 4
+    assert page.evaluate('svgdeckEditor.editor.serialize()') == before
+    page.keyboard.press('Enter')
+    points=selected(page,'e.curvePoints(s)')
+    assert len(points)==10
+    assert points[1] == points[0] and points[2] == points[3]
+    assert points[5]['x'] == pytest.approx(550,abs=2)
+    assert points[7]['x'] == pytest.approx(750,abs=2)
+    saved_slide(page,server)
+    page.keyboard.press('Control+z')
+    assert page.evaluate('svgdeckEditor.editor.serialize()') == before
+
+
+def test_path_close_edit_remove_cancel_and_right_click(page):
+    page.keyboard.press('b');click_node(page,200,200);click_node(page,500,200);click_node(page,500,500)
+    page.keyboard.press('Backspace')
+    assert page.evaluate('svgdeckEditor.editor.pathDraft.nodes.length') == 2
+    click_node(page,500,500);click_node(page,200,200)
+    assert selected(page,'s.getAttribute("d").endsWith("Z")')
+    page.keyboard.press('n');drag(page,(200,200),(250,250))
+    points=selected(page,'e.curvePoints(s)')
+    assert points[0] == points[-1]
+    original=page.evaluate('svgdeckEditor.editor.serialize()')
+    page.keyboard.press('b');click_node(page,700,400);click_node(page,900,400)
+    page.keyboard.press('Escape')
+    assert page.evaluate('svgdeckEditor.editor.serialize()') == original
+    page.keyboard.press('b');click_node(page,700,400);click_node(page,900,400)
+    page.mouse.click(*to_screen(page,1000,450),button='right')
+    assert page.evaluate('svgdeckEditor.editor.pathDraft') is None
+    assert page.locator('#context-menu').count()==0
+
+
+def test_path_touch_finish_and_flush(page,server):
+    from test_touch_tools import touch
+    from test_editor import BROWSER
+    if BROWSER!='chromium': pytest.skip('CDP requires Chromium')
+    page.click('[data-tool="bezier"]');session=page.context.new_cdp_session(page)
+    for point in [(200,300),(500,300),(700,600)]:
+        x,y=to_screen(page,*point);touch(session,'touchStart',[(1,x,y)]);touch(session,'touchEnd',[])
+    page.get_by_role('button',name='Finish path',exact=True).click()
+    assert selected(page,'e.curvePoints(s).length') == 7
+    click_node(page,300,600);click_node(page,500,600)
+    page.evaluate("svgdeckEditor.flush()") # Present/export commits a pending path too.
+    saved_slide(page,server)
+    assert page.evaluate('svgdeckEditor.editor.pathDraft') is None
+    assert page.locator('.page > svg:first-child > path').count()==2
+
+
+def test_presenter_back_link_returns_to_current_slide(page,server):
+    page.click('#slide-add')
+    page.wait_for_function('svgdeckEditor.state.deck.slides.length === 2 && svgdeckEditor.state.current === svgdeckEditor.state.deck.slides[1].id')
+    page.evaluate('svgdeckEditor.flush()')
+    page.goto(server[0]+'/d/talk/#2')
+    page.wait_for_selector('.svgdeck-ready')
+    page.get_by_role('link',name='Back to editor').click()
+    page.wait_for_function('window.svgdeckEditor?.editor.svg')
+    assert page.url.endswith('/edit/talk#2')
+    assert page.evaluate('svgdeckEditor.state.current === svgdeckEditor.state.deck.slides[1].id')
+
+
+def test_continue_selected_endpoint_and_cancel_preserves_original(page):
+    page.keyboard.press('b');click_node(page,250,300);click_node(page,650,300);page.keyboard.press('Enter')
+    original=selected(page,'s.outerHTML')
+    click_node(page,650,300)
+    assert page.evaluate('!!svgdeckEditor.editor.pathDraft.source')
+    page.keyboard.press('Enter')
+    assert selected(page,'s.outerHTML') == original
+    click_node(page,650,300);click_node(page,850,500);page.keyboard.press('Enter')
+    assert page.locator('.page > svg:first-child > path').count() == 1
+    assert selected(page,'e.curvePoints(s).length') == 7
+    page.keyboard.press('Control+z')
+    assert page.locator('.page > svg:first-child > path').get_attribute('d') in original

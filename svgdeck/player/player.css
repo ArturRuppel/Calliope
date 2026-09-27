@@ -13,3 +13,22 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .svgdeck-video { position: absolute; left: 0; top: 0; transform-origin: 0 0; object-fit: contain;
   pointer-events: none; }
 .svgdeck-blank .svgdeck-stage { visibility: hidden; }
+
+.svgdeck-controls { position:absolute; z-index:10; bottom:max(10px, env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
+  display:flex; align-items:center; gap:6px; max-width:calc(100% - 16px); padding:5px; border-radius:10px;
+  background:rgba(25,28,34,.9); color:white; font:14px system-ui; overflow-x:auto; }
+.svgdeck-controls button, .svgdeck-controls a, .svgdeck-overview button { cursor:pointer; font:14px system-ui;
+  min-height:44px; padding:8px 12px; border:1px solid #657080; border-radius:7px; background:#252b34; color:white;
+  text-decoration:none; white-space:nowrap; flex-shrink:0; }
+.svgdeck-controls span { white-space:nowrap; }
+.svgdeck-controls :focus-visible, .svgdeck-overview :focus-visible { outline:3px solid #91b8ff; outline-offset:2px; }
+.svgdeck-blank .svgdeck-controls { visibility:hidden; }
+.svgdeck-overview { position:absolute; inset:0; z-index:20; background:#171c24; overflow:auto; padding:20px; touch-action:pan-y; }
+.svgdeck-overview[hidden] { display:none; }
+.svgdeck-overview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr)); gap:16px; margin-top:16px; }
+.svgdeck-overview-grid button { display:flex; flex-direction:column; gap:8px; padding:8px; min-width:0; }
+.svgdeck-overview-grid svg { width:100%; height:auto; aspect-ratio:16/9; background:white; pointer-events:none; }
+.svgdeck-overview-grid [aria-current="true"] { border:3px solid #91b8ff; }
+
+.svgdeck.svgdeck-overview-open { touch-action:pan-y; }
+.svgdeck-controls { flex-wrap:wrap; justify-content:center; width:max-content; }

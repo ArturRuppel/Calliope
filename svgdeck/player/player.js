@@ -158,6 +158,64 @@
 
     const state = { index: -1, step: 0, blank: false };
     let mirrorStop = null;
+    let overviewOpen = false, resumeVideos = [];
+    const controls = document.createElement("nav");
+    controls.className = "svgdeck-controls";
+    controls.setAttribute("aria-label", "Presentation controls");
+    const button = (label, fn, parent = controls) => {
+      const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+      b.addEventListener("click", fn); parent.append(b); return b;
+    };
+    button("Previous", prev);
+    const counter = document.createElement("span"); controls.append(counter);
+    button("Next", next);
+    const overviewButton = button("Slide overview", () => setOverview(true));
+    overviewButton.setAttribute("aria-expanded", "false");
+    if (options.editorUrl) {
+      const back = document.createElement("a"); back.textContent = "Back to editor";
+      back.addEventListener("click", () => { back.href = options.editorUrl + `#${state.index+1}`; });
+      back.href = options.editorUrl; controls.append(back);
+    }
+    button("Fullscreen", toggleFullscreen);
+    root.append(controls);
+    const overview = document.createElement("div");
+    overview.className = "svgdeck-overview"; overview.hidden = true;
+    overview.setAttribute("role", "dialog"); overview.setAttribute("aria-modal", "true");
+    overview.setAttribute("aria-label", "Slide overview");
+    button("Return to presentation", () => setOverview(false), overview);
+    const grid = document.createElement("div"); grid.className = "svgdeck-overview-grid"; overview.append(grid);
+    const thumbnails = deck.slides.map((s,i) => {
+      const b = button("", () => { setOverview(false, i === state.index); setBlank(false); show(i,0); root.tabIndex = -1; root.focus(); }, grid);
+      b.setAttribute("aria-label", `Go to slide ${i+1}`);
+      const svg = new DOMParser().parseFromString(s.svg,"image/svg+xml").documentElement;
+      rewrite(svg, `overview-${i}-`, base);
+      svg.setAttribute("viewBox",svg.getAttribute("viewBox") || `0 0 ${size[0]} ${size[1]}`);
+      svg.setAttribute("aria-hidden","true");
+      svg.style.aspectRatio = `${size[0]} / ${size[1]}`;
+      b.append(document.importNode(svg,true));
+      const label = document.createElement("span"); label.textContent = `Slide ${i+1}`; b.append(label);
+      return b;
+    });
+    root.append(overview);
+    function setOverview(on, resume = true) {
+      if (overviewOpen === on) return;
+      overviewOpen = on; overview.hidden = !on;
+      root.classList.toggle("svgdeck-overview-open",on);
+      overviewButton.setAttribute("aria-expanded",String(on));
+      typed = ""; touch = null;
+      if (on) {
+        setBlank(false);
+        resumeVideos = slides[state.index]?.videos.filter(v => !v.paused) || [];
+        resumeVideos.forEach(v => v.pause());
+        thumbnails.forEach((b,i) => b.setAttribute("aria-current",String(i===state.index)));
+        thumbnails[state.index]?.focus();
+      } else {
+        if (resume) resumeVideos.forEach(v => v.play().catch(() => {}));
+        resumeVideos = [];
+        overviewButton.focus();
+      }
+    }
+
 
     function fit() {
       const scale = Math.min(root.clientWidth / size[0], root.clientHeight / size[1]);
@@ -238,6 +296,7 @@
       }
       state.index = index;
       state.step = step;
+      counter.textContent = `${index+1} / ${slides.length}`;
       applyStep(slide, step);
       const hash = `#${index + 1}` + (step ? `.${step}` : "");
       if (location.hash !== hash) history.replaceState(null, "", hash);
@@ -245,11 +304,13 @@
     }
 
     function next() {
+      if (state.index < 0) return;
       const slide = slides[state.index];
       if (state.step < slide.maxStep) show(state.index, state.step + 1);
       else if (state.index < slides.length - 1) show(state.index + 1, 0);
     }
     function prev() {
+      if (state.index < 0) return;
       if (state.step > 0) show(state.index, state.step - 1);
       else if (state.index > 0) show(state.index - 1, slides[state.index - 1].maxStep);
     }
@@ -265,6 +326,15 @@
     let typed = "";
     document.addEventListener("keydown", (e) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.key === "Escape" || e.key.toLowerCase() === "o") { e.preventDefault(); setOverview(!overviewOpen); return; }
+      if (overviewOpen) {
+        if (e.key === "Tab") {
+          const buttons = [...overview.querySelectorAll("button")], index = buttons.indexOf(document.activeElement);
+          buttons[(index + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length].focus(); e.preventDefault();
+        }
+        return;
+      }
+      if (e.target.closest("button,a") && ["Enter"," "].includes(e.key)) return;
       if (state.blank && !["b", "B", "."].includes(e.key)) { setBlank(false); e.preventDefault(); return; }
       if (/^\d$/.test(e.key)) { typed += e.key; return; }
       switch (e.key) {
@@ -291,7 +361,7 @@
     }
 
     let touch = null;
-    root.addEventListener("pointerdown", (e) => { touch = [e.clientX, e.clientY]; });
+    root.addEventListener("pointerdown", (e) => { touch = e.target.closest(".svgdeck-controls,.svgdeck-overview") || overviewOpen ? null : [e.clientX, e.clientY]; });
     root.addEventListener("pointerup", (e) => {
       if (!touch) return;
       const dx = e.clientX - touch[0], dy = e.clientY - touch[1];
@@ -301,7 +371,8 @@
       if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) next(); else prev(); }
       else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) next();
     });
-    root.addEventListener("dblclick", toggleFullscreen);
+    root.addEventListener("pointercancel", () => { touch = null; });
+    root.addEventListener("dblclick", e => {if (!e.target.closest(".svgdeck-controls,.svgdeck-overview")) toggleFullscreen();});
     window.addEventListener("resize", fit);
     window.addEventListener("hashchange", () => { const [i, s] = fromHash(); show(i, s); });
 

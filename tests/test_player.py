@@ -97,3 +97,36 @@ def test_blank_screen(page):
     page.keyboard.press("ArrowRight")
     assert state(page)[0] == 0  # the first key only unblanks
     assert page.evaluate("getComputedStyle(document.querySelector('.svgdeck-stage')).visibility") == "visible"
+
+
+def test_overview_and_buttons_do_not_advance_accidentally(page,tmp_path):
+    page.get_by_role('button',name='Slide overview',exact=True).click()
+    assert state(page)[:2]==[0,0]
+    assert page.get_by_role('dialog',name='Slide overview').is_visible()
+    page.keyboard.press('ArrowRight')
+    assert state(page)[:2]==[0,0]
+    page.get_by_role('button',name='Go to slide 3',exact=True).click()
+    assert state(page)[:2]==[2,0]
+    assert page.get_by_role('dialog').is_hidden()
+    page.get_by_role('button',name='Previous',exact=True).click()
+    assert state(page)[:2]==[1,2]
+    page.keyboard.press('o')
+    page.screenshot(path=str(tmp_path/'presenter-overview.png'))
+    page.keyboard.press('Escape')
+    assert page.get_by_role('dialog').is_hidden()
+    assert state(page)[:2]==[1,2]
+    assert page.get_by_role('link',name='Back to editor').count()==0 # portable offline export
+
+
+def test_presenter_controls_fit_phone_and_overview_returns_keyboard_focus(page):
+    page.set_viewport_size({'width':390,'height':500})
+    for control in page.locator('.svgdeck-controls button').all():
+        b=control.bounding_box()
+        assert b['x'] >= 0 and b['x']+b['width'] <= 390
+        assert b['y'] >= 0 and b['y']+b['height'] <= 500
+    page.get_by_role('button',name='Slide overview',exact=True).click()
+    assert page.evaluate('getComputedStyle(document.getElementById("svgdeck")).touchAction') == 'pan-y'
+    page.get_by_role('button',name='Go to slide 2',exact=True).click()
+    page.keyboard.press('Space')
+    assert state(page)[:2] == [1,1]
+    assert page.get_by_role('dialog').is_hidden()
