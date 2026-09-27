@@ -130,3 +130,28 @@ def test_presenter_controls_fit_phone_and_overview_returns_keyboard_focus(page):
     page.keyboard.press('Space')
     assert state(page)[:2] == [1,1]
     assert page.get_by_role('dialog').is_hidden()
+
+
+def tap(page, x, y, kind='touch'):
+    page.evaluate(f"""(() => {{ const root = document.getElementById('svgdeck');
+        for (const type of ['pointerdown', 'pointerup']) root.dispatchEvent(new PointerEvent(type,
+          {{bubbles: true, clientX: {x}, clientY: {y}, pointerType: '{kind}', button: 0, isPrimary: true}})); }})()""")
+
+
+def test_controls_hide_while_presenting_and_return_on_demand(page):
+    shown = "document.getElementById('svgdeck').classList.contains('svgdeck-show-controls')"
+    assert page.evaluate(shown)  # shown briefly at the start
+    page.wait_for_function(f"!{shown}", timeout=6000)
+    page.wait_for_function("getComputedStyle(document.querySelector('.svgdeck-controls')).opacity === '0'")
+    # A tap along the bottom edge brings them back instead of advancing.
+    tap(page, 480, 520)
+    assert page.evaluate(shown)
+    assert state(page)[:2] == [0, 0]
+    tap(page, 480, 520)
+    assert not page.evaluate(shown)
+    tap(page, 480, 270)  # anywhere else still advances
+    assert state(page)[:2] == [1, 0]
+    # The controls stay small: one row, well under the old 44 px buttons.
+    tap(page, 480, 520)
+    box = page.locator('.svgdeck-controls').bounding_box()
+    assert box['height'] <= 42 and box['width'] <= 300

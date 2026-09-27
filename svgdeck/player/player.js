@@ -162,22 +162,46 @@
     const controls = document.createElement("nav");
     controls.className = "svgdeck-controls";
     controls.setAttribute("aria-label", "Presentation controls");
-    const button = (label, fn, parent = controls) => {
-      const b = document.createElement("button"); b.type = "button"; b.textContent = label;
+    // Small icon buttons, hidden while presenting: a mouse move, keyboard
+    // focus or a tap along the bottom edge brings them back for a moment.
+    const ICONS = {
+      prev: "M15 5l-7 7 7 7", next: "M9 5l7 7-7 7",
+      overview: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
+      edit: "M4 20h4L19 9l-4-4L4 16zM13 7l4 4",
+      fullscreen: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
+    };
+    const iconSvg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
+    const button = (label, fn, parent = controls, iconName = null) => {
+      const b = document.createElement("button"); b.type = "button";
+      if (iconName) { b.innerHTML = iconSvg(iconName); b.setAttribute("aria-label", label); b.title = label; }
+      else b.textContent = label;
       b.addEventListener("click", fn); parent.append(b); return b;
     };
-    button("Previous", prev);
-    const counter = document.createElement("span"); controls.append(counter);
-    button("Next", next);
-    const overviewButton = button("Slide overview", () => setOverview(true));
+    button("Previous", prev, controls, "prev");
+    const counter = document.createElement("span"); counter.className = "svgdeck-counter"; controls.append(counter);
+    button("Next", next, controls, "next");
+    const overviewButton = button("Slide overview", () => setOverview(true), controls, "overview");
     overviewButton.setAttribute("aria-expanded", "false");
     if (options.editorUrl) {
-      const back = document.createElement("a"); back.textContent = "Back to editor";
+      const back = document.createElement("a"); back.innerHTML = iconSvg("edit");
+      back.setAttribute("aria-label", "Back to editor"); back.title = "Back to editor";
       back.addEventListener("click", () => { back.href = options.editorUrl + `#${state.index+1}`; });
       back.href = options.editorUrl; controls.append(back);
     }
-    button("Fullscreen", toggleFullscreen);
+    button("Fullscreen", toggleFullscreen, controls, "fullscreen");
     root.append(controls);
+    let hideTimer = null;
+    function revealControls(ms = 2500) {
+      root.classList.add("svgdeck-show-controls");
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function hide() {
+        if (controls.matches(":hover, :focus-within")) { hideTimer = setTimeout(hide, 1000); return; }
+        root.classList.remove("svgdeck-show-controls");
+      }, ms);
+    }
+    function hideControls() { clearTimeout(hideTimer); root.classList.remove("svgdeck-show-controls"); }
+    controls.addEventListener("focusin", () => revealControls());
+    root.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") revealControls(); });
     const overview = document.createElement("div");
     overview.className = "svgdeck-overview"; overview.hidden = true;
     overview.setAttribute("role", "dialog"); overview.setAttribute("aria-modal", "true");
@@ -369,7 +393,12 @@
       if (e.button !== 0) return;
       if (state.blank) { setBlank(false); return; }
       if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) next(); else prev(); }
-      else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) next();
+      else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
+        // Touch has no hover: a tap along the bottom edge shows or hides the controls.
+        if (e.pointerType !== "mouse" && e.clientY > root.getBoundingClientRect().bottom - 80) {
+          if (root.classList.contains("svgdeck-show-controls")) hideControls(); else revealControls(4000);
+        } else next();
+      }
     });
     root.addEventListener("pointercancel", () => { touch = null; });
     root.addEventListener("dblclick", e => {if (!e.target.closest(".svgdeck-controls,.svgdeck-overview")) toggleFullscreen();});
@@ -382,6 +411,7 @@
     const timeout = new Promise((resolve) => setTimeout(resolve, 3000));
     const ready = Promise.race([Promise.all(faces), timeout]).then(() => {
       root.classList.add("svgdeck-ready");
+      revealControls(3000);  // show where the controls are, then get out of the way
       const [i, s] = fromHash();
       show(i, s);
     });

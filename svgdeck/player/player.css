@@ -14,15 +14,27 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
   pointer-events: none; }
 .svgdeck-blank .svgdeck-stage { visibility: hidden; }
 
-.svgdeck-controls { position:absolute; z-index:10; bottom:max(10px, env(safe-area-inset-bottom)); left:50%; transform:translateX(-50%);
-  display:flex; align-items:center; gap:6px; max-width:calc(100% - 16px); padding:5px; border-radius:10px;
-  background:rgba(25,28,34,.9); color:white; font:14px system-ui; overflow-x:auto; }
-.svgdeck-controls button, .svgdeck-controls a, .svgdeck-overview button { cursor:pointer; font:14px system-ui;
-  min-height:44px; padding:8px 12px; border:1px solid #657080; border-radius:7px; background:#252b34; color:white;
-  text-decoration:none; white-space:nowrap; flex-shrink:0; }
-.svgdeck-controls span { white-space:nowrap; }
-.svgdeck-controls :focus-visible, .svgdeck-overview :focus-visible { outline:3px solid #91b8ff; outline-offset:2px; }
+/* Controls: a small translucent pill, hidden while presenting. */
+.svgdeck-controls { position:absolute; z-index:10; bottom:max(12px, env(safe-area-inset-bottom)); left:50%;
+  transform:translate(-50%, 8px); display:flex; align-items:center; gap:2px; padding:3px; border-radius:999px;
+  background:rgba(20,22,26,.62); -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); color:#fff;
+  font:13px/1 system-ui, sans-serif; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; }
+.svgdeck-show-controls .svgdeck-controls, .svgdeck-controls:focus-within {
+  opacity:1; pointer-events:auto; transform:translate(-50%, 0); }
+.svgdeck-controls button, .svgdeck-controls a { display:inline-flex; align-items:center; justify-content:center;
+  width:34px; height:34px; padding:0; border:0; border-radius:50%; background:none; color:inherit; cursor:pointer;
+  text-decoration:none; flex-shrink:0; touch-action:manipulation; }
+.svgdeck-controls button:hover, .svgdeck-controls a:hover { background:rgba(255,255,255,.16); }
+.svgdeck-controls svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2;
+  stroke-linecap:round; stroke-linejoin:round; }
+.svgdeck-counter { min-width:4.2em; padding:0 4px; text-align:center; white-space:nowrap;
+  font-variant-numeric:tabular-nums; opacity:.85; }
+.svgdeck-controls :focus-visible, .svgdeck-overview :focus-visible { outline:2px solid #91b8ff; outline-offset:1px; }
 .svgdeck-blank .svgdeck-controls { visibility:hidden; }
+/* An idle mouse disappears with the controls. */
+.svgdeck-ready:not(.svgdeck-show-controls):not(.svgdeck-overview-open) { cursor:none; }
+.svgdeck-overview button { cursor:pointer; font:14px system-ui; min-height:44px; padding:8px 12px;
+  border:1px solid #657080; border-radius:7px; background:#252b34; color:white; }
 .svgdeck-overview { position:absolute; inset:0; z-index:20; background:#171c24; overflow:auto; padding:20px; touch-action:pan-y; }
 .svgdeck-overview[hidden] { display:none; }
 .svgdeck-overview-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr)); gap:16px; margin-top:16px; }
@@ -31,4 +43,3 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .svgdeck-overview-grid [aria-current="true"] { border:3px solid #91b8ff; }
 
 .svgdeck.svgdeck-overview-open { touch-action:pan-y; }
-.svgdeck-controls { flex-wrap:wrap; justify-content:center; width:max-content; }
