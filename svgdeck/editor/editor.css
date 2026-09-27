@@ -1,17 +1,19 @@
-/* svgdeck editor, in the Modernist system: flat, square, ink on warm grey,
-   one red accent. Tokens first; the older names (--ink, --line, --surface…)
-   stay because colors.css, commits.css and recovery.css read them. */
+/* svgdeck editor, in the Modernist system: flat, square, near-black ink on
+   cool grey. Teal marks what you act on; purple marks what the Pencil owns.
+   Tokens first; the older names (--ink, --line, --surface…) stay because
+   colors.css, commits.css and recovery.css read them. */
 :root {
-  --color-bg: #f3f2f2; --color-surface: #eae9e9; --color-text: #201e1d; --color-accent: #ec3013;
-  --color-divider: color-mix(in srgb, #201e1d 40%, transparent);
-  --n100: #f8f4f4; --n200: #eae7e7; --n300: #d7d3d3; --n400: #bab6b6; --n600: #7d7979; --n700: #605d5d; --n800: #444141;
-  --a100: #fff2ef; --a600: #dd2b0f; --a700: #ae1800;
+  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #0e7c7b;
+  --color-divider: color-mix(in srgb, #1c1b22 40%, transparent);
+  --n100: #f8f8f9; --n200: #e8e8ea; --n300: #d4d4d8; --n400: #b6b6bc; --n600: #7a7a82; --n700: #5c5b63; --n800: #403f47;
+  --a100: #e3f2f1; --a600: #0a6564; --a700: #075453;
+  --pen: #6b3fa0;
   --font: "Archivo", system-ui, -apple-system, sans-serif;
-  --shadow-sm: 0 1px 2px color-mix(in srgb, #2d2b2b 14%, transparent);
-  --shadow-md: 0 3px 10px color-mix(in srgb, #2d2b2b 16%, transparent);
-  --shadow-lg: 0 12px 32px color-mix(in srgb, #2d2b2b 22%, transparent);
+  --shadow-sm: 0 1px 2px color-mix(in srgb, #1c1b22 14%, transparent);
+  --shadow-md: 0 3px 10px color-mix(in srgb, #1c1b22 16%, transparent);
+  --shadow-lg: 0 12px 32px color-mix(in srgb, #1c1b22 22%, transparent);
   --ink: var(--color-text); --muted: var(--n700); --line: var(--color-divider); --surface: var(--color-bg);
-  --ground: var(--n200); --accent: var(--color-accent); --accent-soft: var(--a100); --danger: var(--a700);
+  --ground: var(--n200); --accent: var(--color-accent); --accent-soft: var(--a100); --danger: #b3261e;
   --stage: var(--n300);
   --bar-h: 56px; --bar-height: 56px; --rail-w: 72px; --strip-w: 168px; --panel-w: 264px;
   font: 14px/1.35 var(--font);
@@ -76,7 +78,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
   border-left: 6px solid transparent; border-bottom: 6px solid currentColor; }
 /* The Pencil's own tool carries a small pencil badge. */
 .rail .tool[data-pen="true"]::before { content: ""; position: absolute; top: 3px; right: 3px; width: 14px; height: 14px;
-  background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5'%3E%3Cpath d='M4 20l1-5L16 4l4 4L9 19z'/%3E%3C/svg%3E") center / 9px no-repeat; }
+  background: var(--pen) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5'%3E%3Cpath d='M4 20l1-5L16 4l4 4L9 19z'/%3E%3C/svg%3E") center / 9px no-repeat; }
 .flyout { position: fixed; z-index: 40; width: 220px; background: var(--color-bg); border: 2px solid var(--ink);
   box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
 .flyout-title { font: 800 11px var(--font); letter-spacing: .08em; text-transform: uppercase; padding: 10px 12px; border-bottom: 2px solid var(--line); }
@@ -84,7 +86,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
   cursor: pointer; text-align: left; touch-action: manipulation; }
 .flyout button:hover { background: var(--n200); }
 .flyout button[aria-pressed="true"] { background: var(--ink); color: #fff; }
-.flyout button[data-pen="true"] .name::after { content: " · Pencil"; color: var(--accent); font-weight: 800; }
+.flyout button[data-pen="true"] .name::after { content: " · Pencil"; color: var(--pen); font-weight: 800; }
 .flyout .name { flex: 1; font-size: 14px; font-weight: 600; }
 .flyout kbd { font: 600 11px ui-monospace, monospace; border: 1px solid currentColor; padding: 1px 5px; opacity: .7; }
 .flyout-hint { font-size: 11px; color: var(--n700); padding: 8px 12px; border-top: 1px solid var(--line); }
@@ -111,7 +113,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .menu > button, .context-menu > button { min-height: 44px; border: 0; background: none; display: flex; align-items: center; gap: 12px;
   padding: 8px 12px; cursor: pointer; text-align: left; font-size: 14px; font-weight: 600; touch-action: manipulation; }
 .menu > button:hover, .menu > button:focus, .context-menu > button:hover, .context-menu > button:focus { background: var(--n200); }
-.menu > button.danger, .context-menu > button.danger { color: var(--a700); }
+.menu > button.danger, .context-menu > button.danger { color: var(--danger); }
 .context-menu > button:disabled { opacity: .4; cursor: default; background: none; }
 .menu .key, .context-menu .key { margin-left: auto; font: 600 11px ui-monospace, monospace; color: var(--n700); }
 .menu-sep { height: 1px; background: var(--line); flex: none; }
@@ -245,7 +247,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .settings-dialog, .media-tools, .commits-dialog, .recovery-dialog { border: 0; padding: 0; background: var(--color-bg); color: var(--ink);
   box-shadow: var(--shadow-lg); border-radius: 0; }
 .settings-dialog { width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); }
-.settings-dialog::backdrop, .commits-dialog::backdrop, .recovery-dialog::backdrop, .media-tools::backdrop { background: color-mix(in srgb, #201e1d 45%, transparent); }
+.settings-dialog::backdrop, .commits-dialog::backdrop, .recovery-dialog::backdrop, .media-tools::backdrop { background: color-mix(in srgb, #1c1b22 45%, transparent); }
 .settings-dialog header, .commits-dialog header, .recovery-dialog header { display: flex; align-items: center; justify-content: space-between;
   padding: 16px 16px 12px 24px; border-bottom: 2px solid var(--line); }
 .settings-dialog h2, .commits-dialog h2, .recovery-dialog h2 { margin: 0; font: 800 22px var(--font); }
