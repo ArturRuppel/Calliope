@@ -4,7 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<title>svgdeck</title>
+<title>Calliope</title>
+<meta name="apple-mobile-web-app-title" content="Calliope">
+<link rel="icon" href="/editor/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/editor/apple-touch-icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
 <style>
   /* The Modernist system, as in the editor: flat, square, near-black ink on cool grey, one teal accent. */
@@ -14,7 +17,8 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); }
   header { display: flex; align-items: center; gap: 16px; height: 64px; padding: 0 24px; border-bottom: 2px solid var(--line); }
-  header h1 { font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin: 0; flex: 1; }
+  header h1 { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 800; letter-spacing: -.02em; margin: 0; flex: 1; }
+  header h1 .mark { width: 32px; height: 32px; flex: none; }
   main { max-width: 60rem; margin: 0 auto; padding: 8px 24px 60px; }
   .deck { display: flex; align-items: center; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--line); }
   .deck .info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -34,7 +38,7 @@
 </style>
 </head>
 <body>
-<header><h1>svgdeck</h1><a class="btn primary" href="#new" onclick="document.querySelector('#new input').focus()">New deck</a></header>
+<header><h1><img class="mark" src="/editor/icon.svg" alt="">Calliope</h1><a class="btn primary" href="#new" onclick="document.querySelector('#new input').focus()">New deck</a></header>
 <main>
   <div id="decks">Loading…</div>
   <form id="new">
