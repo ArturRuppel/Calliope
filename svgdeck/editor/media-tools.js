@@ -1,136 +1,282 @@
-import { SVGNS } from "./geom.js";
+import { SVGNS, toRoot } from "./geom.js";
 
-const clamp = (v) => Math.max(0, Math.min(49.5, Number.isFinite(+v) ? +v : 0));
-const cropOf = (el) => (el?.getAttribute("data-crop") || "0 0 0 0").split(/[ ,]+/).slice(0, 4).map(clamp).concat([0, 0, 0, 0]).slice(0, 4);
+const MIN_REMAINING = .1;
+const clamp = (v) => Math.max(0, Math.min(100 - MIN_REMAINING, Number.isFinite(+v) ? +v : 0));
+const cropOf = (el) => (el?.getAttribute("data-crop") || "0 0 0 0").split(/[ ,]+/).slice(0, 4)
+  .map(clamp).concat([0, 0, 0, 0]).slice(0, 4);
+const round = (v) => +v.toFixed(2);
 
-/** Non-destructive crop and mask controls for image and movie-image objects. */
 export function installMediaTools({ editor, toast = () => {}, settle = () => {} }) {
-  let media = null;
-  let sessionSvg = null;
+  let session = null;
   const dialog = document.createElement("dialog");
-  dialog.className = "media-tools";
-  dialog.setAttribute("aria-label", "Crop and mask media");
+  dialog.className = "media-tools direct-crop-tools";
+  dialog.setAttribute("aria-label", "Crop media");
   document.body.appendChild(dialog);
+  const style = document.createElement("style");
+  style.textContent = `
+    .direct-crop-tools{position:fixed;inset:auto 20px 20px auto;z-index:60;margin:0;max-width:min(430px,calc(100vw - 40px));color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;box-shadow:0 8px 30px #0006}
+    .direct-crop-tools strong{display:block;font:600 17px system-ui;margin-bottom:8px}.direct-crop-tools .crop-actions{display:flex;gap:8px;align-items:center}.direct-crop-tools button{margin:0;padding:7px 14px;min-height:36px}.direct-crop-tools details{margin-top:8px}.direct-crop-tools summary{cursor:pointer;color:var(--muted)}.direct-crop-tools .media-crop-fields{margin-top:8px}.direct-crop-tools .media-crop-fields input{width:62px}
+    .overlay .ov-crop-shade{fill:#07111b;fill-opacity:.55;fill-rule:evenodd;pointer-events:none}.overlay .ov-crop-frame{fill:none;stroke:#fff;stroke-dasharray:8 5;pointer-events:none}.overlay .ov-crop-handle{fill:#fff;stroke:#1769d2;pointer-events:all;touch-action:none}`;
+  document.head.appendChild(style);
 
   const selectedMedia = () => editor.selection.length === 1 && editor.selection[0].localName === "image" ? editor.selection[0] : null;
-  const currentMedia = () => {
-    if (!sessionSvg || editor.svg !== sessionSvg) return null;
-    if (media && editor.svg.contains(media)) return media;
-    return null;
-  };
   const clipId = (el) => /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)$/.exec(el?.getAttribute("clip-path") || "")?.[1] || null;
-  const ownedClip = (el) => (el.hasAttribute("data-crop") || el.hasAttribute("data-mask")) ? clipId(el) : null;
-  const existingForeignClip = (el) => el.hasAttribute("clip-path") && !ownedClip(el);
+  const ownedClip = (el) => (el?.hasAttribute("data-crop") || el?.hasAttribute("data-mask")) ? clipId(el) : null;
+  const existingForeignClip = (el) => el?.hasAttribute("clip-path") && !ownedClip(el);
   const clipUsers = (id) => Array.from(editor.svg.querySelectorAll("[clip-path]")).filter((el) => clipId(el) === id);
-
   function ensureDefs() {
     let defs = Array.from(editor.svg.children).find((el) => el.localName === "defs");
-    if (!defs) { defs = document.createElementNS(SVGNS, "defs"); editor.svg.prepend(defs); }
+    if (!defs) {
+      defs = document.createElementNS(SVGNS, "defs");
+      editor.svg.prepend(defs);
+    }
     return defs;
   }
 
   function uniqueId() {
     let id, n = 1;
-    do id = `svgdeck-clip-${n++}`; while (editor.svg.querySelector(`#${CSS.escape(id)}`));
+    do id = `svgdeck-clip-${n++}`;
+    while (editor.svg.querySelector(`#${CSS.escape(id)}`));
     return id;
   }
-
+  function normalized(crop, changed = []) {
+    const values = crop.map(clamp);
+    const active = new Set(Array.isArray(changed) ? changed : [changed]);
+    for (const [first, opposite] of [[0, 2], [1, 3]]) {
+      if (values[first] + values[opposite] <= 100 - MIN_REMAINING) continue;
+      if (active.has(first)) values[first] = 100 - MIN_REMAINING - values[opposite];
+      else values[opposite] = 100 - MIN_REMAINING - values[first];
+    }
+    return values.map((value) => Math.max(0, round(value)));
+  }
   function writeClip(el, crop, mask) {
-    let id = ownedClip(el), clip = id && editor.svg.querySelector(`#${CSS.escape(id)}`);
+    let id = ownedClip(el);
+    let clip = id && editor.svg.querySelector(`#${CSS.escape(id)}`);
     if (clip && clipUsers(id).some((user) => user !== el)) {
-      const clone = clip.cloneNode(true);
-      id = uniqueId(); clone.id = id; ensureDefs().appendChild(clone); clip = clone;
+      clip = clip.cloneNode(true);
+      id = uniqueId();
+      clip.id = id;
+      ensureDefs().append(clip);
     }
     if (!clip) {
       id = uniqueId();
       clip = document.createElementNS(SVGNS, "clipPath");
       clip.id = id;
       clip.setAttribute("clipPathUnits", "objectBoundingBox");
-      ensureDefs().appendChild(clip);
+      ensureDefs().append(clip);
     }
-    const [l, t, r, b] = crop.map((v) => v / 100), w = Math.max(.001, 1 - l - r), h = Math.max(.001, 1 - t - b);
+    const [left, top, right, bottom] = crop.map((value) => value / 100);
+    const width = Math.max(.001, 1 - left - right), height = Math.max(.001, 1 - top - bottom);
     const shape = document.createElementNS(SVGNS, mask === "ellipse" ? "ellipse" : "rect");
     if (mask === "ellipse") {
-      shape.setAttribute("cx", l + w / 2); shape.setAttribute("cy", t + h / 2);
-      shape.setAttribute("rx", w / 2); shape.setAttribute("ry", h / 2);
+      shape.setAttribute("cx", left + width / 2); shape.setAttribute("cy", top + height / 2);
+      shape.setAttribute("rx", width / 2); shape.setAttribute("ry", height / 2);
     } else {
-      shape.setAttribute("x", l); shape.setAttribute("y", t);
-      shape.setAttribute("width", w); shape.setAttribute("height", h);
+      shape.setAttribute("x", left); shape.setAttribute("y", top);
+      shape.setAttribute("width", width); shape.setAttribute("height", height);
     }
     clip.replaceChildren(shape);
     el.setAttribute("data-svgdeck-clip", id);
     el.setAttribute("clip-path", `url(#${id})`);
   }
+  const valid = () => !!(session && editor.svg === session.svg && editor.svg.contains(session.media));
 
-  function apply(crop, mask) {
-    media = currentMedia();
-    if (!media) return;
-    if (existingForeignClip(media)) { toast("This media already has an imported clip path. Remove it before using Crop & mask."); return; }
-    editor.change(() => {
-      const vals = crop.map(clamp);
-      media.setAttribute("data-crop", vals.map((v) => +v.toFixed(2)).join(" "));
-      media.setAttribute("data-mask", mask === "ellipse" ? "ellipse" : "rect");
-      writeClip(media, vals, mask);
-    });
-    render();
+  function preview(crop, mask = session?.mask || "rect", changed = [], renderUi = true) {
+    if (!valid()) return;
+    session.crop = normalized(crop, changed);
+    session.mask = mask === "ellipse" ? "ellipse" : "rect";
+    session.media.setAttribute("data-crop", session.crop.join(" "));
+    session.media.setAttribute("data-mask", session.mask);
+    writeClip(session.media, session.crop, session.mask);
+    editor.drawOverlay();
+    if (renderUi) render();
   }
 
-  function reset() {
-    media = currentMedia();
-    if (!media) return;
-    editor.change(() => {
-      const id = ownedClip(media);
-      if (id && clipUsers(id).every((user) => user === media)) editor.svg.querySelector(`#${CSS.escape(id)}`)?.remove();
-      media.removeAttribute("data-crop");
-      media.removeAttribute("data-mask");
-      media.removeAttribute("data-svgdeck-clip");
-      if (id) media.removeAttribute("clip-path");
-    });
-    render();
+  function snapshot(media) {
+    const id = ownedClip(media), clip = id && editor.svg.querySelector(`#${CSS.escape(id)}`);
+    return { attrs: Array.from(media.attributes, (a) => [a.name, a.value]), clip: clip?.cloneNode(true) || null, clipId: id };
   }
 
-  function render() {
-    media = currentMedia() || selectedMedia();
-    dialog.replaceChildren();
-    if (!media) return dialog;
-    const crop = cropOf(media), mask = media.getAttribute("data-mask") || "rect";
-    const title = document.createElement("strong"); title.textContent = media.hasAttribute("data-video") ? "Crop movie" : "Crop image";
-    dialog.appendChild(title);
-    const fields = document.createElement("div"); fields.className = "media-crop-fields";
-    ["Left", "Top", "Right", "Bottom"].forEach((name, i) => {
-      const label = document.createElement("label"); label.textContent = `${name} `;
-      const input = document.createElement("input"); input.type = "number"; input.min = "0"; input.max = "49.5"; input.step = "0.5";
-      input.value = crop[i]; input.dataset.cropSide = name.toLowerCase();
-      input.addEventListener("change", () => { const next = cropOf(media); next[i] = clamp(input.value); apply(next, maskSelect.value); });
-      label.append(input, "%"); fields.appendChild(label);
-    });
-    const maskLabel = document.createElement("label"); maskLabel.textContent = "Mask ";
-    const maskSelect = document.createElement("select"); maskSelect.dataset.mediaMask = "";
-    for (const [value, text] of [["rect", "Rectangle"], ["ellipse", "Ellipse"]]) {
-      const option = document.createElement("option"); option.value = value; option.textContent = text; option.selected = value === mask; maskSelect.appendChild(option);
+  function restore() {
+    if (!valid()) return;
+    const { media, original } = session, now = ownedClip(media);
+    if (now && now !== original.clipId && clipUsers(now).every((user) => user === media)) {
+      editor.svg.querySelector(`#${CSS.escape(now)}`)?.remove();
     }
-    maskSelect.addEventListener("change", () => apply(cropOf(media), maskSelect.value));
-    maskLabel.appendChild(maskSelect);
-    const resetButton = document.createElement("button"); resetButton.type = "button"; resetButton.textContent = "Reset"; resetButton.addEventListener("click", reset);
-    const close = document.createElement("button"); close.type = "button"; close.textContent = "Done"; close.addEventListener("click", () => dialog.close());
-    dialog.append(fields, maskLabel, resetButton, close);
+    for (const attribute of [...media.attributes]) media.removeAttribute(attribute.name);
+    for (const [name, value] of original.attrs) media.setAttribute(name, value);
+    if (original.clip) {
+      const current = editor.svg.querySelector(`#${CSS.escape(original.clipId)}`);
+      if (current) current.replaceWith(original.clip.cloneNode(true));
+      else ensureDefs().append(original.clip.cloneNode(true));
+    }
+  }
+
+  function finish(commit) {
+    if (!session) return;
+    if (commit && valid()) editor.commit();
+    else { restore(); editor.before = null; }
+    session = null;
+    if (dialog.open) dialog.close();
+    dialog.replaceChildren();
+    editor.drawOverlay();
+  }
+  function removeOwnedClip() {
+    if (!valid()) return;
+    const id = ownedClip(session.media);
+    if (id && clipUsers(id).every((u) => u === session.media)) editor.svg.querySelector(`#${CSS.escape(id)}`)?.remove();
+    for (const name of ["data-crop", "data-mask", "data-svgdeck-clip"]) session.media.removeAttribute(name);
+    if (id) session.media.removeAttribute("clip-path");
+    session.crop = [0, 0, 0, 0];
+    session.mask = "rect";
+    editor.drawOverlay();
+    render();
+  }
+  function render() {
+    const wasOpen = dialog.querySelector("details")?.open || false;
+    dialog.replaceChildren();
+    if (!valid()) return dialog;
+    const title = document.createElement("strong"), actions = document.createElement("div");
+    title.textContent = session.media.hasAttribute("data-video") ? "Crop movie" : "Crop image";
+    actions.className = "crop-actions";
+    for (const [label, fn] of [["Done", () => finish(true)], ["Cancel", () => finish(false)], ["Reset", removeOwnedClip]]) {
+      const button = document.createElement("button");
+      button.type = "button"; button.textContent = label; button.addEventListener("click", fn); actions.append(button);
+    }
+    dialog.append(title, actions);
+    const advanced = document.createElement("details"), summary = document.createElement("summary"), fields = document.createElement("div");
+    summary.textContent = "Advanced"; fields.className = "media-crop-fields";
+    ["Left", "Top", "Right", "Bottom"].forEach((name, i) => {
+      const label = document.createElement("label"), input = document.createElement("input");
+      label.textContent = `${name} `; input.type = "number"; input.min = "0"; input.max = "99.9"; input.step = "0.5";
+      input.value = session.crop[i]; input.dataset.cropSide = name.toLowerCase();
+      input.addEventListener("change", () => {
+        if (!valid()) return;
+        const next = [...session.crop];
+        next[i] = input.value;
+        preview(next, session.mask, i, false);
+        input.value = session.crop[i];
+      });
+      label.append(input, "%"); fields.append(label);
+    });
+    const maskLabel = document.createElement("label"), maskSelect = document.createElement("select");
+    maskLabel.textContent = "Mask "; maskSelect.dataset.mediaMask = "";
+    for (const [value, text] of [["rect", "Rectangle"], ["ellipse", "Ellipse"]]) {
+      const option = document.createElement("option");
+      option.value = value; option.textContent = text; option.selected = value === session.mask; maskSelect.append(option);
+    }
+    maskSelect.addEventListener("change", () => preview(session.crop, maskSelect.value));
+    maskLabel.append(maskSelect); advanced.append(summary, fields, maskLabel); advanced.open = wasOpen; dialog.append(advanced);
     return dialog;
   }
 
   function open() {
+    if (session) finish(false);
     settle();
-    media = selectedMedia();
+    const media = selectedMedia();
     if (!media) { toast("Select one image or movie to crop."); return false; }
-    sessionSvg = editor.svg;
-    render();
-    if (!dialog.open) dialog.showModal();
+    if (existingForeignClip(media)) { toast("This media already has an imported clip path. Remove it before using Crop."); return false; }
+    session = { media, svg: editor.svg, original: snapshot(media), crop: cropOf(media), mask: media.getAttribute("data-mask") || "rect", drag: null };
+    editor.begin(); render();
+    if (!dialog.open) dialog.show();
+    editor.drawOverlay();
     return true;
   }
-
-  const api = { open, render, onLoad() {
-    if (dialog.open) dialog.close();
-    media = null; sessionSvg = null; dialog.replaceChildren();
-  } };
+  function geometry() {
+    if (!valid()) return null;
+    const matrix = toRoot(session.media, editor.svg);
+    const x = parseFloat(session.media.getAttribute("x")) || 0, y = parseFloat(session.media.getAttribute("y")) || 0;
+    const w = parseFloat(session.media.getAttribute("width")) || 0, h = parseFloat(session.media.getAttribute("height")) || 0;
+    const [left, top, right, bottom] = session.crop;
+    const local = { left: x + w * left / 100, top: y + h * top / 100,
+      right: x + w * (1 - right / 100), bottom: y + h * (1 - bottom / 100), x, y, w, h };
+    const point = (a, b) => matrix.transformPoint(new DOMPoint(a, b));
+    const corners = [point(local.left, local.top), point(local.right, local.top),
+      point(local.right, local.bottom), point(local.left, local.bottom)];
+    const mids = [point((local.left + local.right) / 2, local.top), point(local.right, (local.top + local.bottom) / 2),
+      point((local.left + local.right) / 2, local.bottom), point(local.left, (local.top + local.bottom) / 2)];
+    return { inv: matrix.inverse(), local, corners,
+      points: [corners[0], mids[0], corners[1], mids[1], corners[2], mids[2], corners[3], mids[3]] };
+  }
+  const names = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
+  function drawOverlay(o, make, px) {
+    const g = geometry();
+    if (!g) return false;
+    const polygon = g.corners.map((p) => `${p.x},${p.y}`).join(" ");
+    const matrix = toRoot(session.media, editor.svg);
+    const href = session.media.getAttribute("href") ||
+      session.media.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
+    make("image", {
+      x: session.media.getAttribute("x") || 0,
+      y: session.media.getAttribute("y") || 0,
+      width: session.media.getAttribute("width") || 0,
+      height: session.media.getAttribute("height") || 0,
+      href,
+      preserveAspectRatio: session.media.getAttribute("preserveAspectRatio") || "xMidYMid meet",
+      transform: `matrix(${matrix.a} ${matrix.b} ${matrix.c} ${matrix.d} ${matrix.e} ${matrix.f})`,
+      opacity: .38,
+      "pointer-events": "none",
+    });
+    make("path", {
+      d: `M0 0H${editor.size[0]}V${editor.size[1]}H0Z M${polygon.replaceAll(" ", "L")}Z`,
+      class: "ov-crop-shade",
+    });
+    make("polygon", { points: polygon, class: "ov-crop-frame", "stroke-width": 2 * px });
+    g.points.forEach((p, i) => make("rect", {
+      x: p.x - 9 * px, y: p.y - 9 * px, width: 18 * px, height: 18 * px, rx: 3 * px,
+      class: "ov-crop-handle", "stroke-width": 2 * px, "data-crop-handle": names[i],
+    }));
+    return true;
+  }
+  function onPointerDown(e) {
+    if (!valid()) return false;
+    const handle = e.target?.getAttribute?.("data-crop-handle");
+    if (!handle) return true;
+    session.drag = { id: e.pointerId, handle, crop: [...session.crop] };
+    editor.host.setPointerCapture(e.pointerId); e.preventDefault();
+    return true;
+  }
+  function onPointerMove(e, p) {
+    if (!valid() || session.drag?.id !== e.pointerId) return false;
+    const g = geometry(), q = g.inv.transformPoint(p), next = [...session.crop];
+    const { x, y, w, h } = g.local, side = session.drag.handle, changed = [];
+    if (side.includes("w")) { next[0] = (q.x - x) / w * 100; changed.push(0); }
+    if (side.includes("e")) { next[2] = (x + w - q.x) / w * 100; changed.push(2); }
+    if (side.includes("n")) { next[1] = (q.y - y) / h * 100; changed.push(1); }
+    if (side.includes("s")) { next[3] = (y + h - q.y) / h * 100; changed.push(3); }
+    preview(next, session.mask, changed);
+    e.preventDefault();
+    return true;
+  }
+  function onPointerUp(e) {
+    if (!session || session.drag?.id !== e.pointerId) return false;
+    session.drag = null; e.preventDefault(); return true;
+  }
+  function onPointerCancel(e) {
+    if (!session || session.drag?.id !== e.pointerId) return false;
+    const crop = session.drag.crop; session.drag = null; preview(crop, session.mask); e.preventDefault(); return true;
+  }
+  function onKeyDown(e) {
+    if (!session) return false;
+    if (e.key === "Escape" || (e.key.toLowerCase() === "z" && (e.ctrlKey || e.metaKey))) {
+      e.preventDefault(); e.stopPropagation(); finish(false); return true;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault(); e.stopPropagation();
+      if (dialog.contains(document.activeElement)) document.activeElement.blur();
+      finish(true);
+      return true;
+    }
+    return false;
+  }
+  document.addEventListener("keydown",onKeyDown,true);
+  const api = { open, render, drawOverlay, onPointerDown, onPointerMove, onPointerUp, onPointerCancel,
+    cancel: () => finish(false), finish: () => finish(true), active: () => !!session,
+    onLoad() {
+      if (session) finish(false);
+      else { dialog.replaceChildren(); if (dialog.open) dialog.close(); }
+    },
+  };
   editor.mediaTools = api;
   return api;
 }

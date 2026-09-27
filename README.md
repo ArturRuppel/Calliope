@@ -94,10 +94,14 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   **Build steps** assigns when selected objects appear, lists their sequence,
   and previews the slide from its initial state. Objects sharing a step appear
   together. Preview visibility is never saved into the SVG.
-  **Crop and mask** offers percentage insets and rectangle/ellipse masks for
-  a selected image or movie. Cropping is reversible, supports Undo and Reset,
-  and leaves the source media untouched. Existing imported clip paths are
-  preserved; the crop panel refuses to replace them.
+  **Crop** appears in the toolbar and properties when an image or movie is
+  selected. Drag its edge or corner handles; the faded original stays visible.
+  Done/Enter accepts the crop as one undo step; Cancel/Escape discards it.
+  Advanced offers numeric insets and rectangle/ellipse masks; Reset restores
+  the full image. Source media and imported clip paths remain untouched.
+- **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
+  fields, a visual picker, and an opacity slider. Colour transparency is
+  independent of whole-object opacity.
 - **Speaker notes**, also in Panels, saves plain-text notes with each slide.
   **Speaker view** shows the current slide, next slide, notes and a timer.
   Choose **Open audience window** and move that window to the presentation
@@ -127,9 +131,13 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   press **Assign a key or button**, then press it. Actions set the Pencil's
   or the finger's tool, set a Pencil tool only while held, or run undo, redo,
   delete, fit and slide changes. Bindings are kept per browser.
-- Everything saves automatically (the status shows Saved). Undo/redo per
-  slide. If the same slide was changed elsewhere, saving stops and says so
-  rather than overwriting.
+- Edits autosave to the **working copy**. **Commit** saves a named, immutable
+  snapshot of the whole deck, including slide order and notes. Its history
+  offers text diffs against the previous commit or working copy and full-deck
+  restore. The first edit protects the original as a baseline; restoring also
+  saves the working copy as a safety commit. Unchanged content is shared and
+  media is never copied into commits. Undo/redo remains per slide. Concurrent
+  edits stop saving or restoring instead of silently overwriting changes.
 - Keyboard: Ctrl+Z / Ctrl+Shift+Z, Ctrl+C / Ctrl+V (also across slides),
   Ctrl+D duplicate, Ctrl+G / Ctrl+Shift+G group, Delete, arrow keys nudge
   (Shift ×10), Page Up/Down change slide.

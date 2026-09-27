@@ -166,3 +166,6 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .media-tools input { width:65px; }
 .media-tools input,.media-tools select,.media-tools button { min-height:36px; font:15px system-ui; }
 .media-tools button { margin:12px 0 0 12px; padding:8px 16px; }
+#crop-selection[hidden] { display:none; }
+#commit-deck { border-color:var(--accent); color:var(--accent); font-weight:600; }
+.status { max-width:145px; }

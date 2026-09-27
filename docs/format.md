@@ -76,7 +76,7 @@ Movies are always muted.
 | `data-nodetypes` | on a path: the type of each point, in order, for point editing: `c` corner, `s` smooth, `z` symmetric. Written only when the handles alone would not tell (like Inkscape's `sodipodi:nodetypes`) |
 | `data-ink="pressure"` | a Pencil stroke drawn with pressure: a filled outline, so its colour is the fill |
 | `data-hidden="true"` | hidden through the Objects panel; paired with inline `display:none` so it remains hidden outside the editor |
-| `data-crop="L T R B"` | image/movie crop insets in percent, each between 0 and 49.5 |
+| `data-crop="L T R B"` | image/movie crop insets in percent, each between 0 and 99.9; opposing insets must leave at least 0.1% visible |
 | `data-mask="rect"` or `"ellipse"` | crop mask shape; the editor also writes a native SVG `clipPath` in object-bounding-box units |
 | `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference |
 
@@ -95,3 +95,20 @@ The service keeps up to 30 preceding artwork versions per slide in
 with a JSON sidecar retaining their slide metadata, including speaker notes.
 These recovery files remain in the working deck and are not included in the
 standalone presentation export.
+
+### Deck commits
+
+`deck.json` and `slides/` remain the autosaved working copy. Explicit commits
+are immutable JSON manifests in `commits/manifests/<id>.json`, containing a
+parent ID, message, timestamp, and SHA-256 object references for the exact
+metadata and each referenced SVG. Content lives in `commits/objects/<sha256>`;
+unchanged files are shared across snapshots. Commit history is not pruned.
+Media and fonts remain in their existing directories and are referenced rather
+than copied. Keep those assets with the deck when backing it up.
+
+The first working mutation preserves a baseline. Full-deck restore checks the
+metadata version and every current slide version, saves a safety snapshot,
+then replaces working metadata and slides while retaining media, fonts,
+recovery files, and all commits. Commit diffs are unified text diffs of JSON
+and SVG. Commits are local deck history, not Git commits, and are not included
+in standalone presentation exports.

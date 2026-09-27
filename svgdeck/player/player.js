@@ -128,7 +128,7 @@
     });
     // Editor crop percentages describe the image box, including letterboxing.
     const crop = (image.getAttribute("data-crop") || "0 0 0 0").trim().split(/\s+/).map(Number);
-    if (crop.length === 4 && crop.every(v => Number.isFinite(v) && v >= 0 && v < 50)) {
+    if (crop.length === 4 && crop.every(v => Number.isFinite(v) && v >= 0 && v < 100) && crop[0]+crop[2] < 100 && crop[1]+crop[3] < 100) {
       const [l, t, r, b] = crop;
       if (image.getAttribute("data-mask") === "ellipse") {
         video.style.clipPath = `ellipse(${(100-l-r)/2}% ${(100-t-b)/2}% at ${(100+l-r)/2}% ${(100+t-b)/2}%)`;

@@ -39,6 +39,9 @@ export function firstGlyphElement(t) {
   return t;
 }
 const near = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
+// Computed colours containing alpha must not pass through toHex(), which is
+// intentionally an opaque palette helper. Browsers already canonicalize them.
+const paintColor = (value) => /^(rgba|hsla|color)\(/i.test(value || "") ? value : (toHex(value) || value);
 
 // --- formatted text runs ------------------------------------------------------
 const BLOCKS = new Set(["div", "p", "li"]);
@@ -64,7 +67,7 @@ function decorationOf(el, stop) {
 
 function sameLook(a, b) {
   return (a.decoration || "none") === (b.decoration || "none") && a.family === b.family && a.weight === b.weight && a.fontStyle === b.fontStyle &&
-    (toHex(a.fill) || a.fill) === (toHex(b.fill) || b.fill) && Math.abs(a.size / b.size - 1) < 0.01 &&
+    paintColor(a.fill) === paintColor(b.fill) && Math.abs(a.size / b.size - 1) < 0.01 &&
     sameShift(a.shift, b.shift, b.size);
 }
 
@@ -102,7 +105,7 @@ function lookDiff(look, base) {
   if (look.family !== base.family) diff.push(["font-family", look.family]);
   if (look.weight !== base.weight) diff.push(["font-weight", look.weight]);
   if (look.fontStyle !== base.fontStyle) diff.push(["font-style", look.fontStyle]);
-  if ((toHex(look.fill) || look.fill) !== (toHex(base.fill) || base.fill)) diff.push(["fill", toHex(look.fill) || look.fill]);
+  if (paintColor(look.fill) !== paintColor(base.fill)) diff.push(["fill", paintColor(look.fill)]);
   if (Math.abs(look.size / base.size - 1) >= 0.01) diff.push(["font-size", `${+look.size.toFixed(4)}px`]);
   if (!sameShift(look.shift, base.shift, base.size)) {
     diff.push(["baseline-shift", typeof look.shift === "number" ? `${+look.shift.toFixed(4)}px` : look.shift || "baseline"]);
@@ -397,6 +400,7 @@ export class SlideEditor {
   }
 
   select(elements) {
+    if (this.mediaTools?.active?.() && (elements.length !== 1 || elements[0] !== this.selection[0])) this.mediaTools.cancel();
     this.selection = elements.filter(Boolean);
     this.drawOverlay();
     this.hooks.select(this.selection);
@@ -497,6 +501,7 @@ export class SlideEditor {
       o.appendChild(el);
       return el;
     };
+    if (this.mediaTools?.drawOverlay?.(o, make, px)) return;
     for (const guide of this.smartGuides) {
       if (guide.kind === "align") {
         const attrs = guide.axis === "x"
@@ -678,6 +683,7 @@ export class SlideEditor {
     if (e.target.closest && e.target.closest(".text-edit")) return;
     if (!this.svg) return;
     if (e.pointerType === "mouse" && e.button === 2) return;
+    if (this.mediaTools?.onPointerDown?.(e, this.point(e))) return;
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType,
       startX: e.clientX, startY: e.clientY, started: performance.now() });
     this.host.setPointerCapture(e.pointerId);
@@ -1231,6 +1237,7 @@ export class SlideEditor {
   }
 
   onMove(e) {
+    if (this.mediaTools?.onPointerMove?.(e, this.point(e))) return;
     const ptr = this.pointers.get(e.pointerId);
     if (ptr) { ptr.x = e.clientX; ptr.y = e.clientY; }
     const g = this.gesture;
@@ -1456,6 +1463,7 @@ export class SlideEditor {
   }
 
   onUp(e) {
+    if (this.mediaTools?.onPointerUp?.(e, this.point(e))) return;
     const ptr = this.pointers.get(e.pointerId);
     if (this.gesture?.kind === "pinch" && ptr &&
         Math.hypot(e.clientX - ptr.startX, e.clientY - ptr.startY) >= TAP_PX.touch) {
@@ -1559,6 +1567,7 @@ export class SlideEditor {
   }
 
   onCancel(e) {
+    if (this.mediaTools?.onPointerCancel?.(e, this.point(e))) return;
     this.pointers.delete(e.pointerId);
     this.touchStart = null;
     if (this.gesture && (this.gesture.id === e.pointerId || this.gesture.kind === "pinch")) this.cancelGesture();
@@ -1648,7 +1657,7 @@ export class SlideEditor {
   lookAt(el, stop = null) {
     const cs = getComputedStyle(el);
     return { decoration: decorationOf(el, stop || el.closest("text")), family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400), fontStyle: cs.fontStyle,
-             fill: toHex(cs.fill) || cs.fill, size: parseFloat(cs.fontSize) || 16, shift: stop ? shiftOf(el, stop) : 0 };
+             fill: paintColor(cs.fill), size: parseFloat(cs.fontSize) || 16, shift: stop ? shiftOf(el, stop) : 0 };
   }
 
   /** Each line of a text as runs of equally formatted characters. */
@@ -1790,7 +1799,7 @@ export class SlideEditor {
       marginLeft: { middle: "0", end: "6px" }[align] || "-6px",
       fontFamily: base.family, fontWeight: base.weight, fontStyle: base.fontStyle,
       fontSize: `${size}px`, lineHeight: `${pitch}px`, letterSpacing: `${base.letterSpacing * scale}px`,
-      color: toHex(base.fill) || "#000",
+      color: paintColor(base.fill) || "#000",
       textAlign: { middle: "center", end: "right" }[align] || "left",
       minWidth: `${size * 2}px`,
     });
@@ -1805,7 +1814,7 @@ export class SlideEditor {
       if (!text) return;
       const cs = getComputedStyle(el);
       pushRun(lines[lines.length - 1], text, { decoration: decorationOf(el,box), family: cs.fontFamily, weight: String(parseInt(cs.fontWeight, 10) || 400),
-        fontStyle: cs.fontStyle, fill: toHex(cs.color) || "#000000", size: (parseFloat(cs.fontSize) || 16) / scale,
+        fontStyle: cs.fontStyle, fill: paintColor(cs.color) || "#000000", size: (parseFloat(cs.fontSize) || 16) / scale,
         shift: shiftOf(el, box, scale) });
       atStart = false;
       fromBlock = false;
@@ -1885,7 +1894,7 @@ export class SlideEditor {
     t.style.setProperty("font-size", `${+base.size.toFixed(4)}px`);
     t.style.setProperty("font-weight", base.weight);
     t.style.setProperty("font-style", base.fontStyle);
-    if (toHex(base.fill)) t.style.setProperty("fill", toHex(base.fill));
+    if (paintColor(base.fill)) t.style.setProperty("fill", paintColor(base.fill));
     t.style.setProperty("text-anchor", anchor);
     for (const p of ["font-family", "font-size", "font-weight", "font-style", "fill", "text-anchor"]) t.removeAttribute(p);
     const tcs = getComputedStyle(t);
@@ -2188,8 +2197,8 @@ export class SlideEditor {
   /** Arrowhead marker for a colour and a size (as a multiple of the stroke
    *  width). Thin lines get proportionally bigger heads so they stay visible. */
   ensureMarker(color, ratio = 3.5) {
-    const hex = toHex(color) || "#000000";
-    const id = `arrow-${hex.slice(1)}-${String(ratio).replace(".", "_")}`;
+    const paint = paintColor(color) || "#000000";
+    const id = `arrow-${paint.replace(/[^a-z0-9]+/gi, "_")}-${String(ratio).replace(".", "_")}`;
     if (this.svg.querySelector(`#${CSS.escape(id)}`)) return id;
     let defs = this.svg.querySelector(":scope > defs");
     if (!defs) { defs = document.createElementNS(SVGNS, "defs"); this.svg.prepend(defs); }
@@ -2198,7 +2207,7 @@ export class SlideEditor {
       markerHeight: String(ratio), orient: "auto-start-reverse", "data-label": "arrowhead" })) marker.setAttribute(k, v);
     const tip = document.createElementNS(SVGNS, "path");
     tip.setAttribute("d", "M0,0 L10,5 L0,10 z");
-    tip.setAttribute("fill", hex);
+    tip.setAttribute("fill", paint);
     marker.appendChild(tip);
     defs.appendChild(marker);
     return id;

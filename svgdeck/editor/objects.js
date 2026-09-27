@@ -220,7 +220,7 @@ export function installObjects({ editor, state, toast, settle }) {
     tools.append(button("Leave group", "Leave current group", () => { editor.exitGroup(); draw(false); }));
     tools.lastChild.disabled = editor.context === editor.svg;
     const hint = document.createElement("p"); hint.className = "objects-hint";
-    hint.textContent = "Drag within a group to reorder, or use the arrow buttons.";
+    hint.textContent = "Manage the objects on this slide: name them, show or hide them, lock them, and enter groups. The top of this list is the front of the slide. Drag within a group to reorder, or use the arrows.";
     const tree = document.createElement("ul"); tree.className = "object-tree"; tree.setAttribute("aria-label", "Slide objects");
     appendTree(tree, editor.svg);
     body.append(tools, hint, tree);
@@ -317,7 +317,9 @@ export function installObjects({ editor, state, toast, settle }) {
     }
     const normalize = button("Number in this order", "Assign consecutive build steps", () => renumber(stepped));
     normalize.disabled = !stepped.length;
-    body.append(previewBox, assign, list, normalize);
+    const explanation = document.createElement("p"); explanation.className = "objects-hint";
+    explanation.textContent = "Builds reveal objects one step at a time while presenting. For example, show a question first, then its answer on the next click. Step 0 means visible from the start; objects with the same step appear together. This does not create new slides.";
+    body.append(explanation, previewBox, assign, list, normalize);
   }
 
   function draw(external = true) {
@@ -326,11 +328,11 @@ export function installObjects({ editor, state, toast, settle }) {
     if (!editor.svg) return;
     panel.replaceChildren();
     const header = document.createElement("header");
-    const title = document.createElement("h2"); title.textContent = mode === "objects" ? "Objects" : "Builds";
+    const title = document.createElement("h2"); title.textContent = mode === "objects" ? "Objects" : "Presentation builds";
     header.append(title, button("×", "Close panel", () => { exitPreview(); panel.hidden = true; }));
     const tabs = document.createElement("div"); tabs.className = "object-tabs"; tabs.setAttribute("role", "tablist");
     for (const name of ["objects", "builds"]) {
-      const b = button(name === "objects" ? "Objects" : "Builds", `Open ${name}`, () => { exitPreview(); mode = name; draw(false); });
+      const b = button(name === "objects" ? "Objects" : "Builds · reveal order", `Open ${name}`, () => { exitPreview(); mode = name; draw(false); });
       b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(mode === name)); tabs.append(b);
     }
     const body = document.createElement("div"); body.className = "objects-body";

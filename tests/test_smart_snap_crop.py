@@ -78,6 +78,7 @@ def test_media_crop_mask_svg_movie_contract_reset_and_undo(page, server):
         for(const [k,v] of Object.entries({x:100,y:100,width:400,height:300,href:'poster.png','data-video':'movie.webm'})) i.setAttribute(k,v);
         i.setAttribute('transform','rotate(8 300 250)'); e.svg.append(i); e.selection=[i]; }); e.select(e.selection);
       svgdeckEditor.mediaTools.open(); }""")
+    page.locator('.media-tools summary').click()
     page.locator('[data-crop-side="left"]').fill('12.5')
     page.locator('[data-crop-side="left"]').dispatch_event('change')
     page.locator('[data-media-mask]').select_option('ellipse')
@@ -87,8 +88,9 @@ def test_media_crop_mask_svg_movie_contract_reset_and_undo(page, server):
     assert got == {'crop': '12.5 0 0 0', 'mask': 'ellipse', 'clip': got['clip'],
                    'units': 'objectBoundingBox', 'shape': 'ellipse', 'transform': 'rotate(8 300 250)'}
     assert got['clip'].startswith('url(#svgdeck-clip-')
+    page.get_by_role('button', name='Done').click()
     page.keyboard.press('Control+z')
-    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#media').getAttribute('data-mask')") == 'rect'
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#media').getAttribute('data-mask')") is None
     assert not page.locator('.media-tools').get_attribute('open')
     page.evaluate("svgdeckEditor.editor.select([svgdeckEditor.editor.svg.querySelector('#media')]); svgdeckEditor.mediaTools.open()")
     page.locator('.media-tools button', has_text='Reset').click()
@@ -100,8 +102,6 @@ def test_imported_clip_is_preserved(page, server):
     page.evaluate("""async () => {const e=svgdeckEditor.editor,ns='http://www.w3.org/2000/svg';
       const i=document.createElementNS(ns,'image');i.id='foreign';i.setAttribute('width',100);i.setAttribute('height',100);i.setAttribute('clip-path','url(#foreign-clip)');e.svg.append(i);e.select([i]);
       svgdeckEditor.mediaTools.open();}""")
-    page.locator('[data-crop-side="top"]').fill('10')
-    page.locator('[data-crop-side="top"]').dispatch_event('change')
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#foreign').getAttribute('clip-path')") == 'url(#foreign-clip)'
     assert 'imported clip path' in page.locator('#toast').text_content()
 
@@ -110,9 +110,11 @@ def test_duplicate_gets_private_clip_before_edit_and_reset(page, server):
     page.evaluate("""async () => {const e=svgdeckEditor.editor,ns='http://www.w3.org/2000/svg';
       const i=document.createElementNS(ns,'image');i.id='original';i.setAttribute('width',200);i.setAttribute('height',100);e.svg.append(i);e.select([i]);
       svgdeckEditor.mediaTools.open();}""")
+    page.locator('.media-tools summary').click()
     page.locator('[data-crop-side="left"]').fill('10'); page.locator('[data-crop-side="left"]').dispatch_event('change')
     page.get_by_role('button', name='Done').click()
     page.evaluate("svgdeckEditor.editor.duplicate(); svgdeckEditor.mediaTools.open()")
+    page.locator('.media-tools summary').click()
     page.locator('[data-media-mask]').select_option('ellipse')
     clips = page.evaluate("""() => [...svgdeckEditor.editor.svg.querySelectorAll('image')].map(i=>i.getAttribute('clip-path'))""")
     assert clips[0] != clips[1]
@@ -126,9 +128,11 @@ def test_duplicate_gets_private_clip_before_edit_and_reset(page, server):
 def test_copy_paste_clip_is_independent_on_reset(page, server):
     page.evaluate("""() => {const e=svgdeckEditor.editor,ns='http://www.w3.org/2000/svg',i=document.createElementNS(ns,'image');
       i.id='source';i.setAttribute('width',200);i.setAttribute('height',100);e.svg.append(i);e.select([i]);svgdeckEditor.mediaTools.open();}""")
+    page.locator('.media-tools summary').click()
     page.locator('[data-crop-side="right"]').fill('15'); page.locator('[data-crop-side="right"]').dispatch_event('change')
     page.get_by_role('button', name='Done').click()
     page.evaluate("""() => {const e=svgdeckEditor.editor,data=e.copy();e.paste(data);svgdeckEditor.mediaTools.open();}""")
+    page.locator('.media-tools summary').click()
     refs = page.evaluate("""() => [...svgdeckEditor.editor.svg.querySelectorAll('image')].map(i=>[i.getAttribute('clip-path'),i.getAttribute('data-svgdeck-clip')])""")
     assert refs[0][0] != refs[1][0] and refs[1][0].endswith(refs[1][1] + ')')
     page.get_by_role('button', name='Reset').click()

@@ -18,9 +18,10 @@ export function installNotes({state,putDeck,toast}) {
     clearTimeout(timer); timer = setTimeout(() => flush().catch(e => toast(`Notes not saved: ${e.message}`)),700);
   });
   function render() {
-    if (current === state.current) return;
+    const value = drafts.get(state.current) ?? state.deck?.slides.find(s => s.id === state.current)?.notes ?? '';
+    if (current === state.current && text.value === value) return;
     current = state.current;
-    text.value = drafts.get(current) ?? state.deck?.slides.find(s => s.id === current)?.notes ?? '';
+    text.value = value;
     status.textContent = drafts.has(current) ? 'Unsaved notes' : 'Saved';
   }
   async function flush() {

@@ -6,6 +6,8 @@ import { installNotes } from "./notes.js";
 import { installObjects } from "./objects.js";
 import { installMediaTools } from "./media-tools.js";
 import { installRecovery } from "./recovery.js";
+import { installCommits } from "./commits.js";
+import { createColorControl } from "./colors.js";
 
 const DECK = document.body.dataset.deck;
 const $ = (id) => document.getElementById(id);
@@ -39,6 +41,14 @@ const api = {
   putDeck: (deck, base) => api.json("PUT", `/api/decks/${DECK}`, { deck, base }),
   fonts: () => api.json("GET", "/api/fonts"),
   useFamily: (family) => api.json("POST", `/api/decks/${DECK}/fonts`, { family }),
+  commits: () => api.json("GET", `/api/decks/${DECK}/commits`),
+  createCommit: (message, expectedDeck, expectedSlides) => api.json("POST", `/api/decks/${DECK}/commits`, {message,expectedDeck,expectedSlides}),
+  restoreCommit: (id, expectedDeck, expectedSlides) => api.json("POST", `/api/decks/${DECK}/commits/${encodeURIComponent(id)}/restore`, {expectedDeck,expectedSlides}),
+  async commitDiff(id, target = "parent") {
+    const r = await fetch(`/api/decks/${DECK}/commits/${encodeURIComponent(id)}/diff?target=${encodeURIComponent(target)}`);
+    if (!r.ok) throw new Error(`Could not read commit diff: ${r.status}`);
+    return r.text();
+  },
   revisions: (id) => api.json("GET", `/api/decks/${DECK}/slides/${id}/revisions`),
   async revision(id, token) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}/revisions/${encodeURIComponent(token)}`);
@@ -86,7 +96,7 @@ const state = {
   slides: new Map(),  // id -> {text, version, dirty, saving, undo, redo, timer}
   prefs: loadPrefs(),
 };
-let objectPanels = null, mediaTools = null, recovery = null, notes = null;
+let objectPanels = null, mediaTools = null, recovery = null, notes = null, commits = null;
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
@@ -216,10 +226,11 @@ function refreshStatus() {
   else if (recs.some((r) => r.saveError)) setStatus("Not saved", "error");
   else if (recs.some((r) => r.dirty)) setStatus("Unsaved", "dirty");
   else if (editor.pathDraft) setStatus("Drawing path…", "busy");
-  else setStatus("Saved", "ok");
+  else setStatus("Saved · working copy", "ok");
 }
 
 async function flush() {
+  mediaTools?.finish?.();
   editor.finishPath();
   editor.syncTextEdit();
   await notes?.flush();
@@ -276,6 +287,7 @@ async function slideRecord(id) {
 let navigationSequence = 0;
 
 function settleCurrentSlide() {
+  mediaTools?.finish?.();
   editor.endTextEdit(true);
   editor.finishPath();
   editor.cancelGesture();
@@ -465,6 +477,7 @@ function buildToggles() {
     "aria-pressed": String(state.prefs.grid.snap), onclick: () => setGrid({ snap: !state.prefs.grid.snap }) }, "Snap");
   $("tools-navigate").append(multi);
   $("tools-arrange").append(group, actions,
+    el("button", {class:"btn tool", id:"crop-selection", hidden:true, onclick:() => mediaTools?.open()}, "Crop"),
     el("button", {class:"btn tool", id:"align-tools", onclick:() => revealSection("Align")}, "Align"),
     el("button", {class:"btn tool", id:"text-tools", onclick:() => revealSection("Text")}, "Format text"));
   $("tools-view").append(grid, snap);
@@ -480,6 +493,7 @@ function buildToggles() {
     ["Crop and mask", () => mediaTools?.open()],
     ["Speaker notes", () => notes?.open()],
     ["History and recovery", () => recovery?.open()],
+    ["Commits and changes", () => commits?.open()],
     ["Speaker view", () => present(true)],
   ]) choices.append(el("button", {class:"btn", onclick:() => {panels.open=false;fn();}}, label));
   panels.append(choices); $("tools-view").append(panels);
@@ -534,6 +548,7 @@ function setGrid(change) {
 /** Give a tool to the finger ("touch": also the mouse) or the Pencil. By
  *  default the input used last; linked, both change together. */
 function setTool(name, { keepEdit = false, slot = editor.input } = {}) {
+  mediaTools?.finish?.();
   if (editor.pathDraft) editor.finishPath();
   closeContextMenu();
   editor.cancelGesture();
@@ -615,6 +630,7 @@ window.addEventListener("gamepadconnected", () => {
 function updateActions() {
   if (editor.tools) updateToolButtons();
   const count = editor.selection.length;
+  if ($("crop-selection")) $("crop-selection").hidden = !(count === 1 && editor.selection[0].localName === "image");
   if ($("align-tools")) $("align-tools").disabled = !count;
   if ($("text-tools")) $("text-tools").disabled = !editor.selection.some(e => e.localName === "text");
   if ($("group-selection")) $("group-selection").disabled = count < 2;
@@ -741,27 +757,13 @@ function row(label, ...controls) {
 }
 
 function colorControl(value, onPick, allowNone) {
-  const current = toHex(value);
-  const wrap = el("div", { class: "colors" });
-  const pick = (c) => {
-    if (c && c !== "none") {
-      state.prefs.recent = [c, ...state.prefs.recent.filter((r) => r !== c)].slice(0, 6);
+  return createColorControl(value, onPick, {
+    allowNone, palette:PALETTE, recent:state.prefs.recent,
+    onRecent(c) {
+      state.prefs.recent = [c, ...state.prefs.recent.filter(r => r !== c)].slice(0, 6);
       savePrefs();
-    }
-    onPick(c);
-  };
-  const colors = [...new Set([...state.prefs.recent, ...PALETTE])].slice(0, 16);
-  for (const c of colors) {
-    wrap.append(el("button", { class: "swatch" + (c === current ? " on" : ""), style: `background:${c}`, title: c,
-      onclick: () => pick(c) }));
-  }
-  if (allowNone) {
-    wrap.append(el("button", { class: "swatch none" + (!current ? " on" : ""), title: "none", onclick: () => pick("none") }));
-  }
-  const input = el("input", { type: "color", value: current || "#000000", title: "Any colour" });
-  input.addEventListener("change", () => pick(input.value));
-  wrap.append(input);
-  return wrap;
+    },
+  });
 }
 
 function numberControl(value, { min = 0, max = 1000, step = 1, suffix = "" } = {}, onSet) {
@@ -854,12 +856,17 @@ function renderPanel() {
   const label = isMovie ? "Movie" : sel.length > 1 ? `${sel.length} objects` : ({
     text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", line: "Line", path: "Path",
     image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName);
+  if (sel.length === 1 && first.localName === "image") {
+    parts.push(section("Crop",
+      buttonRow([[isMovie ? "Crop movie" : "Crop image", "Drag the crop handles on the slide", () => mediaTools?.open()]]),
+      el("p", {class:"hint"}, "Drag the edges or corners to crop. Your original media stays intact.")));
+  }
 
   if (inks) {
     // Pressure strokes are filled outlines: their colour is the fill.
     parts.push(section(sel.length > 1 ? `${sel.length} ink strokes` : "Ink stroke",
       row("Colour", colorControl(cs.fill, (c) => { editor.setStyle("fill", c); state.prefs.stroke = c; savePrefs(); }, false)),
-      row("Opacity", numberControl(Math.round((parseFloat(cs.opacity) || 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
+      row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else if (!kinds.has("image") || kinds.size > 1) {
     parts.push(section(label,
@@ -869,10 +876,10 @@ function renderPanel() {
         : colorControl(cs.stroke, (c) => { setStroke(sel, c); if (c !== "none") { state.prefs.stroke = c; savePrefs(); } }, true)),
       !(texts.length && kinds.size === 1) ? row("Width", numberControl(+editor.strokeWidthOf(lookOf(first)).toFixed(2), { min: 0, max: 200, step: 0.5 },
         (v) => { setStrokeWidth(sel, v); state.prefs.strokeWidth = v; savePrefs(); })) : null,
-      row("Opacity", numberControl(Math.round((parseFloat(cs.opacity) || 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
+      row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100), { min: 0, max: 100, step: 5, suffix: "%" },
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else {
-    parts.push(section(label, row("Opacity", numberControl(Math.round((parseFloat(cs.opacity) || 1) * 100),
+    parts.push(section(label, row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100),
       { min: 0, max: 100, step: 5, suffix: "%" }, (v) => editor.setStyle("opacity", String(v / 100))))));
   }
 
@@ -1196,6 +1203,7 @@ async function present(speaker = false) {
 }
 
 function wire() {
+  $("commit-deck").onclick = () => commits?.open();
   $("undo").onclick = undo;
   $("redo").onclick = redo;
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
@@ -1242,6 +1250,7 @@ async function main() {
   objectPanels = installObjects({editor,state,toast,settle:settleCurrentSlide});
   mediaTools = installMediaTools({editor,toast,settle:settleCurrentSlide});
   recovery = installRecovery({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus,putDeck});
+  commits = installCommits({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus});
   editor.tools.pen = state.prefs.penLinked ? "select" : state.prefs.penTool || "pen";
   editor.penSeen = !!state.prefs.penSeen;
   buildToolbar();
@@ -1265,9 +1274,9 @@ async function main() {
   const m = /^#(\d+)$/.exec(location.hash);
   const start = state.deck.slides[m ? Math.min(+m[1] - 1, state.deck.slides.length - 1) : 0];
   await openSlide(start.id);
-  setStatus("Saved", "ok");
+  setStatus("Saved · working copy", "ok");
 }
 
 main();
 window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool,
-  get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;} };
+  get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;}, get commits() {return commits;} };

@@ -6,6 +6,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>svgdeck · {{DECK}}</title>
 <link rel="stylesheet" href="/editor/editor.css">
+<link rel="stylesheet" href="/editor/colors.css">
 </head>
 <body data-deck="{{DECK}}">
 <header class="bar">
@@ -23,6 +24,7 @@
   </div>
   <span class="status" id="status">Loading…</span>
   <div class="group">
+    <button class="btn" id="commit-deck" title="Save an immutable snapshot of the entire deck">Commit</button>
     <button class="btn" id="present" title="Present from this slide">▶ Present</button>
     <a class="btn" id="export" title="Download a standalone offline copy">Export</a>
     <button class="btn" id="toggle-panel" title="Properties">⚙</button>

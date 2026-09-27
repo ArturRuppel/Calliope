@@ -1,0 +1,23 @@
+.commits-dialog { width: min(880px, calc(100vw - 24px)); max-height: min(820px, calc(100vh - 24px));
+  color: var(--ink, #1e2329); background: var(--surface, #fff); border: 1px solid var(--line, #ccd1d6); border-radius: 10px; padding: 0; }
+.commits-dialog::backdrop { background: #0009; }
+.commits-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line, #ccd1d6); }
+.commits-dialog header div { display: grid; gap: 3px; }
+.commits-dialog small { display: block; color: color-mix(in srgb, var(--ink, #1e2329) 62%, transparent); }
+.commits-dialog header button { min-width: 44px; min-height: 44px; font-size: 24px; }
+.commits-body { padding: 14px 16px 20px; overflow: auto; }
+.commits-body h3 { margin: 18px 0 8px; font-size: 15px; }
+.commit-create { display: flex; gap: 8px; }
+.commit-create input { flex: 1; min-width: 0; min-height: 44px; padding: 0 10px; color: inherit; background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; font: inherit; }
+.commits-dialog button { min-height: 42px; padding: 0 11px; color: inherit; background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; }
+.commits-dialog button.primary { background: var(--accent, #2868c7); color: white; border-color: transparent; }
+.commits-dialog button.danger { color: #a21d28; }
+.commit-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 64px; border-top: 1px solid var(--line, #ccd1d6); }
+.commit-row > div:first-child { min-width: 180px; }
+.commit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.commit-diff pre { max-height: 330px; overflow: auto; padding: 12px; white-space: pre; font: 12px/1.45 ui-monospace, monospace; color: #e7edf4; background: #182028; border-radius: 6px; }
+@media (max-width: 680px) {
+  .commit-create, .commit-row { align-items: stretch; flex-direction: column; padding: 10px 0; }
+  .commit-actions { display: grid; grid-template-columns: 1fr 1fr; }
+  .commit-actions button:last-child { grid-column: 1 / -1; }
+}

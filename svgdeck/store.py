@@ -5,6 +5,7 @@ Layout:  <data>/decks/<name>/   one deck each (docs/format.md)
 """
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import os
@@ -27,6 +28,7 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 VIDEO_TYPES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 FONT_TYPES = {".otf", ".ttf"}
 RECOVERY_TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,180}$")
+COMMIT_ID = re.compile(r"^[0-9a-f]{20}$")
 REVISION_LIMIT = 30
 
 BLANK_SLIDE = """<?xml version="1.0" encoding="utf-8"?>
@@ -96,9 +98,11 @@ class Store:
     def list_decks(self) -> list[dict]:
         out = []
         for meta in sorted(self.decks.glob("*/deck.json")) if self.decks.is_dir() else []:
-            deck = Deck.load(meta.parent)
-            out.append({"name": meta.parent.name, "title": deck.title, "slides": len(deck.meta["slides"]),
-                        "modified": max(p.stat().st_mtime for p in meta.parent.rglob("*.svg")) if deck.meta["slides"] else meta.stat().st_mtime})
+            name = meta.parent.name
+            with self._lock(name):
+                deck = Deck.load(meta.parent)
+                out.append({"name": name, "title": deck.title, "slides": len(deck.meta["slides"]),
+                            "modified": max(p.stat().st_mtime for p in meta.parent.rglob("*.svg")) if deck.meta["slides"] else meta.stat().st_mtime})
         return sorted(out, key=lambda d: -d["modified"])
 
     def create_deck(self, name: str, title: str, size=(1920, 1080)) -> dict:
@@ -117,8 +121,9 @@ class Store:
         return self.get_deck(name)
 
     def get_deck(self, name: str) -> dict:
-        data = (self.deck_dir(name) / "deck.json").read_bytes()
-        return {"name": name, "deck": json.loads(data), "version": version(data)}
+        with self._lock(name):
+            data = (self.deck_dir(name) / "deck.json").read_bytes()
+            return {"name": name, "deck": json.loads(data), "version": version(data)}
 
     def put_deck(self, name: str, meta: dict, base: str | None) -> dict:
         with self._lock(name):
@@ -137,6 +142,7 @@ class Store:
         for sid in ids:
             if not (path / "slides" / f"{sid}.svg").is_file():
                 raise ValueError(f"slide {sid} has no file")
+        self._ensure_baseline(name)
         old_records = {s["id"]: s for s in json.loads(current).get("slides", [])}
         old = set(old_records)
         data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
@@ -165,11 +171,12 @@ class Store:
         return self.deck_dir(name) / "slides" / f"{slide}.svg"
 
     def get_slide(self, name: str, slide: str) -> tuple[bytes, str]:
-        path = self.slide_path(name, slide)
-        if not path.is_file():
-            raise KeyError(slide)
-        data = path.read_bytes()
-        return data, version(data)
+        with self._lock(name):
+            path = self.slide_path(name, slide)
+            if not path.is_file():
+                raise KeyError(slide)
+            data = path.read_bytes()
+            return data, version(data)
 
     def put_slide(self, name: str, slide: str, data: bytes, base: str | None) -> str:
         """Write a slide. `base` is the version the client edited; None
@@ -182,10 +189,226 @@ class Store:
                     raise Conflict(slide)
             elif not path.exists() or version(path.read_bytes()) != base:
                 raise Conflict(slide)
+            self._ensure_baseline(name)
             if path.exists():
                 self._checkpoint(name, slide, path.read_bytes())
             write_atomic(path, data)
             return version(data)
+
+    # --- explicit deck commits ----------------------------------------------
+    def _commit_root(self, name: str) -> Path:
+        return self.deck_dir(name) / "commits"
+
+    def _manifest_path(self, name: str, commit: str) -> Path:
+        if not COMMIT_ID.fullmatch(commit):
+            raise KeyError(commit)
+        path = self._commit_root(name) / "manifests" / f"{commit}.json"
+        if not path.is_file():
+            raise KeyError(commit)
+        return path
+
+    def _read_manifest(self, name: str, commit: str) -> dict:
+        try:
+            value = json.loads(self._manifest_path(name, commit).read_text())
+        except (OSError, ValueError) as error:
+            raise KeyError(commit) from error
+        if value.get("id") != commit or not isinstance(value.get("slides"), dict):
+            raise KeyError(commit)
+        body = {key: value.get(key) for key in ("parent", "message", "createdNs", "deck", "slides")}
+        encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        if self._sha256(encoded)[:20] != commit:
+            raise ValueError("commit manifest is corrupt")
+        return value
+
+    def _head_commit(self, name: str) -> str | None:
+        root = self._commit_root(name) / "manifests"
+        candidates = []
+        for path in root.glob("*.json") if root.is_dir() else []:
+            try:
+                item = json.loads(path.read_text())
+                if item.get("id") == path.stem and COMMIT_ID.fullmatch(path.stem):
+                    candidates.append((int(item["createdNs"]), path.stem))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        return max(candidates)[1] if candidates else None
+
+    @staticmethod
+    def _sha256(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()
+
+    def _put_object(self, root: Path, data: bytes) -> str:
+        digest = self._sha256(data)
+        target = root / "objects" / digest
+        if target.exists():
+            if target.read_bytes() != data:
+                raise OSError("commit object hash collision")
+        else:
+            write_atomic(target, data)
+        return digest
+
+    def _current_versions(self, name: str) -> tuple[bytes, dict[str, bytes]]:
+        root = self.deck_dir(name)
+        deck_data = (root / "deck.json").read_bytes()
+        meta = json.loads(deck_data)
+        slides = {}
+        for item in meta.get("slides", []):
+            sid = item.get("id")
+            if not isinstance(sid, str) or not SLIDE_ID.fullmatch(sid):
+                raise ValueError("invalid slide id in deck.json")
+            try:
+                slides[sid] = (root / "slides" / f"{sid}.svg").read_bytes()
+            except OSError as error:
+                raise ValueError(f"slide {sid} has no file") from error
+        return deck_data, slides
+
+    def _assert_snapshot_cas(self, name: str, expected_deck: str | None,
+                             expected_slides: dict | None) -> None:
+        deck_data, slides = self._current_versions(name)
+        actual = {sid: version(data) for sid, data in slides.items()}
+        if expected_deck != version(deck_data) or expected_slides != actual:
+            raise Conflict("deck snapshot changed")
+
+    def _snapshot(self, name: str, message: str, parent: str | None = None) -> dict:
+        root = self._commit_root(name)
+        deck_data, slides = self._current_versions(name)
+        deck_object = self._put_object(root, deck_data)
+        slide_objects = {sid: self._put_object(root, data) for sid, data in slides.items()}
+        created_ns = time.time_ns()
+        body = {"parent": parent, "message": message, "createdNs": created_ns,
+                "deck": deck_object, "slides": slide_objects}
+        encoded_body = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        commit = self._sha256(encoded_body)[:20]
+        manifest = {"id": commit, **body}
+        target = root / "manifests" / f"{commit}.json"
+        encoded = (json.dumps(manifest, indent=2, ensure_ascii=False) + "\n").encode()
+        if target.exists() and target.read_bytes() != encoded:
+            raise OSError("commit id collision")
+        if not target.exists():
+            write_atomic(target, encoded)
+        return manifest
+
+    def _ensure_baseline(self, name: str) -> None:
+        if self._head_commit(name) is None:
+            self._snapshot(name, "Baseline before editing", None)
+
+    def list_commits(self, name: str) -> list[dict]:
+        root = self._commit_root(name) / "manifests"
+        result = []
+        for path in root.glob("*.json") if root.is_dir() else []:
+            try:
+                item = self._read_manifest(name, path.stem)
+                result.append({"id": item["id"], "parent": item.get("parent"),
+                               "message": item.get("message", ""),
+                               "created": int(item["createdNs"]) / 1_000_000_000,
+                               "slides": len(item["slides"])})
+            except (KeyError, ValueError, TypeError):
+                continue
+        return sorted(result, key=lambda item: item["created"], reverse=True)
+
+    def create_commit(self, name: str, message: str, expected_deck: str | None,
+                      expected_slides: dict | None) -> dict:
+        message = message.strip()
+        if not message:
+            raise ValueError("commit message is required")
+        if len(message) > 500:
+            raise ValueError("commit message is too long")
+        with self._lock(name):
+            self._assert_snapshot_cas(name, expected_deck, expected_slides)
+            return self._snapshot(name, message, self._head_commit(name))
+
+    def _object(self, name: str, digest: str) -> bytes:
+        if not re.fullmatch(r"[0-9a-f]{64}", digest or ""):
+            raise KeyError(digest)
+        path = self._commit_root(name) / "objects" / digest
+        try:
+            data = path.read_bytes()
+        except OSError as error:
+            raise KeyError(digest) from error
+        if self._sha256(data) != digest:
+            raise ValueError("commit object is corrupt")
+        return data
+
+    def diff_commit(self, name: str, commit: str, target: str = "parent") -> str:
+        with self._lock(name):
+            current = self._read_manifest(name, commit)
+            commit_deck = self._object(name, current["deck"])
+            commit_slides = {sid: self._object(name, digest) for sid, digest in current["slides"].items()}
+            if target == "parent":
+                prior = self._read_manifest(name, current["parent"]) if current.get("parent") else None
+                old_deck = self._object(name, prior["deck"]) if prior else b""
+                old_slides = {sid: self._object(name, digest) for sid, digest in prior["slides"].items()} if prior else {}
+                new_deck, new_slides = commit_deck, commit_slides
+            elif target == "working":
+                old_deck, old_slides = commit_deck, commit_slides
+                new_deck, new_slides = self._current_versions(name)
+            else:
+                raise ValueError("target must be parent or working")
+        sections = []
+        pairs = [("deck.json", old_deck, new_deck)]
+        pairs += [(f"slides/{sid}.svg", old_slides.get(sid, b""), new_slides.get(sid, b""))
+                  for sid in sorted(set(old_slides) | set(new_slides))]
+        for path, before, after in pairs:
+            if before == after:
+                continue
+            before_name = f"a/{path}" if before else "/dev/null"
+            after_name = f"b/{path}" if after else "/dev/null"
+            sections.extend(difflib.unified_diff(before.decode("utf-8").splitlines(),
+                                                 after.decode("utf-8").splitlines(),
+                                                 before_name, after_name, lineterm=""))
+        return "\n".join(sections) + ("\n" if sections else "")
+
+    def restore_commit(self, name: str, commit: str, expected_deck: str | None,
+                       expected_slides: dict | None) -> dict:
+        with self._lock(name):
+            self._assert_snapshot_cas(name, expected_deck, expected_slides)
+            manifest = self._read_manifest(name, commit)
+            deck_data = self._object(name, manifest["deck"])
+            meta = json.loads(deck_data)
+            if not all(isinstance(sid, str) and SLIDE_ID.fullmatch(sid) for sid in manifest["slides"]):
+                raise ValueError("commit manifest contains an invalid slide id")
+            slides = {sid: self._object(name, digest) for sid, digest in manifest["slides"].items()}
+            if {s.get("id") for s in meta.get("slides", [])} != set(slides):
+                raise ValueError("commit manifest does not match deck metadata")
+            for data in slides.values():
+                check_svg(data)
+            # Restoring replaces the whole working copy. Preserve its exact
+            # pre-restore state as an immutable recovery point first.
+            safety = self._snapshot(name, f"Working copy before restore attempt {commit}", self._head_commit(name))
+            root = self.deck_dir(name)
+            transaction = Path(tempfile.mkdtemp(prefix=".restore-", dir=root))
+            stage = transaction / "stage"
+            backup = transaction / "backup"
+            try:
+                (stage / "slides").mkdir(parents=True)
+                for sid, data in slides.items():
+                    write_atomic(stage / "slides" / f"{sid}.svg", data)
+                write_atomic(stage / "deck.json", deck_data)
+                backup.mkdir()
+                write_atomic(backup / "deck.json", (root / "deck.json").read_bytes())
+            except BaseException:
+                shutil.rmtree(transaction, ignore_errors=True)
+                raise
+            try:
+                os.replace(root / "slides", backup / "slides")
+                os.replace(stage / "slides", root / "slides")
+                os.replace(stage / "deck.json", root / "deck.json")
+            except BaseException as publish_error:
+                try:
+                    if (backup / "deck.json").exists():
+                        os.replace(backup / "deck.json", root / "deck.json")
+                    if (backup / "slides").exists():
+                        if (root / "slides").exists():
+                            os.replace(root / "slides", transaction / "failed-slides")
+                        os.replace(backup / "slides", root / "slides")
+                except BaseException as rollback_error:
+                    # Keep the transaction directory: it contains whichever
+                    # complete old/new tree was not publishable.
+                    raise RuntimeError(f"restore failed and rollback files remain in {transaction}") from rollback_error
+                shutil.rmtree(transaction, ignore_errors=True)
+                raise publish_error
+            shutil.rmtree(transaction, ignore_errors=True)
+            return {"commit": commit, "safetyCommit": safety["id"], "deck": meta, "version": version(deck_data),
+                    "slideVersions": {sid: version(data) for sid, data in slides.items()}}
 
     def _checkpoint(self, name: str, slide: str, data: bytes) -> str:
         token = f"{time.time_ns()}-{version(data)}.svg"
@@ -258,6 +481,7 @@ class Store:
             current = (root / "deck.json").read_bytes()
             meta = json.loads(current)
             target = root / "slides" / f"{slide}.svg"
+            self._ensure_baseline(name)
             write_atomic(target, data)
             meta["slides"].append({**metadata, "id": slide})
             encoded = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
@@ -293,6 +517,7 @@ class Store:
                 # deleted slide and must not become the editor's current slide.
                 original = original_version = None
             target = root / "slides" / f"{recovered}.svg"
+            self._ensure_baseline(name)
             write_atomic(target, data)
             original_meta = next((entry for entry in meta.get("slides", []) if entry.get("id") == slide), {"id": slide})
             meta["slides"].append({**original_meta, "id": recovered})
@@ -404,11 +629,25 @@ class Store:
         faces = [f for f in self.font_faces() if f["family"] == family]
         if not faces:
             raise KeyError(family)
+        self._ensure_baseline(name)
         for face in faces:
-            rel = f"fonts/{Path(face['path']).name}"
+            source = self.fonts / face["path"]
+            filename = Path(face["path"]).name
+            rel = f"fonts/{filename}"
             if rel in have:
                 continue
-            shutil.copy2(self.fonts / face["path"], path / rel)
+            target = path / rel
+            if target.exists() and target.read_bytes() != source.read_bytes():
+                stem, suffix = Path(filename).stem, Path(filename).suffix
+                rel = f"fonts/{stem}-{hashlib.sha256(source.read_bytes()).hexdigest()[:12]}{suffix}"
+                target = path / rel
+            if rel in have:
+                continue
+            if not target.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+            elif target.read_bytes() != source.read_bytes():
+                raise OSError(f"font asset collision for {rel}")
             meta.setdefault("fonts", []).append(
                 {"family": family, "weight": face["weight"], "style": face["style"], "file": rel})
         data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()

@@ -80,7 +80,9 @@ def create_app(data: Path) -> FastAPI:
 
     @app.get("/d/{name}/", response_class=HTMLResponse)
     def present(name: str):
-        return render_page(Deck.load(deck_dir(name)), editor_url=f"/edit/{name}")
+        deck_dir(name)
+        with store._lock(name):
+            return render_page(Deck.load(store.deck_dir(name)), editor_url=f"/edit/{name}")
 
     @app.get("/d/{name}/{path:path}")
     def deck_file(name: str, path: str):
@@ -120,6 +122,48 @@ def create_app(data: Path) -> FastAPI:
             raise HTTPException(409, "the deck changed elsewhere; reload")
         except ValueError as e:
             raise HTTPException(400, str(e))
+
+    # --- API: immutable deck commits -----------------------------------------
+    @app.get("/api/decks/{name}/commits")
+    def list_commits(name: str):
+        deck_dir(name)
+        return store.list_commits(name)
+
+    @app.post("/api/decks/{name}/commits")
+    async def create_commit(name: str, request: Request):
+        deck_dir(name)
+        req = await request.json()
+        try:
+            return store.create_commit(name, str(req.get("message", "")),
+                                       req.get("expectedDeck"), req.get("expectedSlides"))
+        except Conflict:
+            raise HTTPException(409, "the working copy changed while committing; try again")
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+
+    @app.get("/api/decks/{name}/commits/{commit}/diff")
+    def commit_diff(name: str, commit: str, target: str = "parent"):
+        deck_dir(name)
+        try:
+            data = store.diff_commit(name, commit, target)
+        except KeyError:
+            raise HTTPException(404, "no such commit")
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        return Response(data, media_type="text/plain; charset=utf-8", headers={"Cache-Control": "no-cache"})
+
+    @app.post("/api/decks/{name}/commits/{commit}/restore")
+    async def restore_commit(name: str, commit: str, request: Request):
+        deck_dir(name)
+        req = await request.json()
+        try:
+            return store.restore_commit(name, commit, req.get("expectedDeck"), req.get("expectedSlides"))
+        except KeyError:
+            raise HTTPException(404, "no such commit")
+        except Conflict:
+            raise HTTPException(409, "the working copy changed while restoring; try again")
+        except ValueError as error:
+            raise HTTPException(400, str(error))
 
     # --- API: slides ------------------------------------------------------------
     @app.get("/api/decks/{name}/slides/{slide}")
@@ -246,10 +290,11 @@ def create_app(data: Path) -> FastAPI:
     # --- API: export ------------------------------------------------------------------
     @app.get("/api/decks/{name}/export.zip")
     def export_zip(name: str):
-        deck = Deck.load(deck_dir(name))
+        deck_dir(name)
         tmp = Path(tempfile.mkdtemp(prefix="svgdeck-export-", dir=store.data))
         try:
-            export(deck, tmp / name, tmp / f"{name}.zip")
+            with store._lock(name):
+                export(Deck.load(store.deck_dir(name)), tmp / name, tmp / f"{name}.zip")
         except Exception as e:
             shutil.rmtree(tmp, ignore_errors=True)
             raise HTTPException(400, f"export failed: {e}")
