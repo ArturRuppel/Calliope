@@ -340,6 +340,18 @@ export class SlideEditor {
     return [fix(box.x, box.x + box.width, dx), fix(box.y, box.y + box.height, dy)];
   }
 
+  /** Fade whatever lies outside the slide (it is drawn, but not presented),
+   *  and outline the slide edge. */
+  drawOffPage(o) {
+    const [W, H] = this.size, big = 20 * Math.max(W, H);
+    const mask = document.createElementNS(SVGNS, "path");
+    mask.setAttribute("d", `M${-big},${-big}H${W + big}V${H + big}H${-big}Z M0,0V${H}H${W}V0Z`);
+    mask.setAttribute("class", "ov-offpage");
+    const edge = document.createElementNS(SVGNS, "rect");
+    for (const [k, v] of Object.entries({ x: 0, y: 0, width: W, height: H, class: "ov-edge", "stroke-width": 1 / this.zoom })) edge.setAttribute(k, v);
+    o.append(mask, edge);
+  }
+
   drawGrid(o) {
     const [W, H] = this.size;
     let step = this.grid.size;
@@ -461,6 +473,7 @@ export class SlideEditor {
     const o = this.overlay;
     o.replaceChildren();
     if (!this.svg) return;
+    this.drawOffPage(o);
     if (this.grid.show) this.drawGrid(o);
     const px = 1 / this.zoom;
     const make = (tag, attrs) => {

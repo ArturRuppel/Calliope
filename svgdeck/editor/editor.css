@@ -59,7 +59,9 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .stage[data-tool="pan"] { cursor: grab; }
 .stage[data-tool="pan"]:active { cursor: grabbing; }
 .page { position: absolute; background: #fff; box-shadow: 0 2px 14px rgba(0, 0, 0, .18); }
-.page > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: hidden; }
+/* Objects past the slide edge stay visible (and selectable) while editing;
+   the overlay fades what lies outside, since presenting clips it. */
+.page > svg:first-child { position: absolute; inset: 0; width: 100%; height: 100%; display: block; overflow: visible; }
 .page text { white-space: pre; }
 .overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
 .ov-box { fill: none; stroke: var(--accent); }
@@ -67,6 +69,8 @@ body.no-strip .strip, body.no-panel .panel { visibility: hidden; }
 .ov-group { fill: none; stroke: #9aa5b1; stroke-dasharray: 6 4; }
 .ov-marquee { fill: rgba(47, 111, 219, .08); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
+.ov-offpage { fill: var(--stage); fill-opacity: .6; fill-rule: evenodd; stroke: none; }
+.ov-edge { fill: none; stroke: #8a939c; }
 .ov-handle.ov-chosen { fill: var(--accent); }
 /* Line ends: hollow rings, so arrowheads under them stay visible. */
 .ov-gridline { fill: none; stroke: rgba(47, 111, 219, .28); }

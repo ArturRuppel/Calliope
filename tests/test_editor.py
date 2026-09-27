@@ -517,3 +517,16 @@ def test_editing_keeps_subscripts_and_stroke_overrides(page, server):
     got = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), s = t.querySelector('tspan tspan');
       return [t.textContent, s && s.textContent, s && getComputedStyle(s).baselineShift, getComputedStyle(t.querySelector('tspan')).stroke]; })()""")
     assert got == ["xTl2", "l2", "sub", "none"]
+
+
+def test_objects_off_the_slide_stay_visible_and_selectable(page):
+    add_rects(page, [[-400, 300, 250, 200]])
+    page.evaluate("svgdeckEditor.editor.select([]); svgdeckEditor.editor.zoomBy(0.5)")
+    x, y = to_screen(page, -275, 400)
+    assert page.evaluate(f"document.elementFromPoint({x}, {y}).localName") == "rect"
+    assert page.evaluate("getComputedStyle(svgdeckEditor.editor.svg).overflow") == "visible"
+    page.mouse.click(x, y)
+    assert page.evaluate("svgdeckEditor.editor.selection[0]?.getAttribute('x')") == "-400"
+    # Faded outside the slide; the thumbnail (like the presenter) still clips.
+    assert page.locator(".overlay .ov-offpage").count() == 1
+    assert page.evaluate("getComputedStyle(document.querySelector('.thumbs .thumb svg')).overflow") != "visible"

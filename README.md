@@ -79,6 +79,9 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   spaced evenly from the panel; a single object aligns with the slide. Movies must
   stay outside groups; grouping them or pasting them into a group is refused
   so they remain playable.
+- Objects that reach past the slide edge stay visible and selectable in the
+  editor. The part outside the slide is faded, because presenting, exports
+  and thumbnails show only what is on the slide.
 - **Grid** shows or hides the grid. **Snap** separately snaps moves, resizes,
   line ends and new shapes to it. Both buttons toggle on and off; spacing is
   set in the panel with nothing selected.
