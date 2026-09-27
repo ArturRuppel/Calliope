@@ -1,13 +1,13 @@
 /* svgdeck editor, in the Modernist system: flat, square, near-black ink on
-   cool grey. Teal marks what you act on; purple marks what the Pencil owns.
+   cool grey. Purple marks what you act on; teal marks what the Pencil owns.
    Tokens first; the older names (--ink, --line, --surface…) stay because
    colors.css, commits.css and recovery.css read them. */
 :root {
-  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #0e7c7b;
+  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #6b3fa0;
   --color-divider: color-mix(in srgb, #1c1b22 40%, transparent);
   --n100: #f8f8f9; --n200: #e8e8ea; --n300: #d4d4d8; --n400: #b6b6bc; --n600: #7a7a82; --n700: #5c5b63; --n800: #403f47;
-  --a100: #e3f2f1; --a600: #0a6564; --a700: #075453;
-  --pen: #6b3fa0;
+  --a100: #eee7f7; --a600: #5a3389; --a700: #4a2a78;
+  --pen: #0e7c7b;
   --font: "Archivo", system-ui, -apple-system, sans-serif;
   --shadow-sm: 0 1px 2px color-mix(in srgb, #1c1b22 14%, transparent);
   --shadow-md: 0 3px 10px color-mix(in srgb, #1c1b22 16%, transparent);
