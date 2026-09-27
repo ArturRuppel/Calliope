@@ -1,0 +1,14 @@
+.recovery-dialog { width: min(620px, calc(100vw - 24px)); max-height: min(760px, calc(100vh - 24px));
+  color: var(--ink, #1e2329); background: var(--surface, #fff); border: 1px solid var(--line, #ccd1d6); border-radius: 10px; padding: 0; }
+.recovery-dialog::backdrop { background: #0009; }
+.recovery-dialog header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line, #ccd1d6); }
+.recovery-dialog header button { min-width: 44px; min-height: 44px; font-size: 24px; }
+.recovery-body { padding: 8px 16px 18px; overflow: auto; }
+.recovery-body h3 { margin: 14px 0 8px; font-size: 15px; }
+.recovery-body p { color: color-mix(in srgb, var(--ink, #1e2329) 62%, transparent); }
+.recovery-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; min-height: 52px; border-top: 1px solid var(--line, #ccd1d6); }
+.recovery-dialog button { color: var(--ink, #1e2329); background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; }
+.recovery-row button { min-width: 88px; min-height: 42px; }
+.recovery-actions { display: flex; gap: 6px; }
+.recovery-row img { width: 100%; max-height: 220px; object-fit: contain; background: white; flex-basis: 100%; }
+.recovery-row:has(img) { flex-wrap: wrap; }

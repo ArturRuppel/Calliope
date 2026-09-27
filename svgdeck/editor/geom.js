@@ -53,6 +53,43 @@ export function unionBox(boxes) {
 export const intersects = (a, b) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
+/** Smallest move that aligns an edge/centre or repeats a nearby gap. */
+export function smartSnapDelta(box, dx, dy, others, tolerance = 8) {
+  const moved = { x: box.x + dx, y: box.y + dy, width: box.width, height: box.height };
+  const axis = (name) => {
+    const size = name === "x" ? "width" : "height";
+    const cross = name === "x" ? "y" : "x", crossSize = name === "x" ? "height" : "width";
+    const lo = (b) => b[name], hi = (b) => b[name] + b[size], mid = (b) => b[name] + b[size] / 2;
+    const anchors = (b) => [lo(b), mid(b), hi(b)];
+    let best = null;
+    const offer = (adjust, guide) => {
+      if (Math.abs(adjust) <= tolerance && (!best || Math.abs(adjust) < Math.abs(best.adjust))) best = { adjust, guide };
+    };
+    for (const b of others) for (const a of anchors(moved)) for (const target of anchors(b)) {
+      offer(target - a, { kind: "align", axis: name, at: target,
+        from: Math.min(moved[cross], b[cross]), to: Math.max(moved[cross] + moved[crossSize], b[cross] + b[crossSize]) });
+    }
+    const relevant = others.filter((b) => b[cross] < moved[cross] + moved[crossSize] && moved[cross] < b[cross] + b[crossSize])
+      .sort((a, b) => lo(a) - lo(b));
+    for (let i = 0; i + 1 < relevant.length; i++) {
+      const a = relevant[i], b = relevant[i + 1];
+      const gap = lo(b) - hi(a);
+      if (gap < 0) continue;
+      offer(hi(b) + gap - lo(moved), { kind: "gap", axis: name, gap, marks: [hi(a), lo(b), hi(b), hi(b) + gap] });
+      offer(lo(a) - gap - hi(moved), { kind: "gap", axis: name, gap, marks: [lo(a) - gap, lo(a), hi(a), lo(b)] });
+    }
+    for (let i = 0; i + 1 < relevant.length; i++) {
+      const a = relevant[i], b = relevant[i + 1];
+      if (hi(a) > lo(b)) continue;
+      const target = (hi(a) + lo(b) - moved[size]) / 2, gap = target - hi(a);
+      if (gap >= 0) offer(target - lo(moved), { kind: "gap", axis: name, gap, marks: [hi(a), target, target + moved[size], lo(b)] });
+    }
+    return best || { adjust: 0, guide: null };
+  };
+  const sx = axis("x"), sy = axis("y");
+  return { dx: dx + sx.adjust, dy: dy + sy.adjust, guides: [sx.guide, sy.guide].filter(Boolean) };
+}
+
 // --- freehand -------------------------------------------------------------
 function perpendicularDistance(p, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -117,6 +154,7 @@ export function prefixIds(root, prefix) {
     for (const attr of Array.from(el.attributes)) {
       let v = attr.value;
       if (attr.localName === "href" && v.startsWith("#")) v = "#" + prefix + v.slice(1);
+      else if (attr.localName === "data-svgdeck-clip") v = prefix + v;
       else if (v.includes("url(")) v = v.replace(URL_REF, (_, q, id) => `url(#${prefix}${id})`);
       if (v !== attr.value) el.setAttributeNS(attr.namespaceURI, attr.name, v);
     }

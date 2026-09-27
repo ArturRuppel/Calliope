@@ -2,6 +2,10 @@
 import { SlideEditor, firstGlyphElement, cssFamily } from "./canvas.js";
 import { prefixIds, toHex } from "./geom.js";
 import { Controller, DEFAULT_BINDINGS, TOOL_NAMES, actionGroups, actionLabel, inputLabel } from "./inputs.js";
+import { installNotes } from "./notes.js";
+import { installObjects } from "./objects.js";
+import { installMediaTools } from "./media-tools.js";
+import { installRecovery } from "./recovery.js";
 
 const DECK = document.body.dataset.deck;
 const $ = (id) => document.getElementById(id);
@@ -35,6 +39,28 @@ const api = {
   putDeck: (deck, base) => api.json("PUT", `/api/decks/${DECK}`, { deck, base }),
   fonts: () => api.json("GET", "/api/fonts"),
   useFamily: (family) => api.json("POST", `/api/decks/${DECK}/fonts`, { family }),
+  revisions: (id) => api.json("GET", `/api/decks/${DECK}/slides/${id}/revisions`),
+  async revision(id, token) {
+    const r = await fetch(`/api/decks/${DECK}/slides/${id}/revisions/${encodeURIComponent(token)}`);
+    if (!r.ok) throw new Error(`Could not read revision: ${r.status}`);
+    return r.text();
+  },
+  async restoreRevision(id, token, base) {
+    const r = await fetch(`/api/decks/${DECK}/slides/${id}/revisions/${encodeURIComponent(token)}/restore`, {
+      method:"POST", headers:{"If-Match":`"${base}"`},
+    });
+    if (!r.ok) throw Object.assign(new Error((await r.json().catch(() => ({}))).detail || r.statusText), {status:r.status});
+    return r.json();
+  },
+  trash: () => api.json("GET", `/api/decks/${DECK}/trash`),
+  restoreTrash: (token) => api.json("POST", `/api/decks/${DECK}/trash/${encodeURIComponent(token)}/restore`),
+  async preserveConflict(id, text) {
+    const r = await fetch(`/api/decks/${DECK}/slides/${id}/preserve-conflict`, {
+      method:"POST", headers:{"Content-Type":"image/svg+xml"}, body:text,
+    });
+    if (!r.ok) throw Object.assign(new Error((await r.json().catch(() => ({}))).detail || r.statusText), {status:r.status});
+    return r.json();
+  },
   async slide(id) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}`);
     if (!r.ok) throw new Error(`slide ${id}: ${r.status}`);
@@ -60,6 +86,7 @@ const state = {
   slides: new Map(),  // id -> {text, version, dirty, saving, undo, redo, timer}
   prefs: loadPrefs(),
 };
+let objectPanels = null, mediaTools = null, recovery = null, notes = null;
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
@@ -165,7 +192,7 @@ async function save(id) {
         if (e.status === 409) {
           rec.conflict = true;
           setStatus("Conflict", "error");
-          toast("This slide was changed somewhere else. Reload the page to get the latest version (your last edits here are not saved).", 10000);
+          toast("This slide was changed elsewhere. Open Panels → History and recovery, then Keep both versions to preserve your edits.", 10000);
         } else {
           setStatus("Not saved", "error");
           toast(`Saving failed: ${e.message}. Retrying…`);
@@ -195,6 +222,7 @@ function refreshStatus() {
 async function flush() {
   editor.finishPath();
   editor.syncTextEdit();
+  await notes?.flush();
   while (true) {
     const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
     if (!pending.length) return;
@@ -213,7 +241,7 @@ async function putDeck(deck) {
     state.deck = deck;
     state.version = res.version;
   } catch (e) {
-    toast(e.status === 409 ? "The deck was changed somewhere else; reload the page." : `Could not save the slide order: ${e.message}`, 8000);
+    toast(e.status === 409 ? "The deck was changed somewhere else; reload the page." : `Could not save deck changes: ${e.message}`, 8000);
     throw e;
   }
 }
@@ -222,6 +250,7 @@ async function ensureFamily(family) {
   if (!family || (state.deck.fonts || []).some((f) => f.family === family)) return;
   if (!state.faces.some((f) => f.family === family)) return;
   try {
+    await notes?.flush();
     const res = await api.useFamily(family);
     state.deck = res.deck;
     state.version = res.version;
@@ -271,18 +300,19 @@ async function openSlide(id) {
   for (const li of $("thumbs").children) li.classList.toggle("current", li.dataset.id === id);
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   renderPanel();
+  notes?.render();
 }
 
 const index = () => state.deck.slides.findIndex((s) => s.id === state.current);
 const newId = () => "s" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
 
-async function addSlide(text) {
+async function addSlide(text, notes = "") {
   await flush();
   const id = newId();
   const version = await api.putSlide(id, text, null);
   state.slides.set(id, { text, version, undo: [], redo: [] });
   const slides = [...state.deck.slides];
-  slides.splice(index() + 1, 0, { id });
+  slides.splice(index() + 1, 0, { id, ...(notes ? {notes} : {}) });
   await putDeck({ ...state.deck, slides });
   renderStrip();
   await openSlide(id);
@@ -299,6 +329,7 @@ function blankSlide() {
 }
 
 async function moveSlide(delta) {
+  await notes?.flush();
   const i = index(), j = i + delta;
   if (j < 0 || j >= state.deck.slides.length) return;
   const slides = [...state.deck.slides];
@@ -440,6 +471,23 @@ function buildToggles() {
   const pencil = el("button", { class: "btn tool", id: "pen-status", title: "Pencil and controller settings",
     onclick: () => revealSection("Pencil") });
   $("tools-input").append(pencil);
+  const panels = el("details", {class:"panel-menu"});
+  panels.append(el("summary", {class:"btn tool"}, "Panels"));
+  const choices = el("div", {class:"panel-menu-choices"});
+  for (const [label, fn] of [
+    ["Objects", () => objectPanels?.open("objects")],
+    ["Build steps", () => objectPanels?.open("builds")],
+    ["Crop and mask", () => mediaTools?.open()],
+    ["Speaker notes", () => notes?.open()],
+    ["History and recovery", () => recovery?.open()],
+    ["Speaker view", () => present(true)],
+  ]) choices.append(el("button", {class:"btn", onclick:() => {panels.open=false;fn();}}, label));
+  panels.append(choices); $("tools-view").append(panels);
+  editor.smartSnap = state.prefs.smartSnap !== false;
+  const guides = el("button", {class:"btn tool", id:"smart-guides", "aria-pressed":String(editor.smartSnap),
+    title:"Snap moved objects to edges, centres and equal gaps; hold Alt to bypass",
+    onclick:() => {editor.smartSnap=!editor.smartSnap;state.prefs.smartSnap=editor.smartSnap;savePrefs();guides.setAttribute("aria-pressed",String(editor.smartSnap));}}, "Guides");
+  $("tools-view").append(guides);
   updateToolButtons();
 }
 
@@ -520,6 +568,7 @@ function setPenLinked(on) {
 // --- other input devices --------------------------------------------------------------------
 const held = new Map();  // penhold action -> tool to go back to
 function runAction(action, phase) {
+  if (phase !== "up" && document.querySelector("dialog[open]")) return;
   const [kind, tool] = action.split(":");
   if (kind === "penhold") {
     if (phase === "down" && !held.has(action)) {
@@ -732,6 +781,8 @@ function families() {
 
 function renderPanel() {
   if (!state.deck) return;
+  objectPanels?.render();
+  mediaTools?.render();
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
@@ -1038,6 +1089,8 @@ function installFaces(faces) {
 // --- keyboard ------------------------------------------------------------------------------------
 document.addEventListener("keyup", (e) => { controller.keyup(e); });
 document.addEventListener("keydown", (e) => {
+  const modal = document.querySelector("dialog[open]");
+  if (modal && !(modal.classList.contains("media-tools") && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) return;
   if (controller.learning) { controller.keydown(e); return; }
   if (e.target.closest("input, textarea, select") || editor.textEdit) return;
   if (controller.keydown(e)) return;
@@ -1135,22 +1188,20 @@ function redo() {
 }
 
 // --- wiring ------------------------------------------------------------------------------------------
+async function present(speaker = false) {
+  const url = `/d/${DECK}/${speaker ? "?speaker=1" : ""}#${index() + 1}`;
+  const win = window.open("about:blank", "_blank");
+  try { await flush(); if (win) win.location.href = url; else location.href = url; }
+  catch (e) { win?.close(); }
+}
+
 function wire() {
   $("undo").onclick = undo;
   $("redo").onclick = redo;
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
   $("zoom-out").onclick = () => editor.zoomBy(0.8);
   $("zoom-fit").onclick = () => editor.fit();
-  $("present").onclick = async () => {
-    const url = `/d/${DECK}/#${index() + 1}`;
-    const win = window.open("about:blank", "_blank");
-    try {
-      await flush();
-      if (win) win.location.href = url; else location.href = url;
-    } catch (e) {
-      win?.close();
-    }
-  };
+  $("present").onclick = () => present();
   $("export").onclick = async (e) => {
     e.preventDefault();
     try { await flush(); } catch (error) { return; }
@@ -1160,7 +1211,10 @@ function wire() {
   $("toggle-strip").onclick = () => document.body.classList.toggle("no-strip");
   $("toggle-panel").onclick = () => document.body.classList.toggle("no-panel");
   $("slide-add").onclick = () => addSlide(blankSlide());
-  $("slide-dup").onclick = () => addSlide(state.slides.get(state.current).text);
+  $("slide-dup").onclick = async () => {
+    await flush();
+    await addSlide(state.slides.get(state.current).text, state.deck.slides[index()].notes);
+  };
   $("slide-up").onclick = () => moveSlide(-1);
   $("slide-down").onclick = () => moveSlide(1);
   $("slide-del").onclick = deleteSlide;
@@ -1184,6 +1238,10 @@ function wire() {
 
 async function main() {
   wire();
+  notes = installNotes({state,putDeck,toast});
+  objectPanels = installObjects({editor,state,toast,settle:settleCurrentSlide});
+  mediaTools = installMediaTools({editor,toast,settle:settleCurrentSlide});
+  recovery = installRecovery({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus,putDeck});
   editor.tools.pen = state.prefs.penLinked ? "select" : state.prefs.penTool || "pen";
   editor.penSeen = !!state.prefs.penSeen;
   buildToolbar();
@@ -1211,4 +1269,5 @@ async function main() {
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool };
+window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool,
+  get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;} };

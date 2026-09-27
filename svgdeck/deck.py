@@ -35,7 +35,7 @@ class Deck:
         return self.path / "slides" / f"{slide_id}.svg"
 
     def slide_sources(self) -> list[dict]:
-        return [{"id": s["id"], "svg": self.slide_file(s["id"]).read_text()}
+        return [{"id": s["id"], "notes": str(s.get("notes") or ""), "svg": self.slide_file(s["id"]).read_text()}
                 for s in self.meta["slides"]]
 
     def media_files(self) -> set[str]:
@@ -111,6 +111,7 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
 <div id="svgdeck"></div>
 <script type="application/json" id="svgdeck-data">{payload}</script>
 <script>
+{_asset("speaker.js")}
 {_asset("player.js")}
 </script>
 <script>

@@ -145,6 +145,62 @@ def create_app(data: Path) -> FastAPI:
             raise HTTPException(400, f"not a valid slide: {e}")
         return {"version": ver}
 
+    @app.get("/api/decks/{name}/slides/{slide}/revisions")
+    async def slide_revisions(name: str, slide: str):
+        deck_dir(name)
+        try:
+            return store.list_revisions(name, slide)
+        except KeyError:
+            raise HTTPException(404, "no such slide")
+
+    @app.get("/api/decks/{name}/slides/{slide}/revisions/{token}")
+    async def slide_revision(name: str, slide: str, token: str):
+        deck_dir(name)
+        try:
+            data, ver = store.get_revision(name, slide, token)
+        except (KeyError, ValueError):
+            raise HTTPException(404, "no such revision")
+        return Response(data, media_type="image/svg+xml", headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache"})
+
+    @app.post("/api/decks/{name}/slides/{slide}/revisions/{token}/restore")
+    async def restore_slide_revision(name: str, slide: str, token: str, request: Request):
+        deck_dir(name)
+        base = request.headers.get("If-Match", "").strip('"') or None
+        try:
+            return {"version": await to_thread.run_sync(store.restore_revision, name, slide, token, base)}
+        except KeyError:
+            raise HTTPException(404, "no such revision")
+        except Conflict:
+            raise HTTPException(409, "the slide changed elsewhere; reload")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/decks/{name}/slides/{slide}/preserve-conflict")
+    async def preserve_slide_conflict(name: str, slide: str, request: Request):
+        deck_dir(name)
+        try:
+            data = await body(request)
+            return await to_thread.run_sync(store.preserve_conflict, name, slide, data)
+        except KeyError:
+            raise HTTPException(404, "no such slide")
+        except (ValueError, UnicodeDecodeError) as e:
+            raise HTTPException(400, f"not a valid slide: {e}")
+
+    @app.get("/api/decks/{name}/trash")
+    async def trash(name: str):
+        deck_dir(name)
+        return store.list_trash(name)
+
+    @app.post("/api/decks/{name}/trash/{token}/restore")
+    async def restore_trash(name: str, token: str):
+        deck_dir(name)
+        try:
+            return await to_thread.run_sync(store.restore_trash, name, token)
+        except KeyError:
+            raise HTTPException(404, "no such deleted slide")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
     # --- API: media and fonts -------------------------------------------------------
     @app.post("/api/decks/{name}/media")
     async def add_media(name: str, filename: str, request: Request):

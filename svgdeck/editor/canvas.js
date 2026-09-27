@@ -1,7 +1,7 @@
 // The slide canvas: shows one slide SVG and edits it in place.
 // Pointer events throughout, so mouse, finger and Apple Pencil share one path.
 import {
-  SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, simplify, smoothPath, polylinePath, toHex,
+  SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, smartSnapDelta, simplify, smoothPath, polylinePath, toHex,
   parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline,
 } from "./geom.js";
 
@@ -162,6 +162,8 @@ export class SlideEditor {
     this.textEdit = null;
     this.before = null;
     this.grid = { show: false, snap: false, size: 20 };  // slide pixels
+    this.smartSnap = true;
+    this.smartGuides = [];
     this.additive = false;  // taps add to the selection (touch has no Shift)
 
     host.addEventListener("pointerdown", (e) => this.onDown(e));
@@ -234,6 +236,7 @@ export class SlideEditor {
     if (this.svg) this.svg.remove();
     this.svg = svg;
     this.page.insertBefore(svg, this.overlay);
+    this.mediaTools?.onLoad?.();
     this.context = svg;
     this.selection = [];
     if (keepView && !this.fitMode) this.layout(); else this.fit();
@@ -380,8 +383,13 @@ export class SlideEditor {
 
   // --- selection -------------------------------------------------------------
   selectable(el) {
-    return el && el.nodeType === 1 && !SKIP.has(el.localName) && el.getAttribute("data-locked") !== "true"
-      && getComputedStyle(el).display !== "none";
+    if (!el || el.nodeType !== 1 || SKIP.has(el.localName)) return false;
+    for (let node = el; node && node !== this.svg; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (node.getAttribute?.("data-locked") === "true" || style.display === "none" ||
+          style.visibility === "hidden" || style.visibility === "collapse") return false;
+    }
+    return true;
   }
 
   children() {
@@ -489,6 +497,20 @@ export class SlideEditor {
       o.appendChild(el);
       return el;
     };
+    for (const guide of this.smartGuides) {
+      if (guide.kind === "align") {
+        const attrs = guide.axis === "x"
+          ? { x1: guide.at, y1: guide.from, x2: guide.at, y2: guide.to }
+          : { x1: guide.from, y1: guide.at, x2: guide.to, y2: guide.at };
+        make("line", { ...attrs, class: "ov-smart-guide", stroke: "#d61aff", "stroke-dasharray": `${5 * px} ${4 * px}`, "pointer-events": "none", "stroke-width": 1.5 * px });
+      } else {
+        const box = this.gesture?.box0 || { x: 0, y: 0, width: 0, height: 0 }, cross = 7 * px;
+        for (const at of guide.marks) {
+          if (guide.axis === "x") make("line", { x1: at, y1: box.y - cross, x2: at, y2: box.y + box.height + cross, class: "ov-smart-guide", stroke: "#d61aff", "pointer-events": "none", "stroke-width": px });
+          else make("line", { x1: box.x - cross, y1: at, x2: box.x + box.width + cross, y2: at, class: "ov-smart-guide", stroke: "#d61aff", "pointer-events": "none", "stroke-width": px });
+        }
+      }
+    }
     if (this.pathDraft) {
       const draft = this.pathDraft;
       const nodes = [...draft.nodes];
@@ -629,6 +651,15 @@ export class SlideEditor {
     this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(dx, dy)));
   }
 
+  smartMove(box, dx, dy) {
+    if (!this.smartSnap || this.grid.snap || !box) return { dx, dy, guides: [] };
+    const selected = new Set(this.selection);
+    const area = this.size[0] * this.size[1];
+    const boxes = this.children().filter((el) => !selected.has(el))
+      .map((el) => rootBox(el, this.svg)).filter((b) => b && b.width * b.height < area * .9);
+    return smartSnapDelta(box, dx, dy, boxes, 8 / this.zoom);
+  }
+
   // --- pointer handling ---------------------------------------------------------
   openContextMenu(x, y, preserveSelection = false) {
     if (this.pathDraft) { this.finishPath(); return; }
@@ -685,7 +716,7 @@ export class SlideEditor {
     const p = this.point(e);
     // The chosen tool applies to every pointer. Pan is explicit; a previous
     // Pencil stroke must not silently change what a later finger drag does.
-    if (this.tool === "pan" || e.button === 1 || (e.button === 0 && e.altKey && e.pointerType === "mouse")) {
+    if (this.tool === "pan" || e.button === 1) {
       this.gesture = { kind: "pan", id: e.pointerId, pointerType: e.pointerType, last: { x: e.clientX, y: e.clientY } };
       return;
     }
@@ -1233,8 +1264,16 @@ export class SlideEditor {
       case "move": {
         if (!g.snaps) { this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
         let dx = p.x - g.start.x, dy = p.y - g.start.y;
-        [dx, dy] = this.snapDelta(g.box0, dx, dy);
-        if (e.shiftKey) { if (Math.abs(p.x - g.start.x) > Math.abs(p.y - g.start.y)) dy = 0; else dx = 0; }
+        const horizontal = e.shiftKey && Math.abs(dx) > Math.abs(dy), vertical = e.shiftKey && !horizontal;
+        if (!e.altKey) {
+          if (this.grid.snap) [dx, dy] = this.snapDelta(g.box0, dx, dy);
+          else {
+            const smart = this.smartMove(g.box0, dx, dy);
+            dx = smart.dx; dy = smart.dy; this.smartGuides = smart.guides;
+          }
+        } else this.smartGuides = [];
+        if (horizontal) { dy = 0; this.smartGuides = this.smartGuides.filter((guide) => guide.axis === "x"); }
+        if (vertical) { dx = 0; this.smartGuides = this.smartGuides.filter((guide) => guide.axis === "y"); }
         this.applyDelta(g.snaps, new DOMMatrix().translateSelf(dx, dy));
         break;
       }
@@ -1437,6 +1476,7 @@ export class SlideEditor {
     }
     if (g.id !== e.pointerId) return;
     this.gesture = null;
+    this.smartGuides = [];
     const p = this.point(e);
     switch (g.kind) {
       case "path-node":
@@ -1527,6 +1567,7 @@ export class SlideEditor {
   cancelGesture() {
     const g = this.gesture;
     this.gesture = null;
+    this.smartGuides = [];
     if (!g) return;
     if (g.snaps) this.applyDelta(g.snaps, new DOMMatrix());
     if (g.kind === "endpoint") {
@@ -1921,6 +1962,7 @@ export class SlideEditor {
         for (const attr of Array.from(n.attributes)) {
           let v = attr.value;
           if (attr.localName === "href" && v.startsWith("#") && map.has(v.slice(1))) v = "#" + map.get(v.slice(1));
+          else if (attr.localName === "data-svgdeck-clip" && map.has(v)) v = map.get(v);
           else if (v.includes("url(")) v = v.replace(/url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g,
             (match, quote, id) => map.has(id) ? `url(#${map.get(id)})` : match);
           if (v !== attr.value) n.setAttributeNS(attr.namespaceURI, attr.name, v);

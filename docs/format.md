@@ -28,6 +28,7 @@ my-talk/
 
 - `slides` is the presentation order. Slide `id` names the file
   `slides/<id>.svg`; ids are stable when slides are reordered.
+- A slide entry may also contain `notes`, a plain-text string for speaker view.
 - `background` fills the screen around the slide when the window is not 16:9.
 - `fonts` lists every font face the deck ships. Text in the slides refers to
   them with `font-family`, `font-weight` and `font-style`, exactly as CSS
@@ -74,8 +75,23 @@ Movies are always muted.
 | `data-label` | a name for the object (from Inkscape labels; `background` marks the slide background) |
 | `data-nodetypes` | on a path: the type of each point, in order, for point editing: `c` corner, `s` smooth, `z` symmetric. Written only when the handles alone would not tell (like Inkscape's `sodipodi:nodetypes`) |
 | `data-ink="pressure"` | a Pencil stroke drawn with pressure: a filled outline, so its colour is the fill |
+| `data-hidden="true"` | hidden through the Objects panel; paired with inline `display:none` so it remains hidden outside the editor |
+| `data-crop="L T R B"` | image/movie crop insets in percent, each between 0 and 49.5 |
+| `data-mask="rect"` or `"ellipse"` | crop mask shape; the editor also writes a native SVG `clipPath` in object-bounding-box units |
+| `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference |
 
 ### Builds
 
 Any element with `data-step="n"` (n ≥ 1) is hidden until the n-th step of the
 slide. Elements without `data-step` are visible from the start.
+
+The editor offers steps 0–999 (0 removes the attribute). Objects sharing a step
+appear together. Build previews use editor-only CSS outside the saved SVG.
+
+### Recovery files
+
+The service keeps up to 30 preceding artwork versions per slide in
+`revisions/<id>/<timestamp>-<hash>.svg`. Deleted slides live in `trash/`,
+with a JSON sidecar retaining their slide metadata, including speaker notes.
+These recovery files remain in the working deck and are not included in the
+standalone presentation export.

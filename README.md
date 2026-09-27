@@ -85,6 +85,23 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
 - **Grid** shows or hides the grid. **Snap** separately snaps moves, resizes,
   line ends and new shapes to it. Both buttons toggle on and off; spacing is
   set in the panel with nothing selected.
+- **Guides** snaps moved objects to other objects' edges, centres and equal
+  gaps. Purple guides show the match. Grid Snap takes precedence when enabled;
+  hold Alt while moving to bypass both, or Shift to constrain an axis.
+- **View → Panels** keeps the extra editing panels together:
+  **Objects** lists the stacking order and nested groups, with names, visibility,
+  locking, drag reordering within a group, and raise/lower buttons for touch.
+  **Build steps** assigns when selected objects appear, lists their sequence,
+  and previews the slide from its initial state. Objects sharing a step appear
+  together. Preview visibility is never saved into the SVG.
+  **Crop and mask** offers percentage insets and rectangle/ellipse masks for
+  a selected image or movie. Cropping is reversible, supports Undo and Reset,
+  and leaves the source media untouched. Existing imported clip paths are
+  preserved; the crop panel refuses to replace them.
+- **Speaker notes**, also in Panels, saves plain-text notes with each slide.
+  **Speaker view** shows the current slide, next slide, notes and a timer.
+  Choose **Open audience window** and move that window to the presentation
+  screen; navigation, build steps and blanking stay synchronized between them.
 - Double-tap text to edit it, or a group to work inside it; tap outside,
   Done or Escape to leave. Editing keeps the text's formatting; while
   editing, the panel makes selected words bold, italic, underlined, sub/superscript or
@@ -117,6 +134,13 @@ the top bar. Tool groups wrap on tablets and scroll vertically on small screens.
   Ctrl+D duplicate, Ctrl+G / Ctrl+Shift+G group, Delete, arrow keys nudge
   (Shift ×10), Page Up/Down change slide.
 - Deleted slides go to the deck's `trash/` folder.
+- **Panels → History and recovery** lists the last 30 saved slide revisions
+  and deleted slides, with restore controls. Restoring a revision checkpoints
+  the current artwork first. If saving detects a conflict, **Keep both versions**
+  preserves local edits as a recovered slide and retains the server's version.
+  If recovery cannot reach the server, it downloads the local SVG as a fallback.
+  Revisions cover slide artwork; speaker notes are retained when deleting and
+  restoring slides, but are not part of artwork revision history.
 
 ## Presenting
 
@@ -128,6 +152,8 @@ Press **O** or **Escape** to toggle the overview; tap a thumbnail to jump to
 that slide. Overview pauses active movies until returning to the presentation.
 The live service also has **Back to editor**, returning to the current slide.
 Offline exports retain the overview and navigation without an editor dependency.
+Speaker view is also available from the presentation controls in offline exports.
+Its audience window displays only the presentation, with no speaker controls or notes.
 
 
 Arrows / space / page keys / click or swipe to move, a number then

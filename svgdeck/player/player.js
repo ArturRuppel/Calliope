@@ -101,7 +101,8 @@
 
     const steps = Array.from(slide.querySelectorAll("[data-step]"));
     const maxStep = steps.reduce((m, el) => Math.max(m, parseInt(el.dataset.step, 10) || 0), 0);
-    return { el: slide, videos, steps, maxStep };
+    const stepVisibility = new Map(steps.map(el => [el, el.style.visibility]));
+    return { el: slide, videos, steps, maxStep, stepVisibility };
   }
 
   function makeVideo(image) {
@@ -125,6 +126,18 @@
       width: `${num("width")}px`, height: `${num("height")}px`,
       transform: `matrix(${m.join(",")})`,
     });
+    // Editor crop percentages describe the image box, including letterboxing.
+    const crop = (image.getAttribute("data-crop") || "0 0 0 0").trim().split(/\s+/).map(Number);
+    if (crop.length === 4 && crop.every(v => Number.isFinite(v) && v >= 0 && v < 50)) {
+      const [l, t, r, b] = crop;
+      if (image.getAttribute("data-mask") === "ellipse") {
+        video.style.clipPath = `ellipse(${(100-l-r)/2}% ${(100-t-b)/2}% at ${(100+l-r)/2}% ${(100+t-b)/2}%)`;
+      } else if (image.hasAttribute("data-crop")) video.style.clipPath = `inset(${t}% ${r}% ${b}% ${l}%)`;
+    }
+    for (const prop of ["display", "visibility", "opacity"]) {
+      const value = image.style.getPropertyValue(prop) || image.getAttribute(prop);
+      if (value) video.style.setProperty(prop, value);
+    }
     return video;
   }
 
@@ -169,6 +182,7 @@
       overview: "M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z",
       edit: "M4 20h4L19 9l-4-4L4 16zM13 7l4 4",
       fullscreen: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
+      speaker: "M3 4h18v12H3zM8 21l4-5 4 5M7 8h10M7 12h6",
     };
     const iconSvg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
     const button = (label, fn, parent = controls, iconName = null) => {
@@ -189,6 +203,12 @@
       back.href = options.editorUrl; controls.append(back);
     }
     button("Fullscreen", toggleFullscreen, controls, "fullscreen");
+    const query = new URLSearchParams(location.search);
+    if (query.get("speaker") !== "1" && !query.has("session")) {
+      button("Speaker view", () => {
+        const url = new URL(location.href); url.searchParams.set("speaker", "1"); location.href = url.href;
+      }, controls, "speaker");
+    }
     root.append(controls);
     let hideTimer = null;
     function revealControls(ms = 2500) {
@@ -286,7 +306,12 @@
 
     function applyStep(slide, step) {
       for (const el of slide.steps) {
-        el.style.visibility = (parseInt(el.dataset.step, 10) || 0) <= step ? "" : "hidden";
+        el.style.visibility = (parseInt(el.dataset.step, 10) || 0) <= step ? slide.stepVisibility.get(el) : "hidden";
+      }
+      for (const v of slide.videos) {
+        const style = getComputedStyle(v);
+        if (style.display === "none" || style.visibility === "hidden") v.pause();
+        else if (v.dataset.autoplay === "true" && v.paused && !overviewOpen) v.play().catch(() => {});
       }
     }
 
@@ -311,10 +336,6 @@
         for (const v of slide.videos) {
           if (v.dataset.sync && playing.has(v.dataset.sync)) seekTo(v, playing.get(v.dataset.sync));
           else if (!v.dataset.sync) seekTo(v, 0);
-          if (v.dataset.autoplay === "true") {
-            const p = v.play();
-            if (p && p.catch) p.catch(() => {});
-          }
         }
         syncVideos(index);
       }
@@ -341,6 +362,7 @@
     function setBlank(on) {
       state.blank = on;
       root.classList.toggle("svgdeck-blank", on);
+      root.dispatchEvent(new CustomEvent("svgdeck:change", { detail: { ...state } }));
     }
     function fromHash() {
       const m = /^#(\d+)(?:\.(\d+))?$/.exec(location.hash);
@@ -349,6 +371,7 @@
 
     let typed = "";
     document.addEventListener("keydown", (e) => {
+      if (e.target.closest("input,textarea,select,[contenteditable]")) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.key === "Escape" || e.key.toLowerCase() === "o") { e.preventDefault(); setOverview(!overviewOpen); return; }
       if (overviewOpen) {
@@ -416,8 +439,9 @@
       show(i, s);
     });
 
-    const api = { slides, state, next, prev, show, ready, count: slides.length };
+    const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length };
     root.svgdeck = api;
+    window.SvgDeckSpeaker?.(root, deck, api, options, rewrite);
     return api;
   }
 
