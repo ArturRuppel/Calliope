@@ -68,12 +68,19 @@ export class Controller {
     this.onChange = onChange || (() => {});
     this.learning = null;     // {action, done}
     this.heldKeys = new Map(); // code -> action
-    this.padState = new Map(); // "index:button" -> pressed
+    this.padState = new Map(); // "index:button" -> action dispatched on press (or null)
+    this.heldActions = new Map(); // action -> number of physical inputs holding it
+    this.ignoredPadPresses = new Set(); // held across a blur; wait for a physical release
     this.pads = [];
     this.polling = false;
+    this.focused = true;
     window.addEventListener("gamepadconnected", () => { this.refreshPads(); this.startPolling(); });
-    window.addEventListener("gamepaddisconnected", () => this.refreshPads());
-    window.addEventListener("blur", () => this.releaseAll());
+    window.addEventListener("gamepaddisconnected", (e) => {
+      if (e.gamepad) this.releasePad(e.gamepad.index);
+      this.refreshPads();
+    });
+    window.addEventListener("blur", () => { this.focused = false; this.releaseAll(); });
+    window.addEventListener("focus", () => { this.focused = true; });
   }
 
   refreshPads() {
@@ -125,7 +132,7 @@ export class Controller {
     e.preventDefault();
     if (e.repeat) return true;
     this.heldKeys.set(e.code, action);
-    this.run(action, "down");
+    this.pressAction(action);
     return true;
   }
 
@@ -133,20 +140,54 @@ export class Controller {
     const action = this.heldKeys.get(e.code);
     if (!action) return false;
     this.heldKeys.delete(e.code);
-    this.run(action, "up");
+    this.releaseAction(action);
     return true;
   }
 
+  pressAction(action) {
+    if (!action.startsWith("penhold:")) {
+      this.run(action, "down");
+      return;
+    }
+    const count = this.heldActions.get(action) || 0;
+    this.heldActions.set(action, count + 1);
+    if (!count) this.run(action, "down");
+  }
+
+  releaseAction(action) {
+    if (!action.startsWith("penhold:")) {
+      this.run(action, "up");
+      return;
+    }
+    const count = this.heldActions.get(action) || 0;
+    if (count <= 1) {
+      this.heldActions.delete(action);
+      if (count) this.run(action, "up");
+    } else {
+      this.heldActions.set(action, count - 1);
+    }
+  }
+
   releaseAll() {
-    for (const action of this.heldKeys.values()) this.run(action, "up");
+    for (const action of this.heldKeys.values()) this.releaseAction(action);
     this.heldKeys.clear();
-    for (const [key, pressed] of this.padState) {
-      if (pressed) {
-        const action = this.bindings[`pad:${key.split(":")[1]}`];
-        if (action) this.run(action, "up");
-      }
+    for (const [key, action] of this.padState) {
+      if (action) this.releaseAction(action);
+      this.ignoredPadPresses.add(key);
     }
     this.padState.clear();
+  }
+
+  releasePad(index) {
+    const prefix = `${index}:`;
+    for (const [key, action] of [...this.padState]) {
+      if (!key.startsWith(prefix)) continue;
+      if (action) this.releaseAction(action);
+      this.padState.delete(key);
+    }
+    for (const key of [...this.ignoredPadPresses]) {
+      if (key.startsWith(prefix)) this.ignoredPadPresses.delete(key);
+    }
   }
 
   startPolling() {
@@ -154,23 +195,41 @@ export class Controller {
     this.polling = true;
     const tick = () => {
       const pads = [...navigator.getGamepads()].filter(Boolean);
+      const present = new Set(pads.map((pad) => pad.index));
+      for (const key of [...this.padState.keys()]) {
+        if (!present.has(+key.split(":")[0])) this.releasePad(+key.split(":")[0]);
+      }
+      for (const key of [...this.ignoredPadPresses]) {
+        if (!present.has(+key.split(":")[0])) this.ignoredPadPresses.delete(key);
+      }
       if (!pads.length && !this.learning) { this.polling = false; return; }
       for (const pad of pads) {
         pad.buttons.forEach((b, i) => {
           const key = `${pad.index}:${i}`, pressed = b.pressed || b.value > 0.5;
-          const was = this.padState.get(key) || false;
+          if (!pressed && this.ignoredPadPresses.delete(key)) return;
+          if (this.ignoredPadPresses.has(key)) return;
+          const was = this.padState.has(key);
           if (pressed === was) return;
-          this.padState.set(key, pressed);
+          if (pressed && !this.focused) { this.ignoredPadPresses.add(key); return; }
           const input = `pad:${i}`;
           if (pressed && this.learning) {
             const l = this.learning;
             this.learning = null;
             this.bind(input, l.action);
             l.done(input);
+            this.padState.set(key, null);
             return;
           }
-          const action = this.bindings[input];
-          if (action && !document.hidden) this.run(action, pressed ? "down" : "up");
+          if (pressed) {
+            const action = this.bindings[input];
+            const dispatched = action && !document.hidden ? action : null;
+            this.padState.set(key, dispatched);
+            if (dispatched) this.pressAction(dispatched);
+          } else {
+            const action = this.padState.get(key);
+            this.padState.delete(key);
+            if (action) this.releaseAction(action);
+          }
         });
       }
       requestAnimationFrame(tick);

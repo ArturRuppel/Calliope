@@ -244,9 +244,23 @@ async function slideRecord(id) {
   return rec;
 }
 
+let navigationSequence = 0;
+
+function settleCurrentSlide() {
+  editor.endTextEdit(true);
+  editor.finishPath();
+  editor.cancelGesture();
+  editor.pointers.clear();
+  editor.touchStart = null;
+}
+
 async function openSlide(id) {
-  if (state.current && state.current !== id) editor.endTextEdit(true);
+  const sequence = ++navigationSequence;
+  if (state.current === id) return;
+  if (state.current && state.current !== id) settleCurrentSlide();
   const rec = await slideRecord(id);
+  if (sequence !== navigationSequence) return;
+  if (state.current && state.current !== id) settleCurrentSlide();
   state.current = id;
   try {
     editor.load(rec.text);
@@ -622,12 +636,34 @@ document.addEventListener("pointerdown", (e) => {
 window.addEventListener("resize", () => closeContextMenu());
 
 async function uploadMedia(files) {
+  const target = state.current;
+  const center = editor.visibleCenter();
   for (const file of files) {
     const video = file.type.startsWith("video/");
     toast(video ? `Uploading ${file.name} (movies are converted for playback, this can take a while)…` : `Uploading ${file.name}…`, 60000);
     try {
       const info = await api.upload(`/api/decks/${DECK}/media?filename=${encodeURIComponent(file.name)}`, file);
-      editor.insertMedia(info);
+      // Let an in-progress pointer gesture end naturally, keeping the upload
+      // out of that gesture's undo transaction.
+      while (state.current === target && editor.gesture) {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      }
+      const rec = state.slides.get(target);
+      if (!rec || !state.deck.slides.some((s) => s.id === target)) {
+        toast(`Uploaded ${file.name}, but its slide was deleted before it could be inserted.`, 8000);
+        continue;
+      }
+      if (state.current === target) {
+        settleCurrentSlide();
+        editor.insertMedia(info, center);
+      } else {
+        const before = rec.text;
+        const after = editor.insertMediaInText(before, info, center);
+        rec.undo.push(before);
+        if (rec.undo.length > 150) rec.undo.shift();
+        rec.redo = [];
+        markDirty(target, after);
+      }
       toast(`Inserted ${file.name}`);
     } catch (e) {
       toast(`Could not insert ${file.name}: ${e.message}`, 8000);

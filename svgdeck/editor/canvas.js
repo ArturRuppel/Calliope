@@ -203,6 +203,13 @@ export class SlideEditor {
 
   // --- loading and saving --------------------------------------------------
   load(text, { keepView = false } = {}) {
+    // A loaded document must never inherit a transaction or captured pointer
+    // from the document it replaces. Callers that want to keep a draft must
+    // finish it before loading.
+    this.cancelGesture();
+    this.pointers.clear();
+    this.touchStart = null;
+    this.before = null;
     this.pathDraft = null;
     this.endTextEdit(false);
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
@@ -2237,11 +2244,11 @@ export class SlideEditor {
     return { x: Math.max(0, Math.min(this.size[0], x)), y: Math.max(0, Math.min(this.size[1], y)) };
   }
 
-  insertMedia(info) {
+  insertMedia(info, center = null) {
     const [W, H] = this.size;
     const scale = Math.min(1, (W * 0.6) / info.width, (H * 0.6) / info.height);
     const w = info.width * scale, h = info.height * scale;
-    const c = this.visibleCenter();
+    const c = center || this.visibleCenter();
     const img = document.createElementNS(SVGNS, "image");
     img.setAttribute("href", this.hooks.hrefIn(info.href));
     for (const [k, v] of Object.entries({ x: c.x - w / 2, y: c.y - h / 2, width: w, height: h })) img.setAttribute(k, String(+v.toFixed(1)));
@@ -2253,10 +2260,36 @@ export class SlideEditor {
       img.setAttribute("data-label", "movie");
     }
     this.change(() => {
-      // Movies are layered by the player at the top level of the slide.
-      (info.kind === "video" ? this.svg : this.context).appendChild(img);
+      // Uploads have a stable insertion context even if the user enters or
+      // leaves a group while conversion is in progress.
+      this.context = this.svg;
+      this.svg.appendChild(img);
       this.selection = [img];
     });
+  }
+
+  /** Insert uploaded media into serialized SVG without disturbing this editor. */
+  insertMediaInText(text, info, center) {
+    const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+    const svg = doc.documentElement;
+    if (doc.querySelector("parsererror") || svg.localName !== "svg") throw new Error("this slide is not valid SVG");
+    const vb = (svg.getAttribute("viewBox") || "0 0 1920 1080").split(/[\s,]+/).map(Number);
+    const W = vb[2] || 1920, H = vb[3] || 1080;
+    const scale = Math.min(1, (W * 0.6) / info.width, (H * 0.6) / info.height);
+    const w = info.width * scale, h = info.height * scale;
+    const c = center || { x: vb[0] + W / 2, y: vb[1] + H / 2 };
+    const img = doc.createElementNS(SVGNS, "image");
+    img.setAttribute("href", this.hooks.hrefOut(info.href));
+    for (const [k, v] of Object.entries({ x: c.x - w / 2, y: c.y - h / 2, width: w, height: h })) img.setAttribute(k, String(+v.toFixed(1)));
+    img.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    if (info.kind === "video") {
+      img.setAttribute("data-video", this.hooks.hrefOut(info.video));
+      img.setAttribute("data-autoplay", "true");
+      img.setAttribute("data-loop", "true");
+      img.setAttribute("data-label", "movie");
+    }
+    svg.appendChild(img);
+    return '<?xml version="1.0" encoding="utf-8"?>\n' + new XMLSerializer().serializeToString(svg) + "\n";
   }
 
   /** Elements as standalone SVG markup, with the defs they reference. */

@@ -121,15 +121,21 @@ class Store:
         for sid in ids:
             if not (path / "slides" / f"{sid}.svg").is_file():
                 raise ValueError(f"slide {sid} has no file")
-        # Slides dropped from the order are moved to trash/, not deleted.
         old = {s["id"] for s in json.loads(current).get("slides", [])}
+        data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
+        write_atomic(path / "deck.json", data)
+        # Commit metadata before best-effort cleanup.  A failed metadata write
+        # must leave every slide referenced by the old deck.json in place.
         for sid in old - set(ids):
             src = path / "slides" / f"{sid}.svg"
             if src.exists():
-                (path / "trash").mkdir(exist_ok=True)
-                shutil.move(src, path / "trash" / f"{sid}.{int(time.time())}.svg")
-        data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
-        write_atomic(path / "deck.json", data)
+                try:
+                    (path / "trash").mkdir(exist_ok=True)
+                    shutil.move(src, path / "trash" / f"{sid}.{int(time.time())}.svg")
+                except OSError:
+                    # The committed deck no longer references this file, so it
+                    # is safe to retain for recovery or later manual cleanup.
+                    pass
         return {"version": version(data)}
 
     # --- slides ------------------------------------------------------------
