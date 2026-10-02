@@ -50,8 +50,9 @@ on the iPad; "Add to Home Screen" gives it a full-screen window.
 The editor is laid out for an iPad in landscape:
 
 - **Top bar:** back to all decks, the slide strip toggle, the **deck menu**
-  (the deck's title; it shows the slide number and save state), undo/redo,
-  the inspector toggle and **Present**.
+  (the deck's title; it shows the slide number and save state), undo/redo
+  (greyed out when there is nothing to undo or redo), the inspector toggle
+  and **Present**.
 - **Tool rail** on the left: Select (V), Draw (P), Erase (X), **Shapes** and
   **Path**, Text (T) and Media. Shapes and Path open a flyout with their
   members and keys; the rail shows the one used last.
@@ -118,15 +119,26 @@ The editor is laid out for an iPad in landscape:
   several, or turn on **Several** in the view bar so taps add to (or take out
   of) the selection; the selection bar then offers **Group**. Right-click,
   **touch and hold on the slide**, **tap with two fingers** or **More** opens
-  the actions menu: copy, cut, paste, duplicate, group, ungroup, stacking order, lock and delete. Movies
+  the actions menu: copy, cut, paste, duplicate, group, ungroup, stacking order, lock and delete.
+  Copy and Cut also put the objects on the system clipboard as SVG, so they
+  paste into other apps; pasting SVG copied elsewhere inserts it as objects at
+  the pointer (or the visible centre), and pasting plain text makes a text
+  object. Movies
   must stay outside groups; grouping them or pasting them into a group is
   refused so they remain playable.
 - The selection bar depends on what is selected: text gets font, size, bold,
-  italic, underline and colour; images and movies get **Crop** (movies also
+  italic, underline and colour; images and movies get **Crop** and
+  **Replace…** (movies also
   Autoplay, Loop and their sync group); groups get Edit inside and Ungroup;
   shapes get fill and line colour. Colour buttons open the Design tab, which
   holds the full palettes and every other property, plus the object's
-  **Build step**.
+  **Build step**. Its **Position** section gives X, Y, W and H of the
+  selection's bounds in slide pixels, with a lock that keeps W and H in
+  proportion. **Line style** sets the dash (Solid, Dashed, Dotted, or a
+  custom pattern such as `12 6 2 6`; the presets scale with the line width),
+  the ends (Flat, Round, Square) and the joins (Mitre, Round, Bevel) of shapes,
+  lines and paths; rectangles also get **Corners**, a radius in pixels that
+  stays put when the rectangle is resized.
 - **Align** in the selection bar aligns edges and centres. A single object
   aligns to the slide; several align to their selection bounds or, switched,
   to the slide; three or more can be spaced evenly across or down.
@@ -219,7 +231,15 @@ The editor is laid out for an iPad in landscape:
   Undo/redo remains per slide. Concurrent edits stop saving or restoring
   instead of silently overwriting changes.
 - **Deck menu → Export offline copy** downloads a .zip that plays without a
-  network; **Deck settings** holds the font library (upload .otf/.ttf).
+  network; **Download PDF** and **Download handout (with notes)** fetch PDFs
+  from the service (a message says why if the service cannot make them).
+- **Deck menu → Deck settings…** sets the deck's title, its background colour
+  (the screen around the slide when the window is not 16:9), and the slide
+  size (1920×1080, 3840×2160, 1920×1200, 1024×768 or custom). Changing the
+  size asks first, then resizes every slide while content keeps its position
+  and size (a full-slide background rectangle is resized with the slide);
+  each slide can undo it. The dialog also holds the font library (upload
+  .otf/.ttf).
 - The slide strip's **+ Slide** adds a slide after the current one; **…**
   duplicates, moves or deletes it.
 - Keyboard: Ctrl+Z / Ctrl+Shift+Z, Ctrl+C / Ctrl+V (also across slides),
@@ -227,9 +247,13 @@ The editor is laid out for an iPad in landscape:
   (Shift ×10; nudges move exact pixels, never snap, and presses within half a
   second undo as one step), Page Up/Down change slide.
 - Deleted slides go to the deck's `trash/` folder.
-- **Delete** on the decks page (tap twice) moves the whole deck to
+- The decks page offers **Rename** (the folder name; history and media move
+  with it) and **Duplicate** (a copy named `<name>-copy` with " (copy)" in its
+  title; it starts without the original's history) per deck. **Delete**
+  (tap twice) moves the whole deck to
   `<data>/trash/<name>.<timestamp>/`; **Recently deleted** below the list
-  restores it. Nothing is purged automatically: remove the folder by hand.
+  restores it, asking for another name when the original name is taken.
+  Nothing is purged automatically: remove the folder by hand.
 - **Deck menu → History and recovery** lists the last 30 saved slide revisions
   and deleted slides, with restore controls. Restoring a revision checkpoints
   the current artwork first. If saving detects a conflict, **Keep both versions**

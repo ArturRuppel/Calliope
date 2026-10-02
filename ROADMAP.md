@@ -116,15 +116,25 @@ exported `index.html`. Font files are licensed and never go into this repo.
   their own tools; gamepads and key devices switch tools; point editing on
   every path with corner/smooth/symmetric points, adding and deleting points;
   small auto-hiding presenter controls.
-- Snapping to other objects, guides.
-- Clip to a rectangle or ellipse.
+- Done 2026-10-02: smart guides also snap to the slide's edges and centre,
+  and work while resizing and drawing; Alt resizes from the centre; Shift
+  constrains Bézier points to 45°; numeric position and size fields; dash,
+  cap, join and corner radius controls; deck settings (title, size,
+  background); rename and duplicate decks; replace an image or movie in
+  place; crop aspect lock; SVG and text through the system clipboard;
+  key nudges as one undo step; Escape cancels a text edit.
+- Snapping to other objects, guides (done).
+- Clip to a rectangle or ellipse (done: crop with rectangle/ellipse masks).
 - Bézier path editing (done, see above).
 - Reusable pieces: title bar, scale bar, citation line, slide number.
-- Copy objects between slides and decks.
+- Copy objects between slides and decks (done within the app; across apps
+  through the system clipboard).
 
 ### 4. Later
-- PDF export (headless Chromium printing the player).
-- Speaker view: notes, next slide, timer.
+- PDF export (headless Chromium printing the player) — done 2026-10-02:
+  `svgdeck pdf`, `export --pdf`, handout with notes, one page per step, and
+  a print mode of the player.
+- Speaker view: notes, next slide, timer (done).
 - Movie helpers: crop and timestamp overlays (now done by hand with ffmpeg).
 
 ## Open questions
