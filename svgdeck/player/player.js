@@ -225,7 +225,7 @@
     video.setAttribute("muted", "");
     video.setAttribute("playsinline", "");
     video.preload = "none";
-    video.loop = image.getAttribute("data-loop") !== "false";
+    video.movieRange = SvgDeckMovieRange.attach(video, SvgDeckMovieRange.read(image), image.getAttribute("data-loop") !== "false");
     video.dataset.src = image.getAttribute("data-video");  // kept: unloading removes src, loading restores it
     video.dataset.autoplay = image.getAttribute("data-autoplay") !== "false" ? "true" : "false";
     if (image.hasAttribute("data-sync")) video.dataset.sync = image.getAttribute("data-sync");
@@ -550,17 +550,16 @@
     }
 
     const SEEK_DRIFT = 0.1, SEEK_INTERVAL = 250;  // seconds, milliseconds
-    // How far a looping video is from `time`, wrapping at its duration.
+    // How far a looping video is from where a seek to `time` would put it,
+    // wrapping at its duration.
     function drift(video, time) {
       const d = video.duration;
-      if (!isFinite(d) || d <= 0) return Math.abs(video.currentTime - time);
-      const diff = Math.abs(video.currentTime - time % d);
-      return Math.min(diff, d - diff);
+      const diff = Math.abs(video.currentTime - video.movieRange.target(time));
+      return isFinite(d) && d > 0 ? Math.min(diff, d - diff) : diff;
     }
 
     function seekTo(video, time) {
-      const d = video.duration;
-      try { video.currentTime = isFinite(d) && d > 0 ? time % d : time; } catch (e) { /* not ready */ }
+      video.movieRange.seek(time);
     }
 
     function syncVideos(index) {
@@ -624,7 +623,7 @@
         slide.el.classList.add("svgdeck-current");
         for (const v of slide.videos) {
           if (v.dataset.sync && playing.has(v.dataset.sync)) seekTo(v, playing.get(v.dataset.sync));
-          else if (!v.dataset.sync) seekTo(v, 0);
+          else if (!v.dataset.sync) seekTo(v, v.movieRange.bounds().start);
         }
         syncVideos(index);
       }

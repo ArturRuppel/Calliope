@@ -40,9 +40,9 @@ svgdeck pdf DECK_DIR talk.pdf --notes       # handout: slide plus speaker notes 
 
 ## The service on sancho
 
-`systemd/svgdeck.service` runs `svgdeck serve` on sancho's Tailscale address,
+`systemd/calliope.service` runs `svgdeck serve` on sancho's Tailscale address,
 port 8490 (install: copy it to `~/.config/systemd/user/`, then
-`systemctl --user enable --now svgdeck`). Open `http://<sancho tailnet ip>:8490/`
+`systemctl --user enable --now calliope`). Open `http://<sancho tailnet ip>:8490/`
 on the iPad; "Add to Home Screen" gives it a full-screen window.
 
 ## Editing
@@ -176,7 +176,13 @@ The editor is laid out for an iPad in landscape:
   and adjustments, as one undo step. A different aspect ratio is fitted inside
   the existing box. Replacing a picture with a movie makes it autoplay and
   loop; replacing a movie with a picture drops the playback settings and the
-  sync group.
+  sync group. A movie's trim does not carry over to its replacement.
+- **Trim** on a selected movie (or **Design → Playback → Trim movie…**)
+  opens a preview with start/end sliders, times in seconds and buttons to use
+  the current frame. **Play excerpt** previews the range; **Apply trim** saves
+  it as one undo step. **Reset to full movie**, then Apply, removes the trim.
+  Loop repeats the selected excerpt in presentations and offline exports.
+  The original movie and poster stay unchanged.
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
   fields, a visual picker, and an opacity slider. Colour transparency is
@@ -198,7 +204,9 @@ The editor is laid out for an iPad in landscape:
   Editing keeps the text's formatting; while
   editing, the selection bar makes selected words bold, italic, underlined or
   sub/superscript, and the Design tab gives them another colour.
-- Choose **Pan** to drag the page without changing objects; choose **Select**
+- Choose **Pan** to drag the page without changing objects; tap an object to
+  select it, or empty space to clear selection. Shift-tap or **Several** toggles
+  objects in the selection. Drags preserve selection, even over objects. Choose **Select**
   to move objects, or a drawing tool to draw. Two fingers drag to pan or pinch
   to zoom in any tool; a brief two-finger tap opens the actions menu. Touches
   while the Pencil is down are ignored as palm contact.
@@ -324,7 +332,7 @@ on video, so movie tests only run in Chromium.
 
 ## Persistent local service
 
-The installed `svgdeck.service` user unit starts under `default.target`, restarts
+The installed `calliope.service` user unit starts under `default.target`, restarts
 on failure, and binds only the Tailscale address on port 8490. User lingering
 keeps it running across logouts and starts the user manager at boot. The unit
 refuses to start until Tailscale has an IPv4 address (an empty address would

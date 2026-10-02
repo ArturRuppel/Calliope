@@ -283,3 +283,79 @@ def test_new_primary_touch_recovers_stale_zoom_state(page):
     touch(session, 'touchEnd', [])
     assert page.evaluate('svgdeckEditor.editor.pointers.size') == 0
     assert page.evaluate('svgdeckEditor.editor.zoom') == zoom
+
+
+@pytest.mark.parametrize('pointer_type,threshold', [('mouse', 5), ('pen', 8), ('touch', 14)])
+def test_pan_taps_select_and_drags_preserve_objects(page, pointer_type, threshold):
+    add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150]])
+    pick_tool(page, 'pan')
+    page.evaluate("svgdeckEditor.editor.tools.pen = 'pan'")
+    source = page.evaluate('svgdeckEditor.editor.serialize()')
+    before = page.evaluate('({...svgdeckEditor.editor.pan})')
+    x, y = to_screen(page, 175, 175)
+
+    def pointer(kind, px=x, py=y, shift=False, button=0):
+        page.evaluate("""([kind, type, x, y, shift, button]) => {
+          const e = svgdeckEditor.editor;
+          const event = {pointerId:42, pointerType:type, clientX:x, clientY:y,
+            target:document.elementFromPoint(x,y), button, buttons:kind === 'onUp' ? 0 : 1,
+            shiftKey:shift, preventDefault(){}};
+          // Exercise the real handlers without synthetic browser capture.
+          const capture = e.host.setPointerCapture;
+          e.host.setPointerCapture = () => {};
+          try { e[kind](event); } finally { e.host.setPointerCapture = capture; }
+        }""", [kind, pointer_type, px, py, shift, button])
+
+    pointer('onDown')
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 0
+    pointer('onMove', x + threshold - 1)
+    assert page.evaluate('({...svgdeckEditor.editor.pan})') == before
+    pointer('onUp', x + threshold - 1)
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 1
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '100'
+
+    x2, y2 = to_screen(page, 475, 175)
+    pointer('onDown', x2, y2, shift=True)
+    pointer('onUp', x2, y2)
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 2
+    page.evaluate('svgdeckEditor.editor.additive = true')
+    pointer('onDown')
+    pointer('onUp')
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '400'
+    page.evaluate('svgdeckEditor.editor.additive = false')
+
+    pointer('onDown')
+    pointer('onCancel')
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '400'
+    pointer('onDown', button=1)
+    pointer('onUp', button=1)
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '400'
+
+    # Cross the threshold, return to the origin: still a pan, never a tap.
+    pointer('onDown')
+    pointer('onMove', x + threshold + 20)
+    assert page.evaluate('svgdeckEditor.editor.pan.x') == pytest.approx(before['x'] + threshold + 20)
+    pointer('onMove')
+    pointer('onUp')
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '400'
+    assert page.evaluate('svgdeckEditor.editor.serialize()') == source
+
+    empty_x, empty_y = to_screen(page, 1000, 600)
+    pointer('onDown', empty_x, empty_y)
+    pointer('onUp', empty_x, empty_y)
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 0
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+def test_pan_real_touch_tap_selects_and_cancel_preserves_selection(page):
+    add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150]])
+    pick_tool(page, 'pan')
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 175, 175)
+    touch(session, 'touchStart', [(1, x, y)])
+    touch(session, 'touchEnd', [])
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '100'
+    x, y = to_screen(page, 475, 175)
+    touch(session, 'touchStart', [(1, x, y)])
+    touch(session, 'touchCancel', [])
+    assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '100'

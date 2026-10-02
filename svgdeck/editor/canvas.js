@@ -1063,7 +1063,10 @@ export class SlideEditor {
     // The chosen tool applies to every pointer. Pan is explicit; a previous
     // Pencil stroke must not silently change what a later finger drag does.
     if (this.tool === "pan" || e.button === 1) {
-      this.gesture = { kind: "pan", id: e.pointerId, pointerType: e.pointerType, last: { x: e.clientX, y: e.clientY } };
+      this.gesture = { kind: "pan", id: e.pointerId, pointerType: e.pointerType,
+        client: { x: e.clientX, y: e.clientY }, last: { x: e.clientX, y: e.clientY },
+        start: p, target: e.target, additive: e.shiftKey || this.additive,
+        selectOnTap: e.button !== 1, moved: false };
       return;
     }
     if (e.button !== 0 && e.pointerType === "mouse") return;
@@ -1542,6 +1545,19 @@ export class SlideEditor {
     });
   }
 
+  pickSelection(e, p) {
+    let el = this.pick(e, p);
+    if (!el && this.context !== this.svg) {
+      // Tapping outside the group leaves it.
+      const b = rootBox(this.context, this.svg);
+      if (!b || p.x < b.x || p.y < b.y || p.x > b.x + b.width || p.y > b.y + b.height) {
+        this.exitGroup();
+        el = this.pick(e, p);
+      }
+    }
+    return el;
+  }
+
   downSelect(e, p, base) {
     const handle = this.hitHandle(p, e.pointerType);
     if (handle === "end1" || handle === "end2") {
@@ -1560,15 +1576,7 @@ export class SlideEditor {
         : { kind: "resize", ...base, tx, handle, box: frame ? frame.box : box, frame, snaps: this.snapshot() };
       return;
     }
-    let el = this.pick(e, p);
-    if (!el && this.context !== this.svg) {
-      // Tapping outside the group leaves it.
-      const b = rootBox(this.context, this.svg);
-      if (!b || p.x < b.x || p.y < b.y || p.x > b.x + b.width || p.y > b.y + b.height) {
-        this.exitGroup();
-        el = this.pick(e, p);
-      }
-    }
+    const el = this.pickSelection(e, p);
     const additive = e.shiftKey || this.additive;
     if (!el) {
       if (!additive) this.select([]);
@@ -1658,6 +1666,10 @@ export class SlideEditor {
     if (g.kind === "pinch") return this.movePinch();
     if (g.id !== e.pointerId) return;
     if (g.kind === "pan") {
+      if (!g.moved && g.selectOnTap &&
+          Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) < (TAP_PX[g.pointerType] || TAP_PX.mouse)) return;
+      g.moved = true;
+      this.clearLongPress();
       this.pan.x += e.clientX - g.last.x;
       this.pan.y += e.clientY - g.last.y;
       g.last = { x: e.clientX, y: e.clientY };
@@ -1962,7 +1974,16 @@ export class SlideEditor {
         this.drawOverlay();
         this.hooks.select(this.selection);
         return;
-      case "pan": return;
+      case "pan": {
+        if (!g.selectOnTap || g.moved ||
+            Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) >= (TAP_PX[g.pointerType] || TAP_PX.mouse)) return;
+        const el = this.pickSelection({ target: g.target }, g.start);
+        if (g.additive) {
+          if (el) this.select(this.selection.includes(el)
+            ? this.selection.filter(s => s !== el) : [...this.selection, el]);
+        } else this.select(el ? [el] : []);
+        return;
+      }
       case "move": case "resize": case "rotate": case "endpoint": case "node":
         this.commit();
         if (g.kind === "move" && !g.moved && g.additive) {

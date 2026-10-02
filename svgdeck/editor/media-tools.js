@@ -212,6 +212,8 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     editor.change(() => {
       el.setAttribute("href", editor.hooks.hrefIn(info.href));
       el.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+      // A trim is in the old movie's seconds.
+      for (const name of ["data-video-start", "data-video-end"]) el.removeAttribute(name);
       if (movie) {
         el.setAttribute("data-video", editor.hooks.hrefIn(info.video));
         for (const name of ["data-autoplay", "data-loop"]) if (!el.hasAttribute(name)) el.setAttribute(name, "true");

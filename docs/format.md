@@ -71,11 +71,19 @@ A movie is a top-level `<image>` whose `href` is a poster frame and whose
 | `data-video` | required | movie file, relative to the slide |
 | `data-autoplay` | `true` | start playing when the slide is shown |
 | `data-loop` | `true` | loop |
+| `data-video-start` | `0` | first playback time in seconds |
+| `data-video-end` | movie duration | last playback time in seconds |
 | `data-sync` | none | sync group: moving between slides whose movies share a group keeps the playback time, so a movie continues across slides |
 
 Objects above the movie in stacking order are drawn on top of it.
 Movies are always muted. The player keeps only the current and the neighbouring
 slides' movies loaded.
+Temporal trims leave the source file and poster unchanged.
+Playback starts at the trim start; Loop repeats only the excerpt, otherwise it
+pauses at the end. Sync groups use source-file seconds and continue when that
+time lies within the next movie's excerpt; otherwise the next excerpt starts
+at its beginning. Invalid ranges fall back to the available movie duration.
+Offline exports include the original movie and retain the playback range.
 
 ### Editor attributes
 

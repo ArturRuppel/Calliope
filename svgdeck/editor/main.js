@@ -9,6 +9,7 @@ import { installRecovery } from "./recovery.js";
 import { installCommits } from "./commits.js";
 import { createColorControl } from "./colors.js";
 import { IMAGE_ADJUSTMENTS, adjustmentValue, setImageAdjustment, resetImageAdjustments, upgradeImageAdjustments } from "./image-adjustments.js";
+import { openMovieTrim } from "./movie-trim.js";
 
 const DECK = document.body.dataset.deck;
 const $ = (id) => document.getElementById(id);
@@ -624,7 +625,7 @@ function buildRail() {
       b.append(el("span", {}, "Media"));
     } else {
       b.dataset.tool = id;
-      b.title = TOOL[id].title;
+      b.title = TOOL[id].title + (id === "pan" ? "; Drag to pan · Tap to select" : "");
       b.innerHTML = icon(TOOL[id].path);
       b.append(el("span", {}, TOOL[id].name));
     }
@@ -1042,7 +1043,7 @@ function selBarItems() {
         path: "M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" }),
       barButton("Replace…", movie ? "Replace the movie with another file" : "Replace the image with another file",
         () => chooseReplacement(first), { id: "replace-media" }),
-      ...(movie ? [barSep(),
+      ...(movie ? [barButton("Trim", "Trim movie", () => openMovieTrim(editor, first)), barSep(),
         barButton("Autoplay", "Play automatically", () => editor.setAttr("data-autoplay", flag("data-autoplay") ? "false" : "true"),
           { on: flag("data-autoplay") }),
         barButton("Loop", "Loop the movie", () => editor.setAttr("data-loop", flag("data-loop") ? "false" : "true"), { on: flag("data-loop") }),
@@ -1835,7 +1836,7 @@ function drawPanel() {
     };
     const sync = el("input", { type: "text", value: first.getAttribute("data-sync") || "", placeholder: "none", size: 8 });
     sync.addEventListener("change", () => editor.setAttr("data-sync", sync.value.trim() || null));
-    parts.push(section("Playback", check("data-autoplay", "Play automatically", true), check("data-loop", "Loop", true),
+    parts.push(section("Playback", el("button", {class:"btn", type:"button", onclick:() => openMovieTrim(editor, first)}, "Trim movie…"), check("data-autoplay", "Play automatically", true), check("data-loop", "Loop", true),
       row("Sync group", sync),
       el("p", { class: "hint" }, "Movies with the same sync group continue across slides without restarting.")));
   }

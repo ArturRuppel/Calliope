@@ -312,3 +312,10 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .menu > a:hover, .menu > a:focus { background: var(--n200); }
 .settings-body input[type="text"] { width: 100%; }
 .settings-body .num input { width: 6rem; }
+
+.movie-trim { width: min(720px, calc(100vw - 24px)); }
+.movie-trim video { display: block; width: 100%; max-height: 36dvh; background: #000; margin-bottom: 16px; }
+.movie-trim label { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; }
+.movie-trim input[type=number] { width: 120px; }
+.movie-trim input[type=range] { width: 100%; min-height: 40px; accent-color: var(--accent); }
+.movie-trim .buttons { flex-wrap: wrap; margin-top: 16px; }

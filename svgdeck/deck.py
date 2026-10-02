@@ -133,6 +133,7 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
 <script type="application/json" id="svgdeck-data">{payload}</script>
 <script>
 {_asset("speaker.js")}
+{resources.files("svgdeck").joinpath("editor/movie-range.js").read_text()}
 {_asset("player.js")}
 </script>
 <script>
