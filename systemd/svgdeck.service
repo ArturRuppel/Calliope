@@ -1,14 +1,17 @@
 [Unit]
 Description=svgdeck slide editor and presenter
 Documentation=file:%h/Projects/svgdeck/README.md
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 # Binds the tailnet address only (like labbook.service): the editor can change
 # decks, so it is reachable from the iPad/phone over Tailscale and from nowhere
-# else. Restart retries while Tailscale is still coming up after boot.
+# else. If Tailscale is not online yet the address is empty, which uvicorn would
+# treat as "all interfaces", so the shell fails instead and Restart retries.
 # Data (decks, fonts) lives in ~/Data/svgdeck, outside the repo.
-ExecStart=/bin/sh -c 'exec %h/Projects/svgdeck/.venv/bin/svgdeck serve --data %h/Data/svgdeck --host "$(tailscale ip -4)" --port 8490'
+ExecStart=/bin/sh -c 'set -e; ip=$(tailscale ip -4 | head -n 1); [ -n "$$ip" ] || { echo "tailscale has no IPv4 address yet" >&2; exit 1; }; exec %h/Projects/svgdeck/.venv/bin/svgdeck serve --data %h/Data/svgdeck --host "$$ip" --port 8490'
 Restart=on-failure
 RestartSec=5
 
