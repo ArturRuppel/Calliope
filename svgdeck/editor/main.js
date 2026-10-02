@@ -2107,7 +2107,11 @@ function wire() {
   $("slide-up").onclick = guard(() => moveSlide(-1), "Could not move the slide");
   $("slide-down").onclick = guard(() => moveSlide(1), "Could not move the slide");
   $("slide-del").onclick = guard(deleteSlide, "Could not delete the slide");
-  $("settings-close").onclick = () => $("settings-dialog").close();
+  $("settings-close").onclick = () => {
+    // The close event fires a task later; stop learning before any key can arrive.
+    if (controller.learning) controller.cancelLearning();
+    $("settings-dialog").close();
+  };
   $("settings-dialog").addEventListener("close", () => {
     settingsKind = null;
     // A key pressed after closing must not be bound.
