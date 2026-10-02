@@ -20,10 +20,16 @@ def to_woff2(source: Path, target: Path) -> None:
     font.save(target)
 
 
-def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes: bool = True) -> Path:
+def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes: bool = True,
+           pdf: bool = False) -> Path:
     """Write the deck to `out`: index.html, media/ (only what the slides use)
     and fonts/ as woff2. Existing contents of `out` are replaced. Speaker notes
-    are part of index.html unless `include_notes` is false."""
+    are part of index.html unless `include_notes` is false. With `pdf`, the
+    export (and the zip) also holds deck.pdf, every slide fully built (needs
+    Playwright, see svgdeck.pdf)."""
+    if pdf:
+        from .pdf import require_playwright
+        require_playwright()  # fail before doing any work
     out = Path(out).absolute()
     zip_path = Path(zip_path).absolute() if zip_path else None
     _validate_targets(deck, out, zip_path)
@@ -56,6 +62,9 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes
 
         (staging / "index.html").write_text(render_page(deck, font_files, include_notes=include_notes),
                                             encoding="utf-8")
+        if pdf:
+            from .pdf import print_export
+            print_export(staging, staging / "deck.pdf", size=deck.meta.get("size") or [1920, 1080])
 
         _apply_umask(staging)
         if zip_path:
