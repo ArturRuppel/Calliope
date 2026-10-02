@@ -296,3 +296,19 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
   .doc-sub { display: none; }
   #zoom-in, #zoom-out { display: none; }
 }
+
+/* — inspector: position and line style — */
+.pos-grid { display: grid; grid-template-columns: 1fr 1fr auto; gap: 6px 8px; align-items: center; }
+.pos-field { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 12px; color: var(--n700); }
+.pos-field span { width: 1em; }
+.pos-field input { width: 100%; min-width: 0; height: 40px; border: 2px solid var(--line); padding: 0 6px; background: #fff; border-radius: 0; color: var(--ink); }
+.pos-lock { grid-column: 3; grid-row: 1 / span 2; height: 84px; }
+.panel [aria-invalid="true"] { border-color: var(--danger); }
+.row[hidden] { display: none; }
+.btn[aria-disabled="true"] { opacity: .4; cursor: default; }
+.menu > a { min-height: 44px; display: flex; align-items: center; gap: 12px; padding: 8px 12px; color: inherit; text-decoration: none;
+  font-size: 14px; font-weight: 600; touch-action: manipulation; }
+.doc-menu > a { min-height: 52px; padding: 8px 14px; }
+.menu > a:hover, .menu > a:focus { background: var(--n200); }
+.settings-body input[type="text"] { width: 100%; }
+.settings-body .num input { width: 6rem; }

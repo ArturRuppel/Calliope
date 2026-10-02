@@ -1,7 +1,10 @@
 /* svgdeck player: plays a deck of SVG slides with movies and build steps.
    Classic script (no modules) so it also runs from file:// in an export.
    Usage: SvgDeck.start(root, deck, {slideBase: "slides/"}) where deck is the
-   parsed deck.json with each slide carrying its SVG source in `svg`. */
+   parsed deck.json with each slide carrying its SVG source in `svg`.
+   Print mode ({print: true} or {print: {notes, steps}}, or ?print=1,
+   ?print=notes,steps, #print in the address) lays every slide out as a page
+   instead of presenting. */
 (function () {
   "use strict";
   const SVGNS = "http://www.w3.org/2000/svg";
@@ -150,9 +153,11 @@
     "color-interpolation-filters", "paint-order", "visibility", "clip-rule", "cursor", "pointer-events"]);
   const inheritedAttribute = (name) => INHERITED.has(name) || /^(font(-[a-z-]+)?|fill(-[a-z]+)?|stroke(-[a-z]+)?|marker(-[a-z]+)?)$/.test(name);
 
-  function buildSlide(source, index, defs, size, base) {
+  // opts.prefix overrides the id prefix (print mode builds a slide once per
+  // page); opts.posters keeps movies as their poster <image>.
+  function buildSlide(source, index, defs, size, base, opts = {}) {
     const svg = parseSlide(source);
-    const prefix = `s${index}-`, scope = scopeOf(prefix);
+    const prefix = opts.prefix || `s${index}-`, scope = scopeOf(prefix);
     rewrite(svg, prefix, base);
 
     const slide = document.createElement("div");
@@ -172,8 +177,8 @@
       }
       if (child.localName === "style") { scoped.appendChild(document.importNode(child, true)); continue; }
       if (["title", "desc", "metadata"].includes(child.localName)) continue;
-      if (child.localName === "image" && child.hasAttribute("data-video")) {
-        const video = makeVideo(child);
+      if (!opts.posters && child.localName === "image" && child.hasAttribute("data-video")) {
+        const video = makeVideo(child, size);
         videos.push(video);
         slide.appendChild(video);
         layer = null;
@@ -212,7 +217,7 @@
     return { el, videos: [], steps: [], maxStep: 0, stepVisibility: new Map(), failed: true };
   }
 
-  function makeVideo(image) {
+  function makeVideo(image, size) {
     const video = document.createElement("video");
     video.className = "svgdeck-video";
     video.muted = true;
@@ -229,9 +234,13 @@
     if (poster) video.poster = poster;
     const num = (name) => parseFloat(image.getAttribute(name)) || 0;
     const m = multiply(parseTransform(image.getAttribute("transform")), [1, 0, 0, 1, num("x"), num("y")]);
+    // In percent of the slide, so the movie keeps its place at any slide
+    // size (the stage is deck-sized, a printed page is not).
+    const pct = (value, total) => `${value / total * 100}%`;
     Object.assign(video.style, {
-      width: `${num("width")}px`, height: `${num("height")}px`,
-      transform: `matrix(${m.join(",")})`,
+      left: pct(m[4], size[0]), top: pct(m[5], size[1]),
+      width: pct(num("width"), size[0]), height: pct(num("height"), size[1]),
+      transform: `matrix(${m.slice(0, 4).join(",")},0,0)`,
     });
     // Editor crop percentages describe the image box, including letterboxing.
     const crop = (image.getAttribute("data-crop") || "0 0 0 0").trim().split(/\s+/).map(Number);
@@ -248,13 +257,152 @@
     return video;
   }
 
+  // --- print mode ------------------------------------------------------------
+  // {notes, steps} when the page should print instead of present, else null.
+  // options.print wins; otherwise ?print=… or #print=… in the address, whose
+  // value lists the flags ("1" or nothing for a plain print, "0" for off).
+  function printOptions(options) {
+    if (options.print !== undefined && options.print !== null) {
+      const p = options.print;
+      return p ? { notes: !!p.notes, steps: !!p.steps } : null;
+    }
+    let value = new URLSearchParams(location.search).get("print");
+    if (value === null) {
+      const m = /^#print(?:=(.*))?$/.exec(location.hash);
+      if (m) value = m[1] ? decodeURIComponent(m[1]) : "";
+    }
+    if (value === null || /^(0|false|no|off)$/i.test(value)) return null;
+    const flags = value.toLowerCase().split(/[\s,+]+/);
+    return { notes: flags.includes("notes"), steps: flags.includes("steps") };
+  }
+
+  const stepOf = (el) => parseInt(el.dataset.step, 10) || 0;
+
+  // Resolves once every <image> under `container` has loaded or failed, or
+  // after `ms`: pages are printed only when their pictures are there.
+  function imagesLoaded(container, ms) {
+    const hrefs = new Set();
+    for (const image of container.querySelectorAll("image")) {
+      const href = image.getAttribute("href") || image.getAttributeNS(XLINK, "href");
+      if (href && !href.startsWith("#")) hrefs.add(href);
+    }
+    const loads = Array.from(hrefs, (href) => new Promise((resolve) => {
+      const img = new Image();
+      img.onload = img.onerror = resolve;
+      img.src = href;
+    }));
+    return Promise.race([Promise.all(loads), new Promise((resolve) => setTimeout(resolve, ms))]);
+  }
+
+  // Shrinks a handout's notes until they fit under the slide.
+  function fitNotes(block) {
+    let fit = 1;
+    block.style.setProperty("--svgdeck-fit", "1");
+    while (block.scrollHeight > block.clientHeight + 1 && fit > 0.3) {
+      fit *= 0.9;
+      block.style.setProperty("--svgdeck-fit", String(fit));
+    }
+  }
+
+  // Every slide as a page of the deck's aspect, fully built (or one page per
+  // build step), with no controls, keys or movies: movies show their poster.
+  function startPrint(root, deck, options, size, base, print) {
+    root.classList.add("svgdeck", "svgdeck-print");
+    if (print.notes) root.classList.add("svgdeck-handout");
+    document.documentElement.classList.add("svgdeck-print-document");
+    root.style.setProperty("--svgdeck-aspect", `${size[0]} / ${size[1]}`);
+    root.style.setProperty("--svgdeck-background", deck.background || "#000");
+    const pageRule = document.createElement("style");
+    pageRule.textContent = `@page { size: ${size[0]}px ${size[1]}px; margin: 0; }`;
+    document.head.appendChild(pageRule);
+
+    const defsSvg = document.createElementNS(SVGNS, "svg");
+    defsSvg.setAttribute("class", "svgdeck-defs");
+    defsSvg.setAttribute("aria-hidden", "true");
+    const defs = document.createElementNS(SVGNS, "defs");
+    defsSvg.appendChild(defs);
+    root.appendChild(defsSvg);
+    const container = document.createElement("div");
+    container.className = "svgdeck-pages";
+    root.appendChild(container);
+
+    const pages = [], notesBlocks = [];
+    const slides = deck.slides.map((s, i) => {
+      const build = (prefix) => {
+        try {
+          return buildSlide(s.svg, i, defs, size, base, { prefix, posters: true });
+        } catch (error) {
+          console.error(`svgdeck: slide ${i + 1} could not be loaded`, error);
+          return failedSlide(i);
+        }
+      };
+      const first = build(`s${i}-`);
+      first.id = s.id;
+      // null: the fully built slide. With steps: the initial state, then the
+      // state after each distinct step number.
+      let states = [null];
+      if (print.steps && !first.failed) {
+        states = [0, ...Array.from(new Set(first.steps.map(stepOf))).filter((n) => n > 0).sort((a, b) => a - b)];
+      }
+      states.forEach((step, k) => {
+        const slide = k === 0 ? first : build(`s${i}p${step}-`);
+        if (step !== null) {
+          for (const el of slide.steps) if (stepOf(el) > step) el.style.visibility = "hidden";
+        }
+        const page = document.createElement("section");
+        page.className = "svgdeck-page";
+        page.dataset.slide = String(i + 1);
+        if (step !== null) page.dataset.buildStep = String(step);
+        const label = `Slide ${i + 1}` + (states.length > 1 ? ` (${k + 1}/${states.length})` : "");
+        page.setAttribute("aria-label", label);
+        page.append(slide.el);
+        if (print.notes) {
+          const block = document.createElement("div");
+          block.className = "svgdeck-print-notes";
+          const heading = document.createElement("p");
+          heading.className = "svgdeck-print-label";
+          heading.textContent = label;
+          const text = document.createElement("div");
+          text.className = "svgdeck-print-notes-text";
+          text.textContent = String(s.notes || "");
+          block.append(heading, text);
+          page.append(block);
+          notesBlocks.push(block);
+        }
+        container.append(page);
+        pages.push({ el: page, index: i, step, slide });
+      });
+      return first;
+    });
+
+    const faces = (deck.fonts || []).map((f) =>
+      document.fonts.load(`${f.style || "normal"} ${f.weight || 400} 32px "${f.family}"`).catch(() => {}));
+    const timeout = new Promise((resolve) => setTimeout(resolve, 3000));
+    const ready = Promise.race([Promise.all(faces), timeout])
+      .then(() => document.fonts.ready)
+      .then(() => imagesLoaded(root, 15000))
+      .then(() => {
+        notesBlocks.forEach(fitNotes);
+        root.classList.add("svgdeck-ready");
+      });
+    const api = { print: { ...print }, slides, pages, ready, count: slides.length, options };
+    root.svgdeck = api;
+    return api;
+  }
+
   // --- player ------------------------------------------------------------
   function start(root, deck, options) {
     options = options || {};
     const size = deck.size || [1920, 1080];
     const base = new URL(options.slideBase || "slides/", document.baseURI);
+    const print = printOptions(options);
+    if (print) return startPrint(root, deck, options, size, base, print);
     root.classList.add("svgdeck");
     root.style.background = deck.background || "#000";
+    // For the browser's own printing (player.css, @media print).
+    root.style.setProperty("--svgdeck-aspect", `${size[0]} / ${size[1]}`);
+    root.style.setProperty("--svgdeck-ratio", String(size[0] / size[1]));
+    root.style.setProperty("--svgdeck-background", deck.background || "#000");
 
     const defsSvg = document.createElementNS(SVGNS, "svg");
     defsSvg.setAttribute("class", "svgdeck-defs");

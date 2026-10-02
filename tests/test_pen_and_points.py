@@ -50,7 +50,8 @@ def test_pencil_and_finger_keep_their_own_tools(page):
     assert page.locator('#ink-bar .pencil-note').inner_text() == 'Pencil: Draw'
     assert page.locator('#tools [data-tool="pen"]').get_attribute('data-pen') == 'true'
     assert tool_pressed(page, 'select')
-    # The mouse still selects and moves.
+    # The mouse still selects and moves (guides off: 950 would snap to the slide's centre).
+    page.evaluate('svgdeckEditor.editor.smartSnap = false')
     drag(page, (900, 400), (950, 400))
     assert page.evaluate('+svgdeckEditor.editor.svg.querySelector("rect:not([data-locked])").getAttribute("x")') == pytest.approx(850, abs=1)
     assert paths(page) == 1

@@ -167,7 +167,7 @@ const editor = new SlideEditor($("stage"), {
     rec.redo = [];
     markDirty(state.current, after);
   },
-  select() { closeContextMenu(); updateActions(); renderPanel(); updateBreadcrumb(); refreshStatus(); },
+  select() { closeContextMenu(); updateActions(); renderPanel(); updateBreadcrumb(); refreshStatus(); updateHistoryButtons(); },
   contextMenu: (x, y) => showContextMenu(x, y),
   textChanged(text) {
     const rec = state.slides.get(state.current);
@@ -206,6 +206,7 @@ function markDirty(id, text) {
   rec.text = text;
   rec.dirty = true;
   setStatus("Unsaved", "dirty");
+  if (id === state.current) updateHistoryButtons();
   // After a failed save, the retry timer (backing off) is already set.
   if (!rec.saveError) {
     clearTimeout(rec.timer);
@@ -399,6 +400,8 @@ async function slideRecord(id) {
 let navigationSequence = 0;
 
 function settleCurrentSlide() {
+  // A run of arrow-key nudges becomes its undo step before anything else.
+  editor.endNudge?.();
   mediaTools?.finish?.();
   editor.endTextEdit(true);
   editor.finishPath();
@@ -454,6 +457,7 @@ async function openSlide(id) {
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   renderPanel();
   notes?.render();
+  updateHistoryButtons();
   return true;
 }
 const openSlideSafely = guard(openSlide, "Could not open the slide");
@@ -951,7 +955,7 @@ function selBarItems() {
       barSep(),
       barButton("", "Colour of the selected words", () => showInspector("design"), { chip: paint(base.fill) }),
       barSep(),
-      barButton("Done", "Finish editing (Esc)", () => editor.endTextEdit(true), { on: true }),
+      barButton("Done", "Finish editing (Ctrl+Enter)", () => editor.endTextEdit(true), { on: true }),
     ]];
   }
   if (!sel.length) return null;
@@ -1036,6 +1040,8 @@ function selBarItems() {
     return [kind, [
       barButton("Crop", movie ? "Crop movie" : "Crop image", () => mediaTools?.open(), { id: "crop-selection",
         path: "M6 2v14a2 2 0 0 0 2 2h14M18 22V8a2 2 0 0 0-2-2H2" }),
+      barButton("Replace…", movie ? "Replace the movie with another file" : "Replace the image with another file",
+        () => chooseReplacement(first), { id: "replace-media" }),
       ...(movie ? [barSep(),
         barButton("Autoplay", "Play automatically", () => editor.setAttr("data-autoplay", flag("data-autoplay") ? "false" : "true"),
           { on: flag("data-autoplay") }),
@@ -1191,6 +1197,10 @@ function showContextMenu(x, y) {
   action("Paste", () => pasteSystemClipboard(x, y), { key: "⌘V" });
   if (clipboardData()) action("Paste copied objects", pasteClipboard);
   if (count) action("Duplicate", () => editor.duplicate(), { key: "⌘D" });
+  if (count === 1 && selection[0].localName === "image") {
+    const target = selection[0];
+    action(target.hasAttribute("data-video") ? "Replace movie…" : "Replace image…", () => chooseReplacement(target));
+  }
   if (count) {
     sep();
     action("Rotate 90° left", () => editor.rotateBy(-90));
@@ -1255,6 +1265,19 @@ function buildDocMenu() {
     b.append(el("span", { class: "item-text" }, el("span", {}, name), sub ? el("span", { class: "item-sub" }, sub) : null));
     return b;
   };
+  // Downloads are links (long-press or right-click can save them), opened
+  // with fetch so a server without PDF support says so in a toast.
+  const download = (id, name, sub, href, notes) => {
+    const a = el("a", { role: "menuitem", id, href, download: "", onclick: (e) => {
+      if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      closeMenus();
+      guard(() => downloadPdf(href, notes), "Could not download the PDF")();
+    } });
+    a.innerHTML = icon("M6 2h9l5 5v15H6zM14 2v6h6M9 13h6M9 17h6");
+    a.append(el("span", { class: "item-text" }, el("span", {}, name), el("span", { class: "item-sub" }, sub)));
+    return a;
+  };
   const sep = () => el("div", { class: "menu-sep", role: "separator" });
   const pencil = state.prefs.penLinked ? "Pencil acts as a finger" : `Pencil: ${TOOL_NAMES[editor.tools.pen] || editor.tools.pen}`;
   menu.replaceChildren(
@@ -1262,9 +1285,11 @@ function buildDocMenu() {
     item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
     sep(),
     item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", guard(exportDeck, "Could not export")),
+    download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`, false),
+    download("download-handout", "Download handout (with notes)", "Each slide with its speaker notes", `/api/decks/${DECK}/pdf?notes=1`, true),
     item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Notes, next slide, timer", guard(() => present(true), "Could not open speaker view")),
     sep(),
-    item(null, "M4 6h16M4 12h16M4 18h16", "Deck settings", `Fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
+    item("deck-settings", "M4 6h16M4 12h16M4 18h16", "Deck settings…", `Title, size, background, fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
     item("pen-status", "M4 20l1-5L16 4l4 4L9 19z", "Pencil and controller",
       pencil + (controller.pads.length ? " · controller connected" : ""), () => openSettings("pencil")),
     sep(),
@@ -1302,11 +1327,146 @@ function renderSettings() {
   const dialog = $("settings-dialog");
   if (!settingsKind || !state.deck) return;
   $("settings-title").textContent = settingsKind === "pencil" ? "Pencil and controller" : "Deck settings";
+  releaseFocus(dialog);
   $("settings-body").replaceChildren(...(settingsKind === "pencil" ? [pencilSection()] : [
-    section("Slides", el("p", { class: "hint" }, `${state.deck.slides.length} slides, ${(state.deck.size || [1920, 1080]).join(" × ")} pixels.`)),
+    ...deckSections(),
     section("Fonts", el("p", { class: "hint" }, `${families().length} families in the library.`),
       buttonRow([["Upload font…", "Add an .otf or .ttf file to the font library", () => $("font-file").click()]])),
   ]));
+}
+
+const SLIDE_SIZES = [[1920, 1080, "16:9"], [3840, 2160, "16:9, 4K"], [1920, 1200, "16:10"], [1024, 768, "4:3"]];
+
+/** Deck settings: title, background colour and slide size. */
+function deckSections() {
+  const deck = state.deck;
+  const [w0, h0] = deck.size || [1920, 1080];
+  const title = el("input", { type: "text", id: "deck-title-field", value: deck.title || DECK, "aria-label": "Deck title", spellcheck: "true" });
+  title.addEventListener("change", guard(async () => {
+    const value = title.value.trim();
+    if (!value) { title.value = state.deck.title || DECK; return; }
+    if (value === state.deck.title) return;
+    await notes?.flush();
+    await putDeck((d) => ({ ...d, title: value }));
+    showDeckTitle();
+    toast("Title saved.", 1500);
+  }, "Could not save the title"));
+  const preset = SLIDE_SIZES.findIndex(([w, h]) => w === w0 && h === h0);
+  const size = el("select", { id: "deck-size", "aria-label": "Slide size" },
+    SLIDE_SIZES.map(([w, h, ratio], i) => el("option", { value: String(i), selected: i === preset }, `${w} × ${h} (${ratio})`)),
+    el("option", { value: "custom", selected: preset < 0 }, "Custom…"));
+  const width = el("input", { type: "number", id: "deck-width", min: 16, max: 20000, step: 1, value: w0, inputmode: "numeric", "aria-label": "Slide width" });
+  const height = el("input", { type: "number", id: "deck-height", min: 16, max: 20000, step: 1, value: h0, inputmode: "numeric", "aria-label": "Slide height" });
+  const custom = row("Pixels", el("span", { class: "num" }, width, "×", height));
+  custom.hidden = preset >= 0;
+  size.addEventListener("change", () => {
+    custom.hidden = size.value !== "custom";
+    if (size.value !== "custom") [width.value, height.value] = SLIDE_SIZES[+size.value];
+  });
+  const apply = el("button", { type: "button", class: "btn small", id: "deck-size-apply", onclick: guard(async () => {
+    const [w, h] = size.value === "custom" ? [Math.round(+width.value), Math.round(+height.value)] : SLIDE_SIZES[+size.value];
+    if (!(w >= 16 && h >= 16 && w <= 20000 && h <= 20000)) { toast("Choose a width and height between 16 and 20000 pixels."); return; }
+    await resizeSlides(w, h);
+  }, "Could not change the slide size") }, "Apply size");
+  return [
+    section("Deck",
+      row("Title", title),
+      row("Background", colorControl(deck.background || "#000000", guard(async (c) => {
+        await notes?.flush();
+        await putDeck((d) => ({ ...d, background: c }));
+        renderSettings();
+      }, "Could not save the background"), false)),
+      el("p", { class: "hint" }, "The background is the colour behind the slides, saved with the deck.")),
+    section("Slide size",
+      el("p", { class: "hint" }, `${deck.slides.length} slide${deck.slides.length === 1 ? "" : "s"}, ${w0} × ${h0} pixels.`),
+      row("Size", size), custom,
+      el("div", { class: "buttons" }, apply),
+      el("p", { class: "hint" }, "Changing the size changes every slide; what is on them keeps its place and size. Each slide can undo it.")),
+  ];
+}
+
+function showDeckTitle() {
+  $("deck-title").textContent = state.deck.title || DECK;
+  document.title = `${state.deck.title || DECK} · svgdeck`;
+}
+
+/** A slide's SVG with another slide size: the root's width, height and
+ *  viewBox change, and so does a background rect that filled the old
+ *  slide. Everything else keeps its coordinates. */
+function resizedSlide(text, w, h) {
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (doc.querySelector("parsererror") || svg.localName !== "svg") throw new Error("a slide is not valid SVG");
+  const vb = (svg.getAttribute("viewBox") || `0 0 ${svg.getAttribute("width") || 1920} ${svg.getAttribute("height") || 1080}`).trim().split(/[\s,]+/).map(Number);
+  const [x0, y0, ow, oh] = vb;
+  if (ow === w && oh === h && svg.getAttribute("width") === String(w) && svg.getAttribute("height") === String(h)) return text;
+  svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
+  svg.setAttribute("width", String(w));
+  svg.setAttribute("height", String(h));
+  const back = [...svg.children].find((c) => c.localName === "rect" && (c.id === "background" || c.getAttribute("data-label") === "background"));
+  const at = (name, value) => Math.abs((parseFloat(back.getAttribute(name)) || 0) - value) < 0.5;
+  if (back && !back.hasAttribute("transform") && at("x", x0) && at("y", y0) && at("width", ow) && at("height", oh)) {
+    back.setAttribute("width", String(w));
+    back.setAttribute("height", String(h));
+  }
+  return '<?xml version="1.0" encoding="utf-8"?>\n' + new XMLSerializer().serializeToString(svg) + "\n";
+}
+
+/** Give every slide a new size, each as one undo step of its own, after a
+ *  confirmation; then the deck's size. */
+async function resizeSlides(w, h) {
+  const n = state.deck.slides.length;
+  const [w0, h0] = state.deck.size || [1920, 1080];
+  if (w === w0 && h === h0) { toast(`The slides are already ${w} × ${h} pixels.`); return; }
+  if (!confirm(`Change the size of all ${n} slide${n === 1 ? "" : "s"} from ${w0} × ${h0} to ${w} × ${h} pixels? ` +
+    "What is on them keeps its place and size.")) return;
+  // An open text box or crop ends first, so its edit is part of what is resized.
+  settleCurrentSlide();
+  await flush();
+  const ids = state.deck.slides.map((s) => s.id);
+  const recs = await Promise.all(ids.map((id) => slideRecord(id)));
+  if (recs.some((rec) => rec.conflict)) throw new Error("a slide has a save conflict; resolve it under History and recovery first");
+  const changed = recs.map((rec) => resizedSlide(rec.text, w, h));  // all or nothing: a bad slide stops here
+  ids.forEach((id, i) => {
+    const rec = recs[i];
+    if (changed[i] === rec.text) return;
+    rec.undo.push(rec.text);
+    if (rec.undo.length > 150) rec.undo.shift();
+    rec.redo = [];
+    markDirty(id, changed[i]);
+  });
+  const current = state.slides.get(state.current);
+  if (current) editor.load(current.text);
+  await putDeck((deck) => ({ ...deck, size: [w, h] }));
+  for (const li of $("thumbs").children) delete li.dataset.rendered;
+  renderSettings();
+  buildDocMenu();
+  updateHistoryButtons();
+  toast(`The slides are now ${w} × ${h} pixels.`);
+}
+
+/** Fetch a PDF and save it; a server that cannot make PDFs says why. */
+async function downloadPdf(url, withNotes) {
+  try { await flush(); } catch (error) { toast(`Not downloaded: the deck is not saved (${error.message}).`, 8000); return; }
+  toast(withNotes ? "Preparing the handout…" : "Preparing the PDF…", 120000);
+  const r = await fetch(url);
+  if (!r.ok) {
+    let detail = "";
+    try { detail = (await r.json()).detail; } catch (e) { /* not JSON */ }
+    if (detail && typeof detail !== "string") detail = JSON.stringify(detail);
+    toast(r.status === 501 ? (detail || "This server cannot make PDFs.") : `Could not make the PDF: ${detail || `${r.status} ${r.statusText}`}`, 10000);
+    return;
+  }
+  const blob = await r.blob();
+  const named = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.headers.get("Content-Disposition") || "");
+  const name = named ? decodeURIComponent(named[1]) : `${DECK}${withNotes ? "-handout" : ""}.pdf`;
+  const href = URL.createObjectURL(blob);
+  const a = el("a", { href, download: name, hidden: true });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 60000);
+  toast(`Downloaded ${name}`);
 }
 
 async function exportDeck() {
@@ -1346,6 +1506,36 @@ async function uploadMedia(files, target = state.current, center = editor.visibl
     } catch (e) {
       toast(`Could not insert ${file.name}: ${e.message}`, 8000);
     }
+  }
+}
+
+// Replace media: another file in the same place, keeping the box, crop,
+// adjustments, build step and transform (the media tools do the swap).
+let replacing = null;  // {el, slide} the file picker was opened for
+function chooseReplacement(target) {
+  if (!target?.isConnected || target.localName !== "image") return;
+  replacing = { el: target, slide: state.current };
+  $("replace-file").click();
+}
+
+async function replaceMedia(file, { el: target, slide }) {
+  const movie = target.hasAttribute("data-video");
+  const what = movie ? "movie" : "image";
+  toast(file.type.startsWith("video/") ? `Uploading ${file.name} (movies are converted for playback, this can take a while)…`
+    : `Uploading ${file.name}…`, 60000);
+  try {
+    const info = await api.upload(`/api/decks/${DECK}/media?filename=${encodeURIComponent(file.name)}`, file);
+    while (state.current === slide && editor.gesture) await new Promise((resolve) => requestAnimationFrame(resolve));
+    if (state.current !== slide || !target.isConnected || !editor.svg?.contains(target)) {
+      toast(`Uploaded ${file.name}, but the ${what} is no longer on the open slide.`, 8000);
+      return;
+    }
+    if (typeof editor.mediaTools?.replace !== "function") throw new Error("replacing media is not available in this version");
+    settleCurrentSlide();
+    await editor.mediaTools.replace(target, info);
+    toast(`Replaced the ${what} with ${file.name}`);
+  } catch (e) {
+    toast(`Could not replace the ${what} with ${file.name}: ${e.message}`, 8000);
   }
 }
 
@@ -1426,6 +1616,11 @@ function renderPanel() {
   if (!state.deck) return;
   if (panelRendering) { panelAgain = true; return; }
   panelRendering = true;
+  // A position field typed into with Enter stays focused when the panel is
+  // redrawn for the same selection, so several values can be typed in a row.
+  const active = document.activeElement;
+  const keep = active?.id?.startsWith("pos-") && $("panel").contains(active) ? active.id : null;
+  const before = [...panelSelection];
   try {
     releaseFocus($("panel"), $("objects-mount"), document.querySelector("dialog.media-tools"));
     for (let pass = 0; pass < 3; pass++) {
@@ -1436,6 +1631,8 @@ function renderPanel() {
   } finally {
     panelRendering = false;
   }
+  const sel = editor.selection;
+  if (keep && before.length === sel.length && before.every((o, i) => o === sel[i])) $(keep)?.focus({ preventScroll: true });
 }
 
 let panelSelection = [];  // the selection the panel's fields were drawn for
@@ -1514,9 +1711,11 @@ function drawPanel() {
     image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName);
   parts.unshift(heading(label, sel.length > 1 ? "Group, align and arrange are in the bar" :
     first.localName === "text" ? "Double-tap to edit" : isMovie ? (first.getAttribute("data-video") || "").split("/").pop() : null));
+  parts.push(positionSection());
   if (sel.length === 1 && first.localName === "image") {
     parts.push(section("Crop",
-      buttonRow([[isMovie ? "Crop movie" : "Crop image", "Drag the crop handles on the slide", () => mediaTools?.open()]]),
+      buttonRow([[isMovie ? "Crop movie" : "Crop image", "Drag the crop handles on the slide", () => mediaTools?.open()],
+                 [isMovie ? "Replace movie…" : "Replace image…", "Choose another file; size, crop and adjustments stay", () => chooseReplacement(first)]]),
       el("p", {class:"hint"}, "Drag the edges or corners to crop. Your original media stays intact.")));
   }
 
@@ -1578,6 +1777,9 @@ function drawPanel() {
     parts.push(section("Style", row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100),
       { min: 0, max: 100, step: 5, suffix: "%" }, (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   }
+
+  const strokable = sel.filter((e) => STROKABLE.has(e.localName) && e.getAttribute("data-ink") !== "pressure");
+  if (strokable.length) parts.push(lineStyleSection(strokable));
 
   if (texts.length) {
     // Read the style where the text actually is: imported texts keep it on
@@ -1660,6 +1862,166 @@ function drawPanel() {
       el("button", { class: "btn small", title: "Later build step", onclick: () => setStep(step + 1) }, "+")),
     el("p", { class: "hint" }, "Objects appear on this click while presenting. The Builds tab shows the whole order.")));
   panel.replaceChildren(...parts.filter(Boolean));
+}
+
+// --- position and size -------------------------------------------------------------------------
+let positionFields = null;  // the X, Y, W, H inputs the panel shows, or null
+const oneDecimal = (v) => String(Math.round(v * 10) / 10);
+
+/** X, Y, W and H of the selection's bounds in slide pixels, and a lock that
+ *  keeps W and H in proportion when one of them is typed. */
+function positionSection() {
+  const box = editor.selectionGeometry();
+  positionFields = null;
+  if (!box) return null;
+  const shown = panelSelection;
+  const fields = {};
+  const field = (key, label, title) => {
+    const input = el("input", { type: "number", id: `pos-${key}`, step: "0.1", inputmode: "decimal", "aria-label": title,
+      value: oneDecimal({ x: box.x, y: box.y, w: box.width, h: box.height }[key]) });
+    input.addEventListener("change", () => {
+      const sel = editor.selection;
+      if (shown.length !== sel.length || shown.some((o, i) => o !== sel[i])) return;
+      const v = parseFloat(input.value), now = editor.selectionGeometry();
+      if (!Number.isFinite(v) || !now) { refreshPosition(true); return; }
+      const lock = !!state.prefs.lockAspect;
+      const change = {};
+      if (key === "x") change.x = v;
+      else if (key === "y") change.y = v;
+      else if (key === "w") {
+        change.width = Math.max(v, 0.1);
+        if (lock && now.width > 1e-9) change.height = now.height * change.width / now.width;
+      } else {
+        change.height = Math.max(v, 0.1);
+        if (lock && now.height > 1e-9) change.width = now.width * change.height / now.height;
+      }
+      editor.setSelectionGeometry(change);
+      refreshPosition(true);
+    });
+    fields[key] = input;
+    return el("label", { class: "pos-field" }, el("span", {}, label), input);
+  };
+  const lock = el("button", { type: "button", class: "btn small pos-lock", id: "pos-lock", title: "Keep the proportions when W or H changes",
+    "aria-label": "Lock proportions", "aria-pressed": String(!!state.prefs.lockAspect), onclick: () => {
+      state.prefs.lockAspect = !state.prefs.lockAspect;
+      savePrefs();
+      lock.setAttribute("aria-pressed", String(state.prefs.lockAspect));
+    } });
+  lock.innerHTML = icon("M7 11V8a5 5 0 0 1 10 0v3M5 11h14v10H5z", "icon small");
+  const out = section("Position",
+    el("div", { class: "pos-grid" }, field("x", "X", "X position"), field("y", "Y", "Y position"),
+      field("w", "W", "Width"), field("h", "H", "Height"), lock),
+    el("p", { class: "hint" }, "Slide pixels, of the selection's bounds."));
+  positionFields = fields;
+  return out;
+}
+
+/** Show the selection's bounds in the position fields again, in place.
+ *  A field being typed into keeps its text unless force is set. */
+function refreshPosition(force = false) {
+  if (!positionFields || !positionFields.x.isConnected) return;
+  const box = editor.selectionGeometry();
+  if (!box) return;
+  const values = { x: box.x, y: box.y, w: box.width, h: box.height };
+  for (const [key, input] of Object.entries(positionFields)) {
+    if (force || document.activeElement !== input) input.value = oneDecimal(values[key]);
+  }
+}
+
+// --- line style ------------------------------------------------------------------------------------
+const STROKABLE = new Set(["rect", "ellipse", "circle", "polygon", "polyline", "line", "path"]);
+const DASH_KINDS = [["solid", "Solid"], ["dashed", "Dashed"], ["dotted", "Dotted"], ["custom", "Custom"]];
+let dashCustomFor = null;  // the object Custom was chosen for, until something else is selected
+const dashNumbers = (v) => (!v || v === "none" ? [] : (v.match(/-?\d*\.?\d+(?:e-?\d+)?/gi) || []).map(Number));
+const short = (n) => String(+n.toFixed(2));
+
+/** The preset dash patterns, in the object's units for its line width. With
+ *  round or square ends the caps grow into the gaps, so those leave room. */
+function dashPreset(kind, width, cap) {
+  const w = width || 1, butt = cap === "butt";
+  if (kind === "dashed") return butt ? `${short(4 * w)} ${short(2 * w)}` : `${short(3 * w)} ${short(3 * w)}`;
+  if (kind === "dotted") return butt ? `${short(w)} ${short(w)}` : `0 ${short(2 * w)}`;
+  return "none";
+}
+
+function dashKind(value, width) {
+  const nums = dashNumbers(value);
+  if (!nums.length || nums.every((n) => n === 0)) return "solid";
+  const same = (pattern) => {
+    const p = dashNumbers(pattern);
+    return p.length === nums.length && p.every((n, i) => Math.abs(n - nums[i]) < 0.01);
+  };
+  for (const kind of ["dashed", "dotted"]) {
+    if (same(dashPreset(kind, width, "butt")) || same(dashPreset(kind, width, "round"))) return kind;
+  }
+  return "custom";
+}
+
+const DASH_PATTERN = /^\s*(?:\d*\.?\d+(?:px)?)(?:[\s,]+\d*\.?\d+(?:px)?)*\s*$/i;
+
+/** Dash, line ends and corners of shapes, lines and paths; corner radius of rects. */
+function lineStyleSection(items) {
+  const first = items[0];
+  const cs = getComputedStyle(first);
+  const width = parseFloat(cs.strokeWidth) || 1;
+  const cap = cs.strokeLinecap || "butt", join = cs.strokeLinejoin || "miter";
+  if (dashCustomFor && dashCustomFor !== first) dashCustomFor = null;
+  let kind = dashKind(cs.strokeDasharray, width);
+  if (dashCustomFor === first) kind = "custom";
+  const dash = el("select", { id: "stroke-dash", "aria-label": "Dash" },
+    DASH_KINDS.map(([id, name]) => el("option", { value: id, selected: id === kind }, name)));
+  const custom = el("input", { type: "text", id: "stroke-dash-custom", "aria-label": "Dash pattern", placeholder: "e.g. 12 6 2 6",
+    spellcheck: "false", value: kind === "custom" ? dashNumbers(cs.strokeDasharray).map(short).join(" ") : "" });
+  const customRow = row("Pattern", custom);
+  customRow.hidden = kind !== "custom";
+  dash.addEventListener("change", () => {
+    if (dash.value === "custom") {
+      dashCustomFor = first;
+      customRow.hidden = false;
+      if (!custom.value) custom.value = dashNumbers(getComputedStyle(first).strokeDasharray).map(short).join(" ") || `${short(2 * width)} ${short(width)}`;
+      custom.focus();
+      return;
+    }
+    dashCustomFor = null;
+    editor.setStyle("stroke-dasharray", dashPreset(dash.value, width, cap), items);
+  });
+  custom.addEventListener("change", () => {
+    const v = custom.value.trim();
+    if (v && v.toLowerCase() !== "none" && !DASH_PATTERN.test(v)) {
+      custom.setAttribute("aria-invalid", "true");
+      toast("A dash pattern is a list of lengths, like 12 6 or 12 6 2 6.");
+      return;
+    }
+    custom.removeAttribute("aria-invalid");
+    const pattern = !v || v.toLowerCase() === "none" ? "none" : dashNumbers(v).map(short).join(" ");
+    editor.setStyle("stroke-dasharray", pattern, items);
+  });
+  const choice = (prop, options, current, apply) => el("div", { class: "buttons", role: "group" }, options.map(([value, label, title]) =>
+    el("button", { type: "button", class: "btn small" + (value === current ? " on" : ""), title, "aria-pressed": String(value === current),
+      [`data-${prop}`]: value, onclick: () => apply(value) }, label)));
+  const setCap = (value) => editor.change(() => {
+    editor.setStyle("stroke-linecap", value, items);
+    // A preset dash follows the ends, or round dots would vanish with flat ends.
+    if (kind === "dashed" || kind === "dotted") editor.setStyle("stroke-dasharray", dashPreset(kind, width, value), items);
+  });
+  const rects = items.filter((e) => e.localName === "rect");
+  let corners = null;
+  if (rects.length) {
+    const r = editor.radiusOf(rects[0]) * editor.scaleOf(rects[0]);
+    corners = numberControl(Math.round(r * 10) / 10, { min: 0, max: 5000, step: 1, suffix: "px" }, (v) => {
+      const px = Math.max(0, v);
+      editor.change(() => { for (const rect of rects) editor.setRadius(px / editor.scaleOf(rect), [rect]); });
+    });
+    const input = corners.querySelector("input");
+    input.id = "corner-radius";
+    input.setAttribute("aria-label", "Corner radius");
+  }
+  return section("Line style",
+    row("Dash", dash), customRow,
+    row("Ends", choice("cap", [["butt", "Flat", "Flat line ends"], ["round", "Round", "Round line ends"], ["square", "Square", "Square line ends"]], cap, setCap)),
+    row("Joins", choice("join", [["miter", "Mitre", "Pointed corners"], ["round", "Round", "Round corners"], ["bevel", "Bevel", "Bevelled corners"]], join,
+      (value) => editor.setStyle("stroke-linejoin", value, items))),
+    corners ? row("Corners", corners) : null);
 }
 
 /** Point editing: the buttons are in the bar; the inspector explains. */
@@ -1786,6 +2148,17 @@ document.addEventListener("keydown", (e) => {
     closeMenus();
     return;
   }
+  // Arrow keys inside an open menu move between its items, never the selection.
+  const inMenu = e.target.closest?.('[role="menu"]');
+  if (inMenu && k.startsWith("arrow")) {
+    e.preventDefault();
+    if (k === "arrowdown" || k === "arrowup") {
+      const items = [...inMenu.querySelectorAll("button:not(:disabled), a[href]")];
+      const at = items.indexOf(document.activeElement);
+      items[(at + (k === "arrowdown" ? 1 : -1) + items.length) % items.length]?.focus();
+    }
+    return;
+  }
   // A focused button or link outside the stage keeps its own keys: Enter
   // and Space activate it rather than editing the selection, Delete does
   // not delete objects. (Tool letters and arrows still apply.)
@@ -1824,10 +2197,15 @@ document.addEventListener("keydown", (e) => {
     setTool("select");
     return;
   }
-  if (k.startsWith("arrow") && editor.selection.length) {
+  if (k.startsWith("arrow") && editor.selection.length && !editor.textEdit) {
     e.preventDefault();
     const d = e.shiftKey ? 10 : 1;
-    editor.moveBy(k === "arrowleft" ? -d : k === "arrowright" ? d : 0, k === "arrowup" ? -d : k === "arrowdown" ? d : 0);
+    // nudge() refuses (returns false) during a gesture, a text edit or for locked objects.
+    if (editor.nudge(k === "arrowleft" ? -d : k === "arrowright" ? d : 0, k === "arrowup" ? -d : k === "arrowdown" ? d : 0) !== false) {
+      refreshPosition();
+      updateHistoryButtons();
+      placeSelBar();
+    }
     return;
   }
   if (k === "pagedown") { e.preventDefault(); stepSlide(1); return; }
@@ -1853,16 +2231,32 @@ function imageFiles(data) {
 }
 
 async function readImageClipboard() {
+  return (await readClipboard()).files;
+}
+
+/** The system clipboard's images, and its text (SVG markup counts as text)
+ *  when it holds no image. */
+async function readClipboard() {
   const items = await navigator.clipboard.read();
   const files = [];
+  let text = "";
   for (const item of items) {
-    const type = item.types.find(t => t.startsWith("image/"));
+    // Raster images; SVG on the clipboard is markup to paste as objects.
+    const type = item.types.find(t => t.startsWith("image/") && t !== "image/svg+xml");
     if (!type) continue;
     const blob = await item.getType(type);
     const ext = type === "image/jpeg" ? "jpg" : type.split("/")[1].split("+")[0];
     files.push(new File([blob], `pasted-image.${ext}`, { type }));
   }
-  return files;
+  if (!files.length) {
+    for (const item of items) {
+      const type = ["image/svg+xml", "text/plain"].find((t) => item.types.includes(t));
+      if (!type) continue;
+      text = await (await item.getType(type)).text();
+      if (text.trim()) break;
+    }
+  }
+  return { files, text };
 }
 
 async function insertedImageFiles(box) {
@@ -1887,10 +2281,12 @@ async function pasteSystemClipboard(x, y) {
   if (navigator.clipboard?.read) {
     try {
       // Start the read in the menu click, before any asynchronous work.
-      const files = await readImageClipboard();
+      const { files, text } = await readClipboard();
       if (files.length) { uploadMedia(files, target, center); return; }
-      if (clipboardData() && state.current === target) { pasteClipboard(); return; }
-      toast("No image found. Copy an image and choose Paste again.");
+      if (state.current !== target) return;
+      if (text.trim()) { pasteText(text, center); return; }
+      if (clipboardData()) { pasteClipboard(); return; }
+      toast("Nothing to paste. Copy an image, objects or text and choose Paste again.");
       return;
     } catch (error) { /* expose a native paste target on the canvas */ }
   }
@@ -1918,7 +2314,15 @@ async function pasteSystemClipboard(x, y) {
   box.addEventListener("paste", e => {
     e.stopPropagation();
     const files = imageFiles(e.clipboardData);
-    if (files.length) { e.preventDefault(); insert(files); }
+    if (files.length) { e.preventDefault(); insert(files); return; }
+    // Text and SVG markup become objects at this spot.
+    const text = clipboardText(e.clipboardData);
+    if (text.trim() && active && !importing) {
+      e.preventDefault();
+      clear();
+      if (state.current === target) pasteText(text, center);
+      return;
+    }
     // Preserve native image insertion even when Safari exposes no clipboard
     // types. Internal objects have their own menu action.
   });
@@ -2013,17 +2417,45 @@ function showMediaPaste() {
 document.addEventListener("paste", e => {
   if (e.defaultPrevented || document.querySelector("dialog[open]") || editor.textEdit ||
       e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  if (!state.current) return;
   const files = imageFiles(e.clipboardData);
   if (files.length) { e.preventDefault(); uploadMedia(files); return; }
+  const text = clipboardText(e.clipboardData);
+  if (text.trim()) { e.preventDefault(); pasteText(text, pastePoint()); return; }
   if (clipboardData()) { e.preventDefault(); pasteClipboard(); }
 });
 
+function clipboardText(data) {
+  try { return data?.getData("image/svg+xml") || data?.getData("text/plain") || ""; } catch (err) { return ""; }
+}
+
+// Where keyboard paste puts objects: under the mouse when it is over the
+// slide, otherwise the middle of what is visible.
+let stagePointer = null;
+$("stage").addEventListener("pointermove", (e) => { if (e.pointerType === "mouse") stagePointer = { clientX: e.clientX, clientY: e.clientY }; });
+$("stage").addEventListener("pointerleave", () => { stagePointer = null; });
+function pastePoint() {
+  return stagePointer ? editor.point(stagePointer) : editor.visibleCenter();
+}
+
 // The clipboard lives in localStorage, so it works across slides and decks.
+// Copy and Cut also put the objects on the system clipboard as SVG markup,
+// so they paste into other apps (and other browsers' Calliope).
 function copySelection(cut) {
   const data = editor.copy();
   if (!data) return;
   state.clipboard = data;
-  try { localStorage.setItem("svgdeck-clipboard", data); } catch (err) { /* private mode: memory only */ }
+  const markup = clipboardMarkup(data, editor.selectionGeometry());
+  const mine = state.clipboardText = { text: markup, wrote: null };
+  try {
+    localStorage.setItem("svgdeck-clipboard", data);
+    localStorage.setItem("svgdeck-clipboard-text", markup);
+  } catch (err) { /* private mode: memory only */ }
+  if (navigator.clipboard?.writeText) {
+    try {
+      navigator.clipboard.writeText(markup).then(() => { mine.wrote = true; }, () => { mine.wrote = false; });
+    } catch (err) { mine.wrote = false; }
+  } else mine.wrote = false;
   if (cut) editor.deleteSelection();
   else { toast(`Copied ${editor.selection.length} object${editor.selection.length === 1 ? "" : "s"}.`, 1500); renderPanel(); }
 }
@@ -2033,15 +2465,146 @@ function clipboardData() {
   try { return localStorage.getItem("svgdeck-clipboard"); } catch (err) { return null; }
 }
 
+/** The markup of our own last copy, as written to the system clipboard. */
+function ownClipboardText() {
+  if (state.clipboardText) return state.clipboardText.text;
+  try { return localStorage.getItem("svgdeck-clipboard-text"); } catch (err) { return null; }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg", XLINK_NS = "http://www.w3.org/1999/xlink";
+
+/** Internal clipboard data (editor.copy()) as one standalone SVG document,
+ *  its viewBox the copied objects' bounds. */
+function clipboardMarkup(data, box) {
+  const clip = JSON.parse(data);
+  const n = (v) => String(+(+v).toFixed(2));
+  const view = box ? ` width="${n(Math.max(box.width, 1))}" height="${n(Math.max(box.height, 1))}"` +
+    ` viewBox="${n(box.x)} ${n(box.y)} ${n(Math.max(box.width, 1))} ${n(Math.max(box.height, 1))}"` : "";
+  return `<svg xmlns="${SVG_NS}" xmlns:xlink="${XLINK_NS}"${view}>` +
+    (clip.defs.length ? `<defs>${clip.defs.join("")}</defs>` : "") + clip.items.join("") + "</svg>";
+}
+
+const SVG_START = /^<(svg|g|a|rect|circle|ellipse|line|polyline|polygon|path|text|image|use|defs|symbol|switch)[\s/>]/i;
+const stripProlog = (t) => t.replace(/^\s*(?:(?:<\?xml[\s\S]*?\?>|<!DOCTYPE[^>[]*(?:\[[\s\S]*?\])?\s*>|<!--[\s\S]*?-->)\s*)*/i, "");
+const looksLikeSvg = (t) => SVG_START.test(stripProlog(t.trim()));
+// Attributes of a root <svg> that only place it; the rest (fill, stroke,
+// style…) are inherited by its contents, which keep them in a group.
+const SVG_ROOT_ONLY = new Set(["width", "height", "viewBox", "x", "y", "id", "version", "baseProfile", "preserveAspectRatio",
+  "class", "zoomAndPan", "enable-background", "overflow"]);
+
+/** SVG markup from the system clipboard in the internal clipboard format,
+ *  or null when it is not SVG that can be read. Scripts, embedded HTML and
+ *  event handlers are dropped. */
+function svgToClipboard(text) {
+  const body = stripProlog(text.trim());
+  let markup = /^<svg[\s/>]/i.test(body) ? body : `<svg>${body}</svg>`;
+  markup = markup.replace(/^<svg\b([^>]*?)(\/?)>/i, (m, attrs, close) => {
+    let a = attrs;
+    if (!/\sxmlns\s*=/.test(a)) a += ` xmlns="${SVG_NS}"`;
+    if (/\bxlink:/.test(markup) && !/\sxmlns:xlink\s*=/.test(a)) a += ` xmlns:xlink="${XLINK_NS}"`;
+    return `<svg${a}${close}>`;
+  });
+  const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
+  const root = doc.documentElement;
+  if (doc.querySelector("parsererror") || root.namespaceURI !== SVG_NS || root.localName !== "svg") return null;
+  for (const bad of [...root.querySelectorAll("script, foreignObject, iframe, embed, object")]) bad.remove();
+  for (const node of [root, ...root.querySelectorAll("*")]) {
+    for (const attr of [...node.attributes]) {
+      const value = attr.value.trim().toLowerCase();
+      if (/^on/i.test(attr.localName) || (attr.localName === "href" && value.startsWith("javascript:"))) node.removeAttributeNode(attr);
+    }
+  }
+  const ser = new XMLSerializer();
+  const defs = [], items = [];
+  for (const child of [...root.children]) {
+    if (child.namespaceURI !== SVG_NS || ["title", "desc", "metadata"].includes(child.localName)) continue;
+    if (child.localName === "defs") {
+      for (const d of child.children) if (d.namespaceURI === SVG_NS) defs.push(ser.serializeToString(d));
+    } else if (child.localName === "style") defs.push(ser.serializeToString(child));
+    else items.push(child);
+  }
+  if (!items.length) return null;
+  const inherited = [...root.attributes].filter((a) => !a.namespaceURI && !SVG_ROOT_ONLY.has(a.localName));
+  if (inherited.length) {
+    const group = doc.createElementNS(SVG_NS, "g");
+    for (const a of inherited) group.setAttribute(a.localName, a.value);
+    group.append(...items);
+    items.splice(0, items.length, group);
+  }
+  return JSON.stringify({ svgdeck: 1, defs, items: items.map((item) => ser.serializeToString(item)) });
+}
+
+/** Paste text from the system clipboard at a slide point: our own last copy
+ *  pastes the internal objects (ids and transforms handled as always), SVG
+ *  markup becomes objects, anything else a text object. */
+function pasteText(text, point) {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  const internal = clipboardData();
+  const own = ownClipboardText();
+  if (internal && own && trimmed === own.trim()) { pasteClipboard(); return true; }
+  // Our latest copy never reached the system clipboard: it is the newer one.
+  if (internal && state.clipboardText?.wrote === false) { pasteClipboard(); return true; }
+  settleCurrentSlide();
+  if (looksLikeSvg(trimmed)) {
+    const data = svgToClipboard(trimmed);
+    if (!data) { toast("The clipboard holds SVG that could not be read."); return false; }
+    pasteObjectsAt(data, point);
+    return true;
+  }
+  pastePlainText(text, point);
+  return true;
+}
+
+/** Paste internal clipboard data centred on a slide point, as one undo step. */
+function pasteObjectsAt(data, point) {
+  const before = editor.selection;
+  editor.change(() => {
+    if (!editor.paste(data) || editor.selection === before) return;
+    const box = editor.selectionGeometry();
+    if (box && point) editor.setSelectionGeometry({ x: point.x - box.width / 2, y: point.y - box.height / 2 });
+  });
+}
+
+/** A new text object holding plain text, in the style for new text. */
+function pastePlainText(text, point) {
+  const lines = text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ").split("\n");
+  while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
+  editor.change(() => {
+    const t = editor.newText(point || editor.visibleCenter());
+    const base = { ...editor.lookAt(t), paint: {} };
+    editor.setTextRuns(t, lines.map((line) => (line ? [{ text: line, look: base }] : [])), base, null);
+    editor.selection = [t];
+  });
+}
+
 function pasteClipboard() {
   const data = clipboardData();
   if (data) editor.paste(data);
+}
+
+/** Undo and Redo are disabled while there is nothing to take back or
+ *  redo. An open text edit counts: the button ends it as one step. */
+function updateHistoryButtons() {
+  const rec = state.current ? state.slides.get(state.current) : null;
+  const can = {
+    undo: !!(editor.textEdit || editor.nudging || rec?.undo?.length),
+    redo: !!(editor.textEdit || rec?.redo?.length),
+  };
+  for (const [what, on] of Object.entries(can)) {
+    for (const b of document.querySelectorAll(`#${what}, [data-history="${what}"]`)) {
+      b.disabled = !on;
+      b.setAttribute("aria-disabled", String(!on));
+    }
+  }
 }
 
 function undo() {
   // While editing text, Undo ends the edit (keeping it as one undo step);
   // the next Undo takes it back.
   if (editor.textEdit) { editor.endTextEdit(true); return; }
+  // Arrow-key nudges still waiting to join one step become that step first.
+  editor.endNudge?.();
   const rec = state.slides.get(state.current);
   if (!rec?.undo.length) return;
   rec.redo.push(rec.text);
@@ -2052,6 +2615,7 @@ function undo() {
 
 function redo() {
   if (editor.textEdit) { editor.endTextEdit(true); return; }
+  editor.endNudge?.();
   const rec = state.slides.get(state.current);
   if (!rec?.redo.length) return;
   rec.undo.push(rec.text);
@@ -2071,6 +2635,7 @@ async function present(speaker = false) {
 function wire() {
   $("undo").onclick = undo;
   $("redo").onclick = redo;
+  updateHistoryButtons();
   for (const id of ["undo", "redo"]) {
     // Keep an open text box focused until the click, which ends the edit as one step.
     $(id).addEventListener("pointerdown", (e) => { if (editor.textEdit) { editor.textEdit.holding = true; e.preventDefault(); } });
@@ -2125,6 +2690,12 @@ function wire() {
     if (editor.textEdit) { editor.textEdit.holding = true; e.preventDefault(); }
   }, true);
   $("media-file").onchange = (e) => { uploadMedia([...e.target.files]); e.target.value = ""; };
+  $("replace-file").onchange = (e) => {
+    const file = e.target.files[0], target = replacing;
+    e.target.value = "";
+    replacing = null;
+    if (file && target) replaceMedia(file, target);
+  };
   $("font-file").onchange = async (e) => {
     const file = e.target.files[0];
     e.target.value = "";
@@ -2193,8 +2764,7 @@ async function main() {
     return;
   }
   installFaces(state.faces);
-  $("deck-title").textContent = state.deck.title || DECK;
-  document.title = `${state.deck.title || DECK} · svgdeck`;
+  showDeckTitle();
   renderStrip();
   const slides = state.deck.slides;
   if (!slides.length) {
@@ -2208,10 +2778,11 @@ async function main() {
   for (const s of [...slides.slice(start), ...slides.slice(0, start)]) {
     if (await openSlide(s.id)) break;
   }
-  if (!state.current) { setStatus("Error", "error"); return; }
+  if (!state.current) { setStatus("Error", "error"); updateHistoryButtons(); return; }
   setStatus("Saved · working copy", "ok");
+  updateHistoryButtons();
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool, exportDeck,
+window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool, exportDeck, copySelection, pasteText,
   get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;}, get commits() {return commits;} };

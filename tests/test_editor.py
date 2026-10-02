@@ -117,7 +117,7 @@ def test_text_create_and_edit(page, server):
     page.keyboard.type("Hello")
     page.keyboard.press("Enter")
     page.keyboard.type("world")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     svg = saved_slide(page, server)
     assert "Hello</tspan>" in svg and "world</tspan>" in svg
     # Double-click edits it again.
@@ -127,7 +127,7 @@ def test_text_create_and_edit(page, server):
     page.wait_for_selector(".text-edit")
     page.keyboard.press("Control+a")
     page.keyboard.type("Changed")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     svg = saved_slide(page, server)
     assert "Changed</tspan>" in svg and "Hello" not in svg
 
@@ -283,7 +283,7 @@ def test_alignment_keeps_the_text_box_in_place(page, server):
     page.keyboard.type("A much longer first line")
     page.keyboard.press("Enter")
     page.keyboard.type("short")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     box = lambda: page.evaluate("(() => { const b = svgdeckEditor.editor.selection[0].getBBox(); return [b.x, b.width]; })()")
     # Screen position (WebKit has no getBBox for tspans).
     short_left = lambda: page.evaluate("svgdeckEditor.editor.selection[0].querySelectorAll('tspan')[1].getBoundingClientRect().left / svgdeckEditor.editor.zoom")
@@ -373,7 +373,7 @@ def test_editing_imported_rich_text_keeps_its_font_and_size(page, server):
     page.wait_for_selector(".text-edit")
     page.keyboard.press("End")
     page.keyboard.type(" data")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     t = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), s = t.querySelector('tspan');
       const cs = getComputedStyle(s);
       return [cs.fontFamily, cs.fontSize, cs.fill, Array.from(t.querySelectorAll('tspan')).map(x => [x.textContent, x.getAttribute('y')])]; })()""")
@@ -577,7 +577,7 @@ def test_editing_keeps_subscripts_and_stroke_overrides(page, server):
     page.wait_for_selector(".text-edit")
     page.keyboard.press("Home")
     page.keyboard.type("x")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     got = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), s = t.querySelector('tspan tspan');
       return [t.textContent, s && s.textContent, s && getComputedStyle(s).baselineShift, getComputedStyle(t.querySelector('tspan')).stroke]; })()""")
     assert got == ["xTl2", "l2", "sub", "none"]

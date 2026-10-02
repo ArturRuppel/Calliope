@@ -47,8 +47,11 @@ export function rootBox(el, svg, frame = null) {
     }
   }
   const m = frame ? frame.multiply(toRoot(el, svg)) : toRoot(el, svg);
-  const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]]
-    .map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
+  const n = (a) => parseFloat(el.getAttribute(a)) || 0;
+  // A turned line's box is that of its ends, not of its turned bounding box.
+  const corners = el.localName === "line" ? [[n("x1"), n("y1")], [n("x2"), n("y2")]]
+    : [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]];
+  const pts = corners.map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
   const x = Math.min(...xs), y = Math.min(...ys);
   return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
@@ -65,8 +68,10 @@ export function unionBox(boxes) {
 export const intersects = (a, b) =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-/** Smallest move that aligns an edge/centre or repeats a nearby gap. */
-export function smartSnapDelta(box, dx, dy, others, tolerance = 8) {
+/** Smallest move that aligns an edge/centre or repeats a nearby gap.
+ *  `frames` (such as the slide) offer their edges and centre lines for
+ *  alignment only; they take no part in equal gaps. */
+export function smartSnapDelta(box, dx, dy, others, tolerance = 8, frames = []) {
   const moved = { x: box.x + dx, y: box.y + dy, width: box.width, height: box.height };
   const axis = (name) => {
     const size = name === "x" ? "width" : "height";
@@ -80,6 +85,9 @@ export function smartSnapDelta(box, dx, dy, others, tolerance = 8) {
     for (const b of others) for (const a of anchors(moved)) for (const target of anchors(b)) {
       offer(target - a, { kind: "align", axis: name, at: target,
         from: Math.min(moved[cross], b[cross]), to: Math.max(moved[cross] + moved[crossSize], b[cross] + b[crossSize]) });
+    }
+    for (const f of frames) for (const a of anchors(moved)) for (const target of anchors(f)) {
+      offer(target - a, { kind: "align", axis: name, at: target, frame: true, from: f[cross], to: f[cross] + f[crossSize] });
     }
     const relevant = others.filter((b) => b[cross] < moved[cross] + moved[crossSize] && moved[cross] < b[cross] + b[crossSize])
       .sort((a, b) => lo(a) - lo(b));
@@ -100,6 +108,35 @@ export function smartSnapDelta(box, dx, dy, others, tolerance = 8) {
   };
   const sx = axis("x"), sy = axis("y");
   return { dx: dx + sx.adjust, dy: dy + sy.adjust, guides: [sx.guide, sy.guide].filter(Boolean) };
+}
+
+/** Lines a dragged edge or point can snap to, per axis: the edges and centre
+ *  of each box, as {at, lo, hi} with lo..hi the box's extent across. */
+export function snapLines(boxes) {
+  const lines = { x: [], y: [] };
+  for (const b of boxes) {
+    for (const at of [b.x, b.x + b.width / 2, b.x + b.width]) lines.x.push({ at, lo: b.y, hi: b.y + b.height });
+    for (const at of [b.y, b.y + b.height / 2, b.y + b.height]) lines.y.push({ at, lo: b.x, hi: b.x + b.width });
+  }
+  return lines;
+}
+
+/** The line nearest to v within the tolerance, or null. */
+export function snapCoordinate(v, lines, tolerance) {
+  let best = null;
+  for (const line of lines) {
+    const d = Math.abs(line.at - v);
+    if (d <= tolerance && (!best || d < Math.abs(best.at - v))) best = line;
+  }
+  return best;
+}
+
+/** p turned about o to the nearest multiple of 45°, keeping its distance. */
+export function constrainAngle(o, p, step = Math.PI / 4) {
+  const len = Math.hypot(p.x - o.x, p.y - o.y);
+  if (len < 1e-9) return { x: p.x, y: p.y };
+  const angle = Math.round(Math.atan2(p.y - o.y, p.x - o.x) / step) * step;
+  return { x: o.x + Math.cos(angle) * len, y: o.y + Math.sin(angle) * len };
 }
 
 // --- freehand -------------------------------------------------------------

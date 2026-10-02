@@ -9,8 +9,14 @@ Plan: [ROADMAP.md](ROADMAP.md). Deck format: [docs/format.md](docs/format.md).
 
 ```
 uv venv .venv && uv pip install -p .venv -e ".[dev]"
-.venv/bin/python -m playwright install chromium   # for the tests
+.venv/bin/python -m playwright install chromium   # for the tests and PDF export
 ```
+
+PDF export needs Playwright with a Chromium: `pip install 'svgdeck[pdf]'` and
+`playwright install chromium` on a plain install (the `dev` extra already has
+it), or `SVGDECK_CHROMIUM=/path/to/chromium` to use another Chromium. Without
+it, `svgdeck pdf`, `export --pdf` and the editor's PDF download stop with a
+message saying so.
 
 The service needs `ffmpeg` and `ffprobe` on the path: movies are converted on
 upload and image sizes are probed with them. Slide, font and recovery request
@@ -26,6 +32,10 @@ svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, 
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed
 svgdeck export DECK_DIR OUT_DIR --zip talk.zip
 svgdeck export DECK_DIR OUT_DIR --no-notes   # leave the speaker notes out of the copy
+svgdeck export DECK_DIR OUT_DIR --pdf        # also write OUT_DIR/deck.pdf (and put it in the zip)
+svgdeck pdf DECK_DIR talk.pdf               # one page per slide, every build step shown
+svgdeck pdf DECK_DIR talk.pdf --steps       # one page per build step
+svgdeck pdf DECK_DIR talk.pdf --notes       # handout: slide plus speaker notes per page
 ```
 
 ## The service on sancho
@@ -40,8 +50,9 @@ on the iPad; "Add to Home Screen" gives it a full-screen window.
 The editor is laid out for an iPad in landscape:
 
 - **Top bar:** back to all decks, the slide strip toggle, the **deck menu**
-  (the deck's title; it shows the slide number and save state), undo/redo,
-  the inspector toggle and **Present**.
+  (the deck's title; it shows the slide number and save state), undo/redo
+  (greyed out when there is nothing to undo or redo), the inspector toggle
+  and **Present**.
 - **Tool rail** on the left: Select (V), Draw (P), Erase (X), **Shapes** and
   **Path**, Text (T) and Media. Shapes and Path open a flyout with their
   members and keys; the rail shows the one used last.
@@ -66,7 +77,9 @@ The editor is laid out for an iPad in landscape:
   straight segments, or drag at each node to pull symmetric handles for curved
   segments. Enter, right-click, double-click the last node, or **Finish path**
   (Design tab) completes it. Click the first node or **Close path** to close
-  it; Escape cancels and Backspace removes the last node. **Continue path**, or
+  it; Escape cancels and Backspace removes the last node. Shift keeps a new
+  point at 45° steps from the previous one and turns a dragged handle in 45°
+  steps (the line and arrow tools constrain to 45° with Shift too). **Continue path**, or
   clicking an endpoint of a selected open curve with Bézier, resumes drawing
   from that endpoint. Pending paths finish when switching tools,
   presenting/exporting, or leaving the editor; switching to another app only
@@ -102,19 +115,30 @@ The editor is laid out for an iPad in landscape:
 
 - Tap to select, drag to move, drag the handles to resize (rotated objects
   show their handles turned with them and resize along their own axes; corners keep the
-  proportions; Shift frees them) or rotate. Drag on empty space to select
+  proportions; Shift frees them; Alt/Option resizes from the centre) or rotate. Drag on empty space to select
   several, or turn on **Several** in the view bar so taps add to (or take out
   of) the selection; the selection bar then offers **Group**. Right-click,
   **touch and hold on the slide**, **tap with two fingers** or **More** opens
-  the actions menu: copy, cut, paste, duplicate, group, ungroup, stacking order, lock and delete. Movies
+  the actions menu: copy, cut, paste, duplicate, group, ungroup, stacking order, lock and delete.
+  Copy and Cut also put the objects on the system clipboard as SVG, so they
+  paste into other apps; pasting SVG copied elsewhere inserts it as objects at
+  the pointer (or the visible centre), and pasting plain text makes a text
+  object. Movies
   must stay outside groups; grouping them or pasting them into a group is
   refused so they remain playable.
 - The selection bar depends on what is selected: text gets font, size, bold,
-  italic, underline and colour; images and movies get **Crop** (movies also
+  italic, underline and colour; images and movies get **Crop** and
+  **Replace…** (movies also
   Autoplay, Loop and their sync group); groups get Edit inside and Ungroup;
   shapes get fill and line colour. Colour buttons open the Design tab, which
   holds the full palettes and every other property, plus the object's
-  **Build step**.
+  **Build step**. Its **Position** section gives X, Y, W and H of the
+  selection's bounds in slide pixels, with a lock that keeps W and H in
+  proportion. **Line style** sets the dash (Solid, Dashed, Dotted, or a
+  custom pattern such as `12 6 2 6`; the presets scale with the line width),
+  the ends (Flat, Round, Square) and the joins (Mitre, Round, Bevel) of shapes,
+  lines and paths; rectangles also get **Corners**, a radius in pixels that
+  stays put when the rectangle is resized.
 - **Align** in the selection bar aligns edges and centres. A single object
   aligns to the slide; several align to their selection bounds or, switched,
   to the slide; three or more can be spaced evenly across or down.
@@ -125,8 +149,12 @@ The editor is laid out for an iPad in landscape:
   line ends and new shapes to it. Spacing is set in the Design tab with
   nothing selected.
 - **Guides** snaps moved objects to other objects' edges, centres and equal
-  gaps. Purple guides show the match. Grid Snap takes precedence when enabled;
-  hold Alt while moving to bypass both, or Shift to constrain an axis.
+  gaps, and to the slide's edges and centre lines. Purple guides show the
+  match. While resizing, the dragged edge snaps to the slide's and other
+  objects' edges and centres; the dragged corner of a new shape or end of a
+  new line does too (not with Shift held, and not for circles). Grid Snap
+  takes precedence when enabled; hold Alt while moving or drawing to bypass
+  both, or Shift to constrain an axis.
 - **Objects** lists the stacking order and nested groups, with names,
   visibility, locking, drag reordering within a group, and raise/lower buttons
   for touch. **Builds** assigns when selected objects appear, lists their
@@ -135,11 +163,20 @@ The editor is laid out for an iPad in landscape:
 - Cropped images and movies use their visible crop for selection bounds, resize handles, alignment and snapping. Crop mode retains access to the full source.
 - **Crop** (selection bar or Design tab) on an image or movie: drag its edge or
   corner handles; the faded original stays visible. Done/Enter accepts the
-  crop as one undo step; Cancel/Escape discards it. Two fingers still pan and
+  crop as one undo step; Cancel/Escape discards it. **Aspect**, or Shift
+  while dragging, keeps the crop's proportions: corners resize from the
+  opposite corner, edges resize the other side symmetrically about the centre
+  (the lock starts off with each crop). Two fingers still pan and
   zoom while cropping, and tapping another object cancels the crop. Advanced offers numeric
   insets and rectangle/ellipse masks; Reset restores the full image. Deleting
   a cropped or adjusted image also removes its clip path and filter. Source
   media and imported clip paths remain untouched.
+- **Replace…** on a single image or movie swaps only the picture or movie and
+  keeps its position, size, rotation, opacity, build step, label, lock, crop
+  and adjustments, as one undo step. A different aspect ratio is fitted inside
+  the existing box. Replacing a picture with a movie makes it autoplay and
+  loop; replacing a movie with a picture drops the playback settings and the
+  sync group.
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
   fields, a visual picker, and an opacity slider. Colour transparency is
@@ -154,8 +191,11 @@ The editor is laid out for an iPad in landscape:
   a timer. Choose **Open audience window** and move that window to the
   presentation screen; navigation, build steps and blanking stay synchronized
   between them.
-- Double-tap text to edit it, or a group to work inside it; tap outside,
-  **Done** or Escape to leave. Editing keeps the text's formatting; while
+- Double-tap text to edit it, or a group to work inside it; with the Text
+  tool, a tap on an existing text edits it (also inside a group). Tap outside,
+  **Done** or Ctrl/Cmd+Enter to keep the edit; Escape cancels it, putting the
+  text back as it was (a new text disappears) with nothing added to undo.
+  Editing keeps the text's formatting; while
   editing, the selection bar makes selected words bold, italic, underlined or
   sub/superscript, and the Design tab gives them another colour.
 - Choose **Pan** to drag the page without changing objects; choose **Select**
@@ -191,16 +231,29 @@ The editor is laid out for an iPad in landscape:
   Undo/redo remains per slide. Concurrent edits stop saving or restoring
   instead of silently overwriting changes.
 - **Deck menu → Export offline copy** downloads a .zip that plays without a
-  network; **Deck settings** holds the font library (upload .otf/.ttf).
+  network; **Download PDF** and **Download handout (with notes)** fetch PDFs
+  from the service (a message says why if the service cannot make them).
+- **Deck menu → Deck settings…** sets the deck's title, its background colour
+  (the screen around the slide when the window is not 16:9), and the slide
+  size (1920×1080, 3840×2160, 1920×1200, 1024×768 or custom). Changing the
+  size asks first, then resizes every slide while content keeps its position
+  and size (a full-slide background rectangle is resized with the slide);
+  each slide can undo it. The dialog also holds the font library (upload
+  .otf/.ttf).
 - The slide strip's **+ Slide** adds a slide after the current one; **…**
   duplicates, moves or deletes it.
 - Keyboard: Ctrl+Z / Ctrl+Shift+Z, Ctrl+C / Ctrl+V (also across slides),
   Ctrl+D duplicate, Ctrl+G / Ctrl+Shift+G group, Delete, arrow keys nudge
-  (Shift ×10), Page Up/Down change slide.
+  (Shift ×10; nudges move exact pixels, never snap, and presses within half a
+  second undo as one step), Page Up/Down change slide.
 - Deleted slides go to the deck's `trash/` folder.
-- **Delete** on the decks page (tap twice) moves the whole deck to
+- The decks page offers **Rename** (the folder name; history and media move
+  with it) and **Duplicate** (a copy named `<name>-copy` with " (copy)" in its
+  title; it starts without the original's history) per deck. **Delete**
+  (tap twice) moves the whole deck to
   `<data>/trash/<name>.<timestamp>/`; **Recently deleted** below the list
-  restores it. Nothing is purged automatically: remove the folder by hand.
+  restores it, asking for another name when the original name is taken.
+  Nothing is purged automatically: remove the folder by hand.
 - **Deck menu → History and recovery** lists the last 30 saved slide revisions
   and deleted slides, with restore controls. Restoring a revision checkpoints
   the current artwork first. If saving detects a conflict, **Keep both versions**
@@ -233,6 +286,23 @@ double-click for full screen. A single mouse click advances after a short
 pause so a double-click never changes the slide; taps advance at once. The
 speaker window keeps its session in the address bar, so reloading it
 reconnects the audience window. The address bar shows `#slide.step`.
+
+### Printing and PDF
+
+`svgdeck pdf DECK OUT.pdf` prints the deck through headless Chromium: one page
+per slide at the deck's size (1920×1080 is 20 × 11.25 in), every build step
+shown, movies as their poster frame. `--steps` prints the initial state and
+then the state after each step that has objects. `--notes` prints a handout:
+the slide scaled down with "Slide N" and its speaker notes underneath, on the
+same page size (long notes get smaller text). The two combine.
+`svgdeck export … --pdf` also writes `deck.pdf` into the export (and the zip).
+The editor's Deck menu downloads the same PDFs from the service.
+
+Any export's `index.html?print=1` (or `#print`, `?print=steps`, `?print=notes`,
+`?print=steps,notes`) shows every slide stacked as pages, ready for the
+browser's Print; the service's presenter page accepts the same address.
+Printing the normal presenter with Ctrl/Cmd+P prints every slide fully built,
+one per landscape page, without controls, overview or speaker panel.
 
 ## Development tools
 

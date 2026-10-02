@@ -20,7 +20,7 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
   const style = document.createElement("style");
   style.textContent = `
     .direct-crop-tools{position:fixed;inset:auto 20px 20px auto;z-index:60;margin:0;max-width:min(430px,calc(100vw - 40px));color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;box-shadow:0 8px 30px #0006}
-    .direct-crop-tools strong{display:block;font:600 17px system-ui;margin-bottom:8px}.direct-crop-tools .crop-actions{display:flex;gap:8px;align-items:center}.direct-crop-tools button{margin:0;padding:7px 14px;min-height:36px}.direct-crop-tools details{margin-top:8px}.direct-crop-tools summary{cursor:pointer;color:var(--muted)}.direct-crop-tools .media-crop-fields{margin-top:8px}.direct-crop-tools .media-crop-fields input{width:62px}
+    .direct-crop-tools strong{display:block;font:600 17px system-ui;margin-bottom:8px}.direct-crop-tools .crop-actions{display:flex;gap:8px;align-items:center}.direct-crop-tools button{margin:0;padding:7px 14px;min-height:36px}.direct-crop-tools details{margin-top:8px}.direct-crop-tools summary{cursor:pointer;color:var(--muted)}.direct-crop-tools .media-crop-fields{margin-top:8px}.direct-crop-tools .media-crop-fields input{width:62px}.direct-crop-tools button[aria-pressed=true]{background:var(--accent,#1769d2);color:#fff;border-color:var(--accent,#1769d2)}
     .overlay .ov-crop-shade{fill:#07111b;fill-opacity:.55;fill-rule:evenodd;pointer-events:none}.overlay .ov-crop-frame{fill:none;stroke:#fff;stroke-dasharray:8 5;pointer-events:none}.overlay .ov-crop-handle{fill:#fff;stroke:#1769d2;pointer-events:all;touch-action:none}`;
   document.head.appendChild(style);
 
@@ -152,9 +152,15 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     const title = document.createElement("strong"), actions = document.createElement("div");
     title.textContent = session.media.hasAttribute("data-video") ? "Crop movie" : "Crop image";
     actions.className = "crop-actions";
-    for (const [label, fn] of [["Done", () => finish(true)], ["Cancel", () => finish(false)], ["Reset", removeOwnedClip]]) {
+    for (const [label, fn] of [["Done", () => finish(true)], ["Cancel", () => finish(false)], ["Reset", removeOwnedClip],
+      ["Aspect", () => api.setAspectLock(!session?.aspect)]]) {
       const button = document.createElement("button");
-      button.type = "button"; button.textContent = label; button.addEventListener("click", fn); actions.append(button);
+      button.type = "button"; button.textContent = label; button.addEventListener("click", fn);
+      if (label === "Aspect") {
+        button.dataset.cropAspect = ""; button.title = "Keep the crop's proportions while dragging (or hold Shift)";
+        button.setAttribute("aria-pressed", String(!!session.aspect));
+      }
+      actions.append(button);
     }
     dialog.append(title, actions);
     const advanced = document.createElement("details"), summary = document.createElement("summary"), fields = document.createElement("div");
@@ -189,12 +195,32 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     const media = selectedMedia();
     if (!media) { toast("Select one image or movie to crop."); return false; }
     if (existingForeignClip(media)) { toast("This media already has an imported clip path. Remove it before using Crop."); return false; }
-    session = { media, svg: editor.svg, original: snapshot(media), crop: cropOf(media), mask: media.getAttribute("data-mask") || "rect", drag: null };
+    session = { media, svg: editor.svg, original: snapshot(media), crop: cropOf(media), mask: media.getAttribute("data-mask") || "rect", drag: null, aspect: false };
     editor.begin(); render();
     if (!dialog.open) dialog.show();
     editor.drawOverlay();
     return true;
   }
+  /** Swap the media of an existing <image> for newly uploaded media (`info` is the
+   *  upload response given to editor.insertMedia), keeping its box, transform,
+   *  opacity, step, label, lock, crop and adjustments. One undo step. */
+  function replace(el, info) {
+    if (!el || el.localName !== "image" || !editor.svg.contains(el) || !info?.href) return null;
+    // An open crop belongs to the old picture; drop it (restoring the slide) first.
+    if (session) finish(false);
+    const movie = info.kind === "video" && !!info.video;
+    editor.change(() => {
+      el.setAttribute("href", editor.hooks.hrefIn(info.href));
+      el.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+      if (movie) {
+        el.setAttribute("data-video", editor.hooks.hrefIn(info.video));
+        for (const name of ["data-autoplay", "data-loop"]) if (!el.hasAttribute(name)) el.setAttribute(name, "true");
+      } else for (const name of ["data-video", "data-autoplay", "data-loop", "data-sync"]) el.removeAttribute(name);
+      editor.selection = [el];
+    });
+    return el;
+  }
+
   function geometry() {
     if (!valid()) return null;
     const matrix = toRoot(session.media, editor.svg);
@@ -257,6 +283,43 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     editor.host.setPointerCapture(e.pointerId); e.preventDefault();
     return true;
   }
+  // Aspect lock. The ratio is that of the visible crop (in the image's own units)
+  // when the drag began. A corner follows the pointer along the crop's diagonal
+  // with the opposite corner fixed. An edge handle sets that axis and the other
+  // axis follows symmetrically about the crop's centre, so the crop grows and
+  // shrinks around its middle (easy to steer with a thumb on an iPad). Both are
+  // clamped to the image, so the pointer can run past the image without the
+  // crop losing its shape.
+  function locked(next, changed, q, side, start, { x, y, w, h }) {
+    const [sl, st, sr, sb] = start;
+    const L = x + w * sl / 100, T = y + h * st / 100, R = x + w * (1 - sr / 100), B = y + h * (1 - sb / 100);
+    const r = (R - L) / (B - T);
+    if (!(r > 0) || !Number.isFinite(r)) return;
+    const horiz = side.includes("w") || side.includes("e"), vert = side.includes("n") || side.includes("s");
+    const sx = side.includes("e") ? 1 : -1, sy = side.includes("s") ? 1 : -1;
+    const ax = sx > 0 ? L : R, ay = sy > 0 ? T : B;           // fixed corner or edge
+    const cx = (L + R) / 2, cy = (T + B) / 2;
+    const minH = Math.max(h * MIN_REMAINING / 100, w * MIN_REMAINING / 100 / r);
+    let height;
+    if (horiz && vert) {
+      const dw = Math.max(0, sx * (q.x - ax)), dh = Math.max(0, sy * (q.y - ay));
+      height = (dw * r + dh) / (r * r + 1);
+      height = Math.min(height, (sx > 0 ? x + w - ax : ax - x) / r, sy > 0 ? y + h - ay : ay - y);
+    } else if (horiz) {
+      height = Math.max(0, sx * (q.x - ax)) / r;
+      height = Math.min(height, 2 * Math.min(cy - y, y + h - cy), (sx > 0 ? x + w - ax : ax - x) / r);
+    } else {
+      height = Math.max(0, sy * (q.y - ay));
+      height = Math.min(height, (sy > 0 ? y + h - ay : ay - y), 2 * Math.min(cx - x, x + w - cx) / r);
+    }
+    height = Math.max(height, minH);
+    const width = height * r;
+    let l = L, t = T, rr = R, b = B;
+    if (horiz) { if (sx > 0) rr = L + width; else l = R - width; } else { l = cx - width / 2; rr = cx + width / 2; }
+    if (vert) { if (sy > 0) b = T + height; else t = B - height; } else { t = cy - height / 2; b = cy + height / 2; }
+    next[0] = (l - x) / w * 100; next[1] = (t - y) / h * 100;
+    next[2] = (x + w - rr) / w * 100; next[3] = (y + h - b) / h * 100;
+  }
   function onPointerMove(e, p) {
     if (!valid() || session.drag?.id !== e.pointerId) return false;
     const g = geometry(), q = g.inv.transformPoint(p), next = [...session.crop];
@@ -265,6 +328,10 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     if (side.includes("e")) { next[2] = (x + w - q.x) / w * 100; changed.push(2); }
     if (side.includes("n")) { next[1] = (q.y - y) / h * 100; changed.push(1); }
     if (side.includes("s")) { next[3] = (y + h - q.y) / h * 100; changed.push(3); }
+    if ((session.aspect || e.shiftKey) && w > 0 && h > 0) {
+      locked(next, changed, q, side, session.drag.crop, { x, y, w, h });
+      changed.push(0, 1, 2, 3);
+    }
     preview(next, session.mask, changed);
     e.preventDefault();
     return true;
@@ -327,6 +394,15 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
       if (typeof editor.abort === "function") editor.abort(); else editor.before = null;
     },
     finish: () => finish(true), active: () => !!session,
+    // Keep the crop's proportions while dragging handles. Applies to the open
+    // crop session only (a new session starts unlocked); ignored with no session.
+    setAspectLock(on) {
+      if (!session) return false;
+      session.aspect = !!on; render();
+      return session.aspect;
+    },
+    aspectLocked: () => !!session?.aspect,
+    replace,
     onLoad() {
       if (session) finish(false);
       else { dialog.replaceChildren(); if (dialog.open) dialog.close(); }

@@ -6,6 +6,7 @@ Layout:  <data>/decks/<name>/   one deck each (docs/format.md)
 """
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import json
@@ -72,6 +73,29 @@ def check_svg(data: bytes) -> None:
         raise ValueError("not an SVG document")
 
 
+def check_name(name: str) -> str:
+    """Deck names are directory names: letters, digits, - _ and . (max 100)."""
+    if not isinstance(name, str) or not NAME.match(name):
+        raise ValueError("deck names use letters, digits, - _ and .")
+    return name
+
+
+def check_deck_fields(meta: dict) -> None:
+    """Validate the deck-level fields that are present: title, size, background."""
+    if "title" in meta and not (isinstance(meta["title"], str) and len(meta["title"]) <= 200):
+        raise ValueError("title must be a string of at most 200 characters")
+    if "size" in meta:
+        size = meta["size"]
+        if not (isinstance(size, list) and len(size) == 2
+                and all(type(n) is int and 16 <= n <= 16384 for n in size)):
+            raise ValueError("size must be two integers between 16 and 16384")
+    if "background" in meta:
+        colour = meta["background"]
+        if not (isinstance(colour, str) and colour.strip() and len(colour) <= 64
+                and "<" not in colour and "\n" not in colour and "\r" not in colour):
+            raise ValueError("background must be a CSS colour of at most 64 characters")
+
+
 def safe_filename(name: str) -> str:
     stem, ext = os.path.splitext(os.path.basename(name))
     stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", stem).strip("-.") or "file"
@@ -98,23 +122,25 @@ class Store:
             raise KeyError(name)
         return path
 
+    def _summary(self, name: str) -> dict:
+        """One entry of the deck list: name, title, slide count, last edit."""
+        path = self.decks / name
+        with self._lock(name):
+            deck = Deck.load(path)
+            # Only the slides count: revisions/, trash/ and commits/ hold
+            # copies whose mtimes say nothing about the deck's last edit.
+            modified = max((p.stat().st_mtime for p in (path / "slides").glob("*.svg")),
+                           default=(path / "deck.json").stat().st_mtime)
+            return {"name": name, "title": deck.title, "slides": len(deck.meta["slides"]),
+                    "modified": modified}
+
     def list_decks(self) -> list[dict]:
-        out = []
-        for meta in sorted(self.decks.glob("*/deck.json")) if self.decks.is_dir() else []:
-            name = meta.parent.name
-            with self._lock(name):
-                deck = Deck.load(meta.parent)
-                # Only the slides count: revisions/, trash/ and commits/ hold
-                # copies whose mtimes say nothing about the deck's last edit.
-                modified = max((p.stat().st_mtime for p in (meta.parent / "slides").glob("*.svg")),
-                               default=meta.stat().st_mtime)
-                out.append({"name": name, "title": deck.title, "slides": len(deck.meta["slides"]),
-                            "modified": modified})
+        out = [self._summary(meta.parent.name)
+               for meta in sorted(self.decks.glob("*/deck.json")) if self.decks.is_dir()]
         return sorted(out, key=lambda d: -d["modified"])
 
     def create_deck(self, name: str, title: str, size=(1920, 1080)) -> dict:
-        if not NAME.match(name):
-            raise ValueError("deck names use letters, digits, - _ and .")
+        check_name(name)
         path = self.decks / name
         if path.exists():
             raise FileExistsError(name)
@@ -151,18 +177,88 @@ class Store:
             out.append({"token": path.name, "name": match[1], "title": title, "deleted": deleted})
         return sorted(out, key=lambda d: -d["deleted"])
 
-    def restore_deck(self, token: str) -> dict:
+    def restore_deck(self, token: str, new_name: str | None = None) -> dict:
+        """Move a deleted deck back, under its old name or under `new_name`
+        (validated like a new deck's name)."""
         match = DECK_TRASH_TOKEN.fullmatch(token)
         source = self.trash / token
         if not match or not (source / "deck.json").is_file():
             raise KeyError(token)
-        name = match[1]
+        name = match[1] if new_name is None else check_name(new_name)
         with self._lock(name):
             if (self.decks / name).exists():
                 raise FileExistsError(name)
             self.decks.mkdir(parents=True, exist_ok=True)
             os.rename(source, self.decks / name)
         return self.get_deck(name)
+
+    def rename_deck(self, name: str, new_name: str) -> dict:
+        """Rename a deck: one directory rename, so slides, media, fonts,
+        commits, revisions and the slide trash move with it. Both names'
+        locks are held (always in sorted order, so two renames cannot
+        deadlock). A deck in <data>/trash/ does not block the name: trash
+        tokens carry their own timestamp, and restoring can pick a new name."""
+        check_name(new_name)
+        with self._lock_both(name, new_name):
+            source = self.deck_dir(name)
+            target = self.decks / new_name
+            if name == new_name or os.path.lexists(target):
+                raise FileExistsError(new_name)
+            os.rename(source, target)
+        return self._summary(new_name)
+
+    def _lock_both(self, first: str, second: str):
+        stack = contextlib.ExitStack()
+        for name in sorted({first, second}):
+            stack.enter_context(self._lock(name))
+        return stack
+
+    def duplicate_deck(self, name: str, new_name: str | None = None) -> dict:
+        """Copy deck.json (title gets " (copy)"), slides/, media/ and fonts/.
+        History (revisions/, trash/, commits/) is not copied: the copy gets
+        a fresh baseline on its first edit, like a new deck. Without
+        `new_name` the first free of <name>-copy, <name>-copy2, ... is used."""
+        if new_name is not None:
+            check_name(new_name)
+        self.decks.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=".duplicate-", dir=self.data))
+        staging.chmod(0o755)
+        try:
+            with self._lock(name):
+                origin = self.deck_dir(name)
+                meta = json.loads((origin / "deck.json").read_text(encoding="utf-8"))
+                meta["title"] = f"{meta.get('title') or name} (copy)"
+                (staging / "slides").mkdir()
+                for entry in meta["slides"]:
+                    shutil.copyfile(origin / "slides" / f"{entry['id']}.svg",
+                                    staging / "slides" / f"{entry['id']}.svg")
+                write_atomic(staging / "deck.json",
+                             (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode())
+            # Media and fonts are only ever added, never changed, so the (maybe
+            # large) copy does not need the lock. Half-written uploads
+            # (".upload-*") stay behind.
+            for sub in ("media", "fonts"):
+                if (origin / sub).is_dir():
+                    shutil.copytree(origin / sub, staging / sub, ignore=shutil.ignore_patterns(".*"))
+                else:
+                    (staging / sub).mkdir()
+            serial = 1
+            while True:
+                if new_name is not None:
+                    target = new_name
+                else:
+                    suffix = "-copy" if serial == 1 else f"-copy{serial}"
+                    target = name[:100 - len(suffix)] + suffix
+                with self._lock(target):
+                    if not os.path.lexists(self.decks / target):
+                        os.rename(staging, self.decks / target)
+                        break
+                if new_name is not None:
+                    raise FileExistsError(new_name)
+                serial += 1
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        return self._summary(target)
 
     def get_deck(self, name: str) -> dict:
         with self._lock(name):
@@ -180,6 +276,7 @@ class Store:
             raise Conflict("deck.json")
         if meta.get("format") != FORMAT:
             raise ValueError("unsupported format")
+        check_deck_fields(meta)
         ids = [s.get("id") for s in meta.get("slides", [])]
         if not ids or len(set(ids)) != len(ids) or not all(isinstance(i, str) and SLIDE_ID.match(i) for i in ids):
             raise ValueError("slides must be a non-empty list of unique ids")

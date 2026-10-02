@@ -77,7 +77,7 @@ def test_flush_saves_active_text_without_ending_edit(page, server):
     assert page.evaluate("document.activeElement.classList.contains('text-edit')")
 
     page.keyboard.type(" after flush")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     page.evaluate("svgdeckEditor.flush()")
     saved = (data / "decks" / "talk" / "slides" / f"{sid}.svg").read_text()
     assert "Still editing after flush" in saved
@@ -96,7 +96,7 @@ def test_cleared_new_text_is_removed_after_an_active_save(page, server):
     page.evaluate("svgdeckEditor.flush()")
     page.keyboard.press("Control+a")
     page.keyboard.press("Backspace")
-    page.keyboard.press("Escape")
+    page.keyboard.press("Control+Enter")
     page.evaluate("svgdeckEditor.flush()")
 
     _, data = server

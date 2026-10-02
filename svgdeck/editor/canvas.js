@@ -3,6 +3,7 @@
 import {
   SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, smartSnapDelta, simplify, smoothPath, polylinePath, toHex,
   parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline, fitStroke,
+  snapLines, snapCoordinate, constrainAngle,
 } from "./geom.js";
 
 const HANDLE_PX = { mouse: 12, pen: 14, touch: 24 };  // handle hit radius, screen pixels
@@ -25,6 +26,19 @@ const INHERITED_PRESENTATION = new Set([
   "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width",
   "text-anchor", "text-rendering", "visibility", "word-spacing", "writing-mode",
 ]);
+// Stroke styles the inspector sets, with the values each takes.
+const STROKE_STYLE = new Set(["stroke-dasharray", "stroke-linecap", "stroke-linejoin"]);
+const STROKE_KEYWORDS = { "stroke-linecap": ["butt", "round", "square"], "stroke-linejoin": ["miter", "round", "bevel"] };
+/** A stroke style value written plainly, or null if the property does not take it. */
+function strokeStyleValue(prop, value) {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (prop !== "stroke-dasharray") return STROKE_KEYWORDS[prop].includes(v) ? v : null;
+  if (v === "" || v === "none") return "none";
+  const parts = v.split(/[\s,]+/);
+  if (!parts.every((p) => /^(\d*\.?\d+)(px|%)?$/.test(p))) return null;
+  // All zero draws nothing at all; SVG treats that as no dashes.
+  return parts.every((p) => !parseFloat(p)) ? "none" : parts.join(" ");
+}
 const hasMovie = (el) => el.matches("image[data-video]") || !!el.querySelector("image[data-video]");
 
 const num = (el, name) => parseFloat(el.getAttribute(name)) || 0;
@@ -226,6 +240,7 @@ export class SlideEditor {
 
   // --- loading and saving --------------------------------------------------
   load(text, { keepView = false } = {}) {
+    clearTimeout(this.nudgeTimer); this.nudging = null;
     // A loaded document must never inherit a transaction or captured pointer
     // from the document it replaces. Callers that want to keep a draft must
     // finish it before loading.
@@ -304,6 +319,8 @@ export class SlideEditor {
   /** Open an undo step unless one is open. Returns the step if this call
    *  opened it (whoever opened it may abort it), null if it joined one. */
   begin() {
+    // Another edit closes a run of nudges first, so each is undone by itself.
+    if (this.nudging && this.txDepth === 0) this.endNudge();
     if (this.tx) return null;
     this.tx = { before: this.serialize() };
     return this.tx;
@@ -323,6 +340,9 @@ export class SlideEditor {
   /** Close the open undo step without recording it; the slide stays as it is. */
   abort() {
     this.tx = null;
+    // A run of nudges loses its step with it: the next press starts afresh.
+    clearTimeout(this.nudgeTimer);
+    this.nudging = null;
   }
 
   /** Run a change as one undoable step. Changes inside it join that step. */
@@ -742,13 +762,200 @@ export class SlideEditor {
     this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(dx, dy)));
   }
 
+  /** Whether the selection can be changed from the keyboard or the
+   *  inspector now: something is selected, nothing locked, and no gesture,
+   *  text edit, path being drawn or crop is in progress. */
+  selectionEditable() {
+    return this.selection.length > 0 && !this.gesture && !this.textEdit && !this.pathDraft &&
+      !this.mediaTools?.active?.() && this.selection.every((el) => this.svg?.contains(el) && !this.isLocked(el));
+  }
+
+  /** Whether the element or a group around it is locked. */
+  isLocked(el) {
+    for (let node = el; node && node !== this.svg; node = node.parentElement) {
+      if (node.getAttribute?.("data-locked") === "true") return true;
+    }
+    return false;
+  }
+
+  /** The selection's bounding box in slide units, {x, y, width, height}, or null. */
+  selectionGeometry() {
+    return this.selectionBox();
+  }
+
+  /** Move and scale the selection as one piece so that its slide-aligned
+   *  bounding box becomes the given one; fields left out keep their value.
+   *  One undo step.
+   *
+   *  Lines get their ends moved, so their stroke is never distorted. A single
+   *  object turned by other than quarter turns cannot be scaled along the
+   *  slide's axes without being skewed, so:
+   *  - when width and height change in proportion it is scaled uniformly
+   *    (which scales it along its own axes alike);
+   *  - otherwise it is scaled along its own axes by the amounts that give
+   *    the requested bounding box, so it stays a rectangle at its angle;
+   *  - when no such scale exists (near 45° the box's width and height cannot
+   *    change independently, or the request needs a negative size), it is
+   *    scaled along the slide's axes, which skews it but gives the box asked
+   *    for, like scaling it as part of a group.
+   *  Several objects are scaled as one piece along the slide's axes. */
+  setSelectionGeometry({ x, y, width, height } = {}) {
+    if (!this.selectionEditable()) return;
+    const box = this.selectionBox();
+    if (!box) return;
+    const nx = Number.isFinite(x) ? x : box.x, ny = Number.isFinite(y) ? y : box.y;
+    const nw = Math.max(Number.isFinite(width) ? width : box.width, 0.01);
+    const nh = Math.max(Number.isFinite(height) ? height : box.height, 0.01);
+    const sx = box.width > 1e-9 ? nw / box.width : 1, sy = box.height > 1e-9 ? nh / box.height : 1;
+    const uniform = Math.abs(sx - sy) < 1e-6 * Math.max(sx, sy);
+    const frame = this.selectionFrame();
+    let D = null;
+    if (frame && !uniform) {
+      // Own-axis sizes (u, v) for the box asked for: W = u|cos| + v|sin|,
+      // H = u|sin| + v|cos|, solved for u and v.
+      const c = Math.abs(Math.cos(frame.angle * Math.PI / 180)), s = Math.abs(Math.sin(frame.angle * Math.PI / 180));
+      const det = c * c - s * s;
+      const u = (c * nw - s * nh) / det, v = (c * nh - s * nw) / det;
+      const fb = frame.box;
+      if (Math.abs(det) > 0.2 && u > 0.01 && v > 0.01 && fb.width > 1e-9 && fb.height > 1e-9) {
+        const fx = fb.x + fb.width / 2, fy = fb.y + fb.height / 2;
+        const S = new DOMMatrix().translateSelf(fx, fy).scaleSelf(u / fb.width, v / fb.height).translateSelf(-fx, -fy);
+        D = frame.toSlide.multiply(S).multiply(frame.toFrame);
+      }
+    }
+    D ||= new DOMMatrix().translateSelf(box.x, box.y).scaleSelf(sx, sy).translateSelf(-box.x, -box.y);
+    const snaps = this.snapshot();
+    this.change(() => {
+      this.applyBoxDelta(snaps, D);
+      // Then move it so the box starts where asked (scaling in the object's
+      // frame keeps its centre, not its corner).
+      const b = this.selectionBox();
+      if (b) this.applyBoxDelta(snaps, new DOMMatrix().translateSelf(nx - b.x, ny - b.y).multiply(D));
+    });
+  }
+
+  /** applyDelta, except that lines have their ends moved (exact geometry,
+   *  the stroke keeps its width and caps). */
+  applyBoxDelta(snaps, D) {
+    for (const s of snaps) {
+      if (s.el.localName !== "line") { this.applyDelta([s], D); continue; }
+      for (const [a, v] of Object.entries(s.geometry)) s.el.setAttribute(a, v);
+      // Keep the transform as written when it is unchanged.
+      const L = localMatrix(s.el);
+      if (!["a", "b", "c", "d", "e", "f"].every((k) => near(L[k], s.T0[k], 1e-9))) setTransform(s.el, s.T0);
+      const M = s.P.multiply(s.T0), inverse = M.inverse(), r = (v) => String(+v.toFixed(3));
+      for (const i of [1, 2]) {
+        const q = inverse.transformPoint(D.transformPoint(M.transformPoint(new DOMPoint(num(s.el, `x${i}`), num(s.el, `y${i}`)))));
+        s.el.setAttribute(`x${i}`, r(q.x));
+        s.el.setAttribute(`y${i}`, r(q.y));
+      }
+    }
+  }
+
+  /** Move the selection by a key press, by exactly (dx, dy) slide pixels
+   *  (nudges never snap). Presses within half a second of each other join
+   *  one undo step; a pointer gesture, another edit, an abort or a load ends
+   *  the run. Refused while a gesture or edit is in progress, or when the
+   *  selection is empty or locked. Returns whether it moved. */
+  nudge(dx, dy) {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+    // A run belongs to one selection: choosing other objects starts a new one.
+    if (this.nudging && (this.nudging.els.length !== this.selection.length ||
+        this.nudging.els.some((el, i) => el !== this.selection[i]) || this.tx !== this.nudging.tx)) this.endNudge();
+    if (!this.selectionEditable()) return false;
+    if (!this.nudging) {
+      if (this.tx) return false;  // another step (a crop, an adjustment) is open
+      this.nudging = { tx: this.begin(), els: [...this.selection], snaps: this.snapshot(), dx: 0, dy: 0 };
+    }
+    clearTimeout(this.nudgeTimer);
+    const n = this.nudging;
+    n.dx += dx; n.dy += dy;
+    this.applyDelta(n.snaps, new DOMMatrix().translateSelf(n.dx, n.dy));
+    this.drawOverlay();
+    this.nudgeTimer = setTimeout(() => this.endNudge(), 500);
+    return true;
+  }
+
+  /** Close the undo step a run of nudges opened, if one is open. */
+  endNudge() {
+    clearTimeout(this.nudgeTimer);
+    const n = this.nudging;
+    if (!n) return;
+    this.nudging = null;
+    if (this.tx === n.tx) this.commit();
+  }
+
+  /** A rect's corner radius in its own units (0 when square), as drawn:
+   *  SVG never rounds more than half the shorter side. */
+  radiusOf(el) {
+    if (el?.localName !== "rect") return 0;
+    const r = parseFloat(el.getAttribute("rx") ?? el.getAttribute("ry")) || 0;
+    return Math.max(0, Math.min(r, num(el, "width") / 2, num(el, "height") / 2));
+  }
+
+  /** Round the corners of the given rects (the selected ones by default),
+   *  at most half each one's shorter side; 0 makes them square again. The
+   *  radius stays as set when the rect is moved, resized or copied. */
+  setRadius(r, elements = this.selection.filter((el) => el.localName === "rect")) {
+    const rects = elements.filter((el) => el.localName === "rect");
+    if (!rects.length || this.gesture || this.textEdit) return;
+    const v = Math.max(0, +r || 0);
+    this.change(() => {
+      for (const el of rects) {
+        const c = +Math.min(v, num(el, "width") / 2, num(el, "height") / 2).toFixed(3);
+        if (c > 0) { el.setAttribute("rx", String(c)); el.setAttribute("ry", String(c)); }
+        else { el.removeAttribute("rx"); el.removeAttribute("ry"); }
+      }
+    });
+  }
+
+  /** The slide's own box: its edges and centre lines are snap targets. */
+  slideBox() {
+    return { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+  }
+
+  /** Boxes of the objects beside the selection that guides can snap to
+   *  (full-slide backdrops are left out: the slide itself stands for them). */
+  siblingBoxes(exclude = new Set(this.selection)) {
+    const area = this.size[0] * this.size[1];
+    return this.children().filter((el) => !exclude.has(el))
+      .map((el) => rootBox(el, this.svg)).filter((b) => b && b.width * b.height < area * .9);
+  }
+
+  /** Lines a dragged edge or point snaps to: siblings' and the slide's edges
+   *  and centres, per axis. */
+  snapTargets(exclude) {
+    return snapLines([...this.siblingBoxes(exclude), this.slideBox()]);
+  }
+
+  /** Smart guides apply: they are on, the grid does not snap, Alt is up. */
+  smartSnapping(alt = false) {
+    return this.smartSnap && !this.grid.snap && !alt;
+  }
+
+  /** Snap a point's x and/or y to the targets; returns the point and guides. */
+  smartPoint(p, targets, axes = ["x", "y"]) {
+    const q = { x: p.x, y: p.y }, guides = [], tol = 8 / this.zoom;
+    for (const axis of axes) {
+      const hit = snapCoordinate(p[axis], targets[axis], tol);
+      if (!hit) continue;
+      q[axis] = hit.at;
+      guides.push({ kind: "align", axis, at: hit.at, lo: hit.lo, hi: hit.hi });
+    }
+    return { p: q, guides };
+  }
+
+  /** Guides for snapped points, spanning the target and the given box. */
+  pointGuides(guides, box) {
+    return guides.map((g) => {
+      const [lo, hi] = g.axis === "x" ? [box.y, box.y + box.height] : [box.x, box.x + box.width];
+      return { kind: "align", axis: g.axis, at: g.at, from: Math.min(g.lo, lo), to: Math.max(g.hi, hi) };
+    });
+  }
+
   smartMove(box, dx, dy) {
     if (!this.smartSnap || this.grid.snap || !box) return { dx, dy, guides: [] };
-    const selected = new Set(this.selection);
-    const area = this.size[0] * this.size[1];
-    const boxes = this.children().filter((el) => !selected.has(el))
-      .map((el) => rootBox(el, this.svg)).filter((b) => b && b.width * b.height < area * .9);
-    return smartSnapDelta(box, dx, dy, boxes, 8 / this.zoom);
+    return smartSnapDelta(box, dx, dy, this.siblingBoxes(), 8 / this.zoom, [this.slideBox()]);
   }
 
   // --- pointer handling ---------------------------------------------------------
@@ -799,6 +1006,7 @@ export class SlideEditor {
   }
 
   onDown(e) {
+    this.endNudge();
     this.clearLongPress();
     if (e.target.closest && e.target.closest(".text-edit")) return;
     if (!this.svg) return;
@@ -874,7 +1082,8 @@ export class SlideEditor {
         this.gesture = { kind: "erase", ...base, removed: [], tx: this.begin() };
         this.eraseAt(e);
         return;
-      case "text": this.gesture = { kind: "text", ...base }; return;
+      // On an existing text the text tool edits it rather than adding one on top.
+      case "text": this.gesture = { kind: "text", ...base, target: this.textAt(e, p) }; return;
       default: this.gesture = { kind: "create", shape: this.tool, ...base }; return;
     }
   }
@@ -911,6 +1120,8 @@ export class SlideEditor {
     const near = a => a && Math.hypot(a.x-p.x,a.y-p.y)*this.zoom < (base.pointerType === "touch" ? 18 : 10);
     if (draft.nodes.length > 2 && near(first)) { this.finishPath(true); return; }
     if (draft.nodes.length > 1 && near(last) && performance.now()-draft.lastAt < 450) { this.finishPath(); return; }
+    // Shift keeps the new segment at a multiple of 45° from the last point.
+    if (base.shift && last) p = constrainAngle(last, p);
     this.gesture = {kind:"path-node",...base,node:this.pathNode(p),trail:[base.start]};
     draft.hover = null;
     this.drawOverlay();
@@ -1435,7 +1646,13 @@ export class SlideEditor {
     // Pencil hover (and the mouse) show what that input is about to do.
     if (!g && !e.buttons && e.pointerType !== "touch") this.setInput(this.slotFor(e.pointerType));
     if (!g) {
-      if (this.pathDraft) { this.pathDraft.hover = this.snapPoint(this.point(e)); this.drawOverlay(); }
+      if (this.pathDraft) {
+        let hover = this.snapPoint(this.point(e));
+        const last = this.pathDraft.nodes.at(-1);
+        if (e.shiftKey && last) hover = constrainAngle(last, hover);
+        this.pathDraft.hover = hover;
+        this.drawOverlay();
+      }
       return;
     }
     if (g.kind === "pinch") return this.movePinch();
@@ -1486,7 +1703,10 @@ export class SlideEditor {
         }
         if (g.freehand) break;
         if (g.extend) break;
-        const q = this.snapPoint(p), a = g.node;
+        const a = g.node;
+        let q = this.snapPoint(p);
+        // Shift turns the handle in steps of 45° about its point.
+        if (e.shiftKey) q = constrainAngle(a, q);
         a.out = {x:q.x,y:q.y};
         a.in = {x:2*a.x-q.x,y:2*a.y-q.y};
         a.type = "z";
@@ -1518,15 +1738,10 @@ export class SlideEditor {
         this.writeModel(g.el, model);
         break;
       }
-      case "resize": this.moveResize(g, p, e.shiftKey); break;
+      case "resize": this.moveResize(g, p, { free: e.shiftKey, centre: e.altKey }); break;
       case "endpoint": {
         let q = this.snapPoint(p);
-        if (e.shiftKey) {
-          const other = this.lineEnds(g.line)[g.which === 1 ? 1 : 0];
-          const angle = Math.round(Math.atan2(p.y - other.y, p.x - other.x) / (Math.PI / 4)) * (Math.PI / 4);
-          const len = Math.hypot(p.x - other.x, p.y - other.y);
-          q = { x: other.x + Math.cos(angle) * len, y: other.y + Math.sin(angle) * len };
-        }
+        if (e.shiftKey) q = constrainAngle(this.lineEnds(g.line)[g.which === 1 ? 1 : 0], p);
         const local = g.inverse.transformPoint(new DOMPoint(q.x, q.y));
         g.line.setAttribute(`x${g.which}`, String(+local.x.toFixed(2)));
         g.line.setAttribute(`y${g.which}`, String(+local.y.toFixed(2)));
@@ -1541,7 +1756,7 @@ export class SlideEditor {
         break;
       }
       case "marquee": break;
-      case "create": this.moveCreate(g, p, e.shiftKey); break;
+      case "create": this.moveCreate(g, p, e.shiftKey, e.altKey); break;
       case "draw": {
         this.clearLongPress();  // the stroke has begun; a hold no longer opens the menu
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
@@ -1576,7 +1791,11 @@ export class SlideEditor {
     }
   }
 
-  moveResize(g, p, free) {
+  /** Resize with a handle. `free` (Shift) lets a corner change the
+   *  proportions; `centre` (Alt) keeps the centre in place, so the opposite
+   *  side moves symmetrically. The dragged edge snaps to the grid, or else to
+   *  the smart guides (other objects' and the slide's edges and centres). */
+  moveResize(g, p, { free = false, centre = false } = {}) {
     const { box, handle, frame } = g;
     // The handle moves as far as the pointer, so grabbing it a little off
     // its centre does not make the edge jump. A turned object is scaled
@@ -1587,16 +1806,35 @@ export class SlideEditor {
       p = { x: hx + d.x, y: hy + d.y };
     } else p = this.snapPoint({ x: hx + p.x - g.start.x, y: hy + p.y - g.start.y });
     const left = box.x, right = box.x + box.width, top = box.y, bottom = box.y + box.height;
-    let sx = 1, sy = 1, ax = left, ay = top;
-    if (handle.includes("e")) { ax = left; sx = box.width ? (p.x - left) / box.width : 1; }
-    if (handle.includes("w")) { ax = right; sx = box.width ? (right - p.x) / box.width : 1; }
-    if (handle.includes("s")) { ay = top; sy = box.height ? (p.y - top) / box.height : 1; }
-    if (handle.includes("n")) { ay = bottom; sy = box.height ? (bottom - p.y) / box.height : 1; }
-    if (handle === "n" || handle === "s") ax = left + box.width / 2;
-    if (handle === "e" || handle === "w") ay = top + box.height / 2;
-    if (handle.length === 2 && !free) {
-      const s = Math.abs(sx - 1) > Math.abs(sy - 1) ? sx : sy;
-      sx = s; sy = s;
+    const cx = left + box.width / 2, cy = top + box.height / 2;
+    const locked = handle.length === 2 && !free;
+    const scales = (p, lead = null) => {
+      let sx = 1, sy = 1, ax = left, ay = top;
+      if (handle.includes("e")) { ax = centre ? cx : left; sx = box.width ? (p.x - ax) / (right - ax) : 1; }
+      if (handle.includes("w")) { ax = centre ? cx : right; sx = box.width ? (ax - p.x) / (ax - left) : 1; }
+      if (handle.includes("s")) { ay = centre ? cy : top; sy = box.height ? (p.y - ay) / (bottom - ay) : 1; }
+      if (handle.includes("n")) { ay = centre ? cy : bottom; sy = box.height ? (ay - p.y) / (ay - top) : 1; }
+      if (handle === "n" || handle === "s") ax = cx;
+      if (handle === "e" || handle === "w") ay = cy;
+      lead ||= Math.abs(sx - 1) > Math.abs(sy - 1) ? "x" : "y";
+      if (locked) { const s = lead === "x" ? sx : sy; sx = s; sy = s; }
+      return { sx, sy, ax, ay, lead };
+    };
+    let { sx, sy, ax, ay, lead } = scales(p);
+    this.smartGuides = [];
+    if (!frame && this.smartSnapping()) {
+      // The dragged edge snaps; a corner keeping its proportions snaps by
+      // the edge that leads the scale.
+      g.targets ||= this.snapTargets();
+      const axes = locked ? [lead] : [/[ew]/.test(handle) && "x", /[ns]/.test(handle) && "y"].filter(Boolean);
+      const snapped = this.smartPoint(p, g.targets, axes);
+      if (snapped.guides.length) {
+        ({ sx, sy, ax, ay } = scales(snapped.p, lead));
+        const after = { x: ax + (left - ax) * sx, y: ay + (top - ay) * sy, width: box.width * Math.abs(sx), height: box.height * Math.abs(sy) };
+        if (sx < 0) after.x -= after.width;
+        if (sy < 0) after.y -= after.height;
+        this.smartGuides = this.pointGuides(snapped.guides, after);
+      }
     }
     const min = 2 / Math.max(box.width, box.height, 1);
     if (Math.abs(sx) < min) sx = Math.sign(sx || 1) * min;
@@ -1606,12 +1844,25 @@ export class SlideEditor {
     this.applyDelta(g.snaps, D);
   }
 
-  moveCreate(g, p, square) {
+  moveCreate(g, p, square, alt = false) {
     if (!g.el) {
+      // Everything already there is a target, the selection too.
+      if (this.smartSnapping()) g.targets = this.snapTargets(new Set());
       g.tx = this.begin();
       g.el = this.adopt(this.newShape(g.shape));
     }
-    this.shapeGeometry(g.el, g.shape, this.snapPoint(g.start), this.snapPoint(p), square);
+    const a = this.snapPoint(g.start);
+    let b = this.snapPoint(p);
+    this.smartGuides = [];
+    // The dragged corner (or line end) snaps to the smart guides, unless the
+    // shape is held square or circular, which would move it off the guide.
+    if (g.targets && this.smartSnapping(alt) && !square && g.shape !== "circle") {
+      const snapped = this.smartPoint(b, g.targets);
+      b = snapped.p;
+      const box = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+      this.smartGuides = this.pointGuides(snapped.guides, box);
+    }
+    this.shapeGeometry(g.el, g.shape, a, b, square);
     if (g.shape === "arrow" && !g.arrowed) { g.arrowed = true; this.refreshArrows(g.el); }
   }
 
@@ -1646,8 +1897,8 @@ export class SlideEditor {
     let dx = b.x - a.x, dy = b.y - a.y;
     if (shape === "line" || shape === "arrow") {
       if (constrain) {
-        const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
-        dx = Math.cos(angle) * len; dy = Math.sin(angle) * len;
+        const q = constrainAngle({ x: 0, y: 0 }, { x: dx, y: dy });
+        dx = q.x; dy = q.y;
       }
       el.setAttribute("x1", r(a.x)); el.setAttribute("y1", r(a.y));
       el.setAttribute("x2", r(a.x + dx)); el.setAttribute("y2", r(a.y + dy));
@@ -1757,6 +2008,15 @@ export class SlideEditor {
         return;
       }
       case "text": {
+        const target = g.target;
+        if (target && this.svg.contains(target) && this.selectable(target)) {
+          this.endTextEdit(true);
+          if (target.parentNode !== this.context) this.context = target.parentNode;
+          this.select([target]);
+          this.editText(target, false);
+          this.hooks.toolDone?.(this.input);
+          return;
+        }
         // The undo step starts before the empty text exists, so undoing
         // the finished text removes it completely.
         this.endTextEdit(true);
@@ -1868,6 +2128,16 @@ export class SlideEditor {
   }
 
   // --- text ------------------------------------------------------------------------
+  /** The text under the pointer, if any: one at the current level, or one
+   *  hit directly inside a group (editing it works inside that group). */
+  textAt(e, p) {
+    const picked = this.pick(e, p);
+    if (picked?.localName === "text") return picked;
+    const hit = e.target?.closest?.("text");
+    if (hit && this.svg.contains(hit) && this.selectable(hit) && (!picked || picked.contains(hit))) return hit;
+    return null;
+  }
+
   newText(p) {
     const s = this.hooks.textStyle();
     const t = document.createElementNS(SVGNS, "text");
@@ -1944,12 +2214,15 @@ export class SlideEditor {
     }
     this.page.appendChild(box);
     const styleAttr = t.getAttribute("style");
+    // The text as it was, for Escape: typing is copied into it as it goes.
+    const original = t.cloneNode(true);
     t.setAttribute("data-editing", "true");
     t.style.visibility = "hidden";
-    this.textEdit = { t, box, isNew, base, styleAttr, pitch: this.linePitch(t), scale: 1, range: null, holding: false };
+    this.textEdit = { t, box, isNew, base, styleAttr, original, tx: this.tx, pitch: this.linePitch(t), scale: 1, range: null, holding: false };
     box.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); this.endTextEdit(true); }
+      if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); this.cancelTextEdit(); }
+      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); this.endTextEdit(true); }
     });
     box.addEventListener("paste", (e) => {
       // Text from elsewhere comes in plain, in this text's look.
@@ -2088,6 +2361,17 @@ export class SlideEditor {
     return lines;
   }
 
+  /** Leave the text edit without keeping it (Escape): the text goes back to
+   *  what it was when the edit began, a new one is removed, and no undo step
+   *  is recorded. The working copy is told, since typing was synced into it. */
+  cancelTextEdit() {
+    if (!this.textEdit) return;
+    this.endTextEdit(false);
+    this.hooks.textChanged?.(this.serialize());
+  }
+
+  /** Finish the text edit: save (an undo step) or put the text back as it
+   *  was (see cancelTextEdit; load() uses this without telling anyone). */
   endTextEdit(save) {
     const te = this.textEdit;
     if (!te) return;
@@ -2098,7 +2382,21 @@ export class SlideEditor {
     t.removeAttribute("data-editing");
     // Put the style back exactly as written, so looking is not an edit.
     if (te.styleAttr === null) t.removeAttribute("style"); else t.setAttribute("style", te.styleAttr);
-    if (!save) { this.abort(); this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (!save) {
+      if (isNew) {
+        t.remove();
+        this.selection = this.selection.filter((el) => el !== t);
+      } else if (te.materialized) {
+        for (const a of Array.from(t.attributes)) t.removeAttributeNS(a.namespaceURI, a.localName);
+        for (const a of Array.from(te.original.attributes)) t.setAttributeNS(a.namespaceURI, a.name, a.value);
+        t.replaceChildren(...te.original.childNodes);
+      }
+      // Only the undo step this edit opened (or joined from a new text).
+      if (te.tx && this.tx === te.tx) this.abort();
+      this.drawOverlay();
+      this.hooks.select(this.selection);
+      return;
+    }
     const trim = (ls) => { while (ls.length && !ls[ls.length - 1].some((r) => r.text.trim())) ls.pop(); return ls; };
     trim(lines);
     if (!lines.length) {
@@ -2419,6 +2717,10 @@ export class SlideEditor {
    *  to descendants that set it themselves. */
   setStyle(prop, value, elements = this.selection) {
     if (!elements.length) return;
+    if (STROKE_STYLE.has(prop)) {
+      value = strokeStyleValue(prop, value);
+      if (value === null) return;  // not a value this property takes
+    }
     this.change(() => {
       for (const el of elements) this.applyStyle(el, prop, value);
       if (prop === "stroke" || prop === "stroke-width") this.recolorMarkers(elements);
@@ -2426,15 +2728,22 @@ export class SlideEditor {
   }
 
   applyStyle(el, prop, value) {
+    // Pressure ink is a filled outline: a dash or line cap would not apply.
+    if (STROKE_STYLE.has(prop) && el.getAttribute("data-ink") === "pressure") return;
     if (el.localName === "text") { this.applyTextStyle(el, prop, value); return; }
-    el.style.setProperty(prop, value);
-    el.removeAttribute(prop);
+    const set = (node) => {
+      node.removeAttribute(prop);
+      if (prop === "stroke-dasharray" && value === "none") {
+        // No dashes: drop the property, or say none if it would inherit some.
+        node.style.removeProperty(prop);
+        if (getComputedStyle(node).strokeDasharray !== "none") node.style.setProperty(prop, "none");
+      } else node.style.setProperty(prop, value);
+    };
+    set(el);
     if (el.localName === "g" || el.localName === "text" || el.localName === "a") {
       for (const d of el.querySelectorAll("*")) {
-        if (d.style.getPropertyValue(prop) || d.hasAttribute(prop)) {
-          d.style.setProperty(prop, value);
-          d.removeAttribute(prop);
-        }
+        if (STROKE_STYLE.has(prop) && d.getAttribute("data-ink") === "pressure") continue;
+        if (d.style.getPropertyValue(prop) || d.hasAttribute(prop)) set(d);
       }
     }
   }

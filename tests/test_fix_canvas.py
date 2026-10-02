@@ -98,7 +98,7 @@ def test_undo_of_a_new_text_removes_it(page, server):
     page.keyboard.press('t')
     page.mouse.click(*to_screen(page, 300, 300))
     page.keyboard.type('Hello')
-    page.keyboard.press('Escape')
+    page.keyboard.press('Control+Enter')
     assert page.evaluate(texts) == before + 1
     page.evaluate('svgdeckEditor.undo()')
     assert page.evaluate(texts) == before

@@ -30,6 +30,9 @@ my-talk/
   `slides/<id>.svg`; ids are stable when slides are reordered.
 - A slide entry may also contain `notes`, a plain-text string for speaker view.
 - `background` fills the screen around the slide when the window is not 16:9.
+- The service accepts a `title` of up to 200 characters, a `size` of two
+  integers from 16 to 16384, and a `background` of up to 64 characters
+  (a CSS colour; no `<` or line breaks).
 - `fonts` lists every font face the deck ships. Text in the slides refers to
   them with `font-family`, `font-weight` and `font-style`, exactly as CSS
   font matching does.
@@ -132,6 +135,9 @@ unchanged files are shared across snapshots. Commit history is not pruned.
 rebuilt from the manifests.
 Media and fonts remain in their existing directories and are referenced rather
 than copied. Keep those assets with the deck when backing it up.
+Renaming a deck moves the whole directory, history included; duplicating a
+deck copies `deck.json`, `slides/`, `media/` and `fonts/` only, so the copy
+starts its own history.
 
 The first working mutation preserves a baseline. Full-deck restore checks the
 metadata version and every current slide version, saves a safety snapshot,
