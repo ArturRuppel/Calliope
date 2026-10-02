@@ -226,6 +226,7 @@ export class SlideEditor {
 
   // --- loading and saving --------------------------------------------------
   load(text, { keepView = false } = {}) {
+    clearTimeout(this.nudgeTimer); this.nudging = null;
     // A loaded document must never inherit a transaction or captured pointer
     // from the document it replaces. Callers that want to keep a draft must
     // finish it before loading.
@@ -742,6 +743,61 @@ export class SlideEditor {
     this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(dx, dy)));
   }
 
+  /** The selection's bounding box in slide units, {x, y, width, height}, or null. */
+  selectionGeometry() {
+    return this.selectionBox();
+  }
+
+  /** Move and scale the selection as one piece so that its bounding box
+   *  becomes the given one; fields left out keep their value. One undo step. */
+  setSelectionGeometry({ x, y, width, height } = {}) {
+    const box = this.selectionBox();
+    if (!box) return;
+    const nx = Number.isFinite(x) ? x : box.x, ny = Number.isFinite(y) ? y : box.y;
+    const nw = Math.max(Number.isFinite(width) ? width : box.width, 0.01);
+    const nh = Math.max(Number.isFinite(height) ? height : box.height, 0.01);
+    const sx = box.width > 1e-9 ? nw / box.width : 1, sy = box.height > 1e-9 ? nh / box.height : 1;
+    const D = new DOMMatrix().translateSelf(nx, ny).scaleSelf(sx, sy).translateSelf(-box.x, -box.y);
+    this.change(() => this.applyDelta(this.snapshot(), D));
+  }
+
+  /** Move the selection by a key press. Presses within half a second of each
+   *  other join one undo step; a pointer gesture or a load ends it at once. */
+  nudge(dx, dy) {
+    if (!this.selection.length || this.textEdit) return;
+    clearTimeout(this.nudgeTimer);
+    if (!this.nudging) this.nudging = { tx: this.begin(), snaps: this.snapshot(), dx: 0, dy: 0 };
+    const n = this.nudging;
+    n.dx += dx; n.dy += dy;
+    this.applyDelta(n.snaps, new DOMMatrix().translateSelf(n.dx, n.dy));
+    this.drawOverlay();
+    this.nudgeTimer = setTimeout(() => this.endNudge(), 500);
+  }
+
+  /** Close the undo step a run of nudges opened, if one is open. */
+  endNudge() {
+    clearTimeout(this.nudgeTimer);
+    if (!this.nudging) return;
+    this.nudging = null;
+    this.commit();
+  }
+
+  /** A rect's corner radius in its own units (0 when square). */
+  radiusOf(el) {
+    return el?.localName === "rect" ? +(el.getAttribute("rx") || el.getAttribute("ry") || 0) : 0;
+  }
+
+  /** Round the corners of the selected rects; 0 makes them square again. */
+  setRadius(r, elements = this.selection.filter((el) => el.localName === "rect")) {
+    const v = Math.max(0, +r || 0);
+    this.change(() => {
+      for (const el of elements) {
+        if (v) { el.setAttribute("rx", String(v)); el.setAttribute("ry", String(v)); }
+        else { el.removeAttribute("rx"); el.removeAttribute("ry"); }
+      }
+    });
+  }
+
   smartMove(box, dx, dy) {
     if (!this.smartSnap || this.grid.snap || !box) return { dx, dy, guides: [] };
     const selected = new Set(this.selection);
@@ -799,6 +855,7 @@ export class SlideEditor {
   }
 
   onDown(e) {
+    this.endNudge();
     this.clearLongPress();
     if (e.target.closest && e.target.closest(".text-edit")) return;
     if (!this.svg) return;
