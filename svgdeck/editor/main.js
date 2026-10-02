@@ -919,9 +919,26 @@ function selBarItems() {
     ...tail].filter(Boolean)];
 }
 
+// Like renderPanel, a nested call (from a released button) asks for one more pass.
+let selBarDrawing = false, selBarAgain = false;
+function updateSelBar() {
+  if (selBarDrawing) { selBarAgain = true; return; }
+  selBarDrawing = true;
+  try {
+    releaseFocus($("sel-bar"));
+    for (let pass = 0; pass < 3; pass++) {
+      selBarAgain = false;
+      drawSelBar();
+      if (!selBarAgain) break;
+    }
+  } finally {
+    selBarDrawing = false;
+  }
+}
+
 /** Draw the bar above the selection (below it near the top), right-aligned
  *  for objects on the right half, so it never covers what it edits. */
-function updateSelBar() {
+function drawSelBar() {
   const bar = $("sel-bar");
   const items = editor.svg ? selBarItems() : null;
   if (!items) { bar.hidden = true; alignOpen = false; return; }
@@ -982,6 +999,14 @@ function placeSelBar() {
   bar.style.left = `${left}px`;
   bar.style.top = `${Math.max(60, top)}px`;
 }
+
+// The stage never takes focus (its pointerdown is prevented). A field or
+// button outside it gives focus up here, so a typed value is applied before
+// the gesture, and Enter or Delete afterwards act on the canvas.
+$("stage").addEventListener("pointerdown", () => {
+  const active = document.activeElement;
+  if (active && active !== document.body && !$("stage").contains(active)) active.blur();
+}, true);
 
 // Hide the bar while a finger or the Pencil is moving something.
 $("stage").addEventListener("pointerdown", () => document.body.classList.add("gesturing"));
@@ -1219,7 +1244,13 @@ function colorControl(value, onPick, allowNone) {
 
 function numberControl(value, { min = 0, max = 1000, step = 1, suffix = "" } = {}, onSet) {
   const input = el("input", { type: "number", value: +(+value).toFixed(2), min, max, step, inputmode: "decimal" });
-  input.addEventListener("change", () => { if (input.value !== "") onSet(+input.value); });
+  const shown = panelSelection;
+  input.addEventListener("change", () => {
+    // A value typed for objects that are no longer selected is not applied to others.
+    const sel = editor.selection;
+    if (shown.length !== sel.length || shown.some((o, i) => o !== sel[i])) return;
+    if (input.value !== "") onSet(+input.value);
+  });
   return el("span", { class: "num" }, input, suffix);
 }
 
@@ -1238,10 +1269,39 @@ function families() {
   return [...new Set(state.faces.map((f) => f.family))].sort();
 }
 
+/** Blur the focused element if it is inside one of hosts. A field that is
+ *  removed while focused fires its change event in the middle of the
+ *  removal; blurring first lets that change (an edit, a commit, a nested
+ *  re-render) happen while nothing is being replaced. */
+function releaseFocus(...hosts) {
+  const active = document.activeElement;
+  if (active && active !== document.body && hosts.some((h) => h?.contains(active))) active.blur();
+}
+
+// renderPanel can be reached again while it runs (a released field commits,
+// the commit re-selects): the nested call only asks for one more pass.
+let panelRendering = false, panelAgain = false;
 function renderPanel() {
   if (!state.deck) return;
+  if (panelRendering) { panelAgain = true; return; }
+  panelRendering = true;
+  try {
+    releaseFocus($("panel"), $("objects-mount"), document.querySelector("dialog.media-tools"));
+    for (let pass = 0; pass < 3; pass++) {
+      panelAgain = false;
+      drawPanel();
+      if (!panelAgain) break;
+    }
+  } finally {
+    panelRendering = false;
+  }
+}
+
+let panelSelection = [];  // the selection the panel's fields were drawn for
+function drawPanel() {
   objectPanels?.render();
   mediaTools?.render();
+  panelSelection = [...editor.selection];
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
