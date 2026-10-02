@@ -166,7 +166,8 @@ export class SlideEditor {
     this.penUpAt = -Infinity;
     this.lastTap = null;
     this.textEdit = null;
-    this.before = null;
+    this.tx = null;      // the open undo step, { before }, or null
+    this.txDepth = 0;    // change() calls in progress; the outermost commits
     this.grid = { show: false, snap: false, size: 20 };  // slide pixels
     this.smartSnap = true;
     this.smartGuides = [];
@@ -232,9 +233,15 @@ export class SlideEditor {
     this.pointers.clear();
     this.palms.clear();
     this.touchStart = null;
-    this.before = null;
+    this.abort();
     this.pathDraft = null;
     this.endTextEdit(false);
+    // Nor any half-finished tap, chosen point or guide.
+    this.clearLongPress();
+    this.nodeSel = null;
+    this.lastTap = null;
+    this.lastSegmentTap = null;
+    this.smartGuides = [];
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
     if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") {
       throw new Error("this slide is not valid SVG");
@@ -289,24 +296,62 @@ export class SlideEditor {
     return '<?xml version="1.0" encoding="utf-8"?>\n' + new XMLSerializer().serializeToString(clone) + "\n";
   }
 
+  /** The slide as it was when the open undo step began, or null. Setting it
+   *  to null discards the open step, like abort(). */
+  get before() { return this.tx ? this.tx.before : null; }
+  set before(v) { if (v === null) this.abort(); else this.tx = { before: v }; }
+
+  /** Open an undo step unless one is open. Returns the step if this call
+   *  opened it (whoever opened it may abort it), null if it joined one. */
   begin() {
-    if (this.before === null) this.before = this.serialize();
+    if (this.tx) return null;
+    this.tx = { before: this.serialize() };
+    return this.tx;
   }
 
   commit() {
-    if (this.before === null) return;
-    const before = this.before;
-    this.before = null;
-    const after = this.serialize();
+    if (!this.tx || this.txDepth > 0) return;  // inside change(): the outermost one commits
+    const { before } = this.tx;
+    this.tx = null;
+    let after = this.serialize();
+    if (after !== before && this.collectDefs()) after = this.serialize();
     if (after !== before) this.hooks.commit(before, after);
     this.drawOverlay();
     this.hooks.select(this.selection);
   }
 
-  /** Run a change as one undoable step. */
+  /** Close the open undo step without recording it; the slide stays as it is. */
+  abort() {
+    this.tx = null;
+  }
+
+  /** Run a change as one undoable step. Changes inside it join that step. */
   change(fn) {
     this.begin();
-    try { fn(); } finally { this.commit(); }
+    this.txDepth++;
+    try { fn(); } finally { this.txDepth--; this.commit(); }
+  }
+
+  /** Remove the clip paths and image filters the editor made that nothing
+   *  refers to any more (their image was deleted or cut). Returns whether
+   *  any were removed. Definitions from elsewhere are never touched. */
+  collectDefs() {
+    const owned = Array.from(this.svg.querySelectorAll('clipPath[id^="svgdeck-clip-"], filter[id^="svgdeck-image-filter-"]'))
+      .filter((d) => d.localName === "clipPath" || d.hasAttribute("data-image-adjustment-filter") || d.hasAttribute("data-image-adjustment-version"));
+    if (!owned.length) return false;
+    const used = new Set();
+    for (const el of this.svg.querySelectorAll("*")) {
+      if (owned.some((d) => d.contains(el))) continue;
+      for (const attr of Array.from(el.attributes)) {
+        const v = attr.value;
+        if (attr.localName === "href" && v.startsWith("#")) used.add(v.slice(1));
+        else if (attr.localName === "data-svgdeck-clip" || attr.localName === "data-svgdeck-image-filter") used.add(v.trim());
+        if (v.includes("url(")) for (const m of v.matchAll(/url\(\s*['"]?#([^'")\s]+)/g)) used.add(m[1]);
+      }
+    }
+    const unused = owned.filter((d) => !used.has(d.id));
+    for (const d of unused) d.remove();
+    return unused.length > 0;
   }
 
   // --- view ----------------------------------------------------------------
@@ -460,6 +505,20 @@ export class SlideEditor {
     return unionBox(this.selection.map((el) => rootBox(el, this.svg)));
   }
 
+  /** A single object turned by other than quarter turns is resized in its
+   *  own frame, so it stays a rectangle: {angle, box in the frame, toSlide,
+   *  toFrame}. Null when the selection is resized along the slide's axes. */
+  selectionFrame() {
+    if (this.selection.length !== 1 || this.lineMode()) return null;
+    const m = toRoot(this.selection[0], this.svg);
+    let angle = Math.atan2(m.b, m.a) * 180 / Math.PI;
+    angle -= Math.round(angle / 90) * 90;  // the handle names stay nearest to the screen's
+    if (Math.abs(angle) < 1e-3) return null;
+    const toSlide = new DOMMatrix().rotateSelf(angle), toFrame = toSlide.inverse();
+    const box = rootBox(this.selection[0], this.svg, toFrame);
+    return box && { angle, box, toSlide, toFrame };
+  }
+
   /** A single straight line is edited by its two ends, not a box. */
   lineMode() {
     return this.selection.length === 1 && this.selection[0].localName === "line" ? this.selection[0] : null;
@@ -490,8 +549,10 @@ export class SlideEditor {
       const i = d[0] <= d[1] ? 0 : 1;
       return d[i] <= radius / this.zoom ? (i ? "end2" : "end1") : null;
     }
-    const box = this.selectionBox();
+    const frame = this.selectionFrame();
+    const box = frame ? frame.box : this.selectionBox();
     if (!box) return null;
+    if (frame) p = frame.toFrame.transformPoint(new DOMPoint(p.x, p.y));
     // Inside the object, handles only win right at their centre, so small
     // objects can still be dragged and double-tapped.
     const inside = p.x > box.x && p.x < box.x + box.width && p.y > box.y && p.y < box.y + box.height;
@@ -595,17 +656,20 @@ export class SlideEditor {
       }
       return;
     }
-    const box = this.selectionBox();
+    const frame = this.textEdit ? null : this.selectionFrame();
+    const box = frame ? frame.box : this.selectionBox();
     if (!box || this.textEdit) return;
-    make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px });
+    // A turned object's box and handles are drawn in its own frame.
+    const turn = frame ? { transform: `rotate(${frame.angle})` } : {};
+    make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px, ...turn });
     if (!this.usesTool("select")) return;
     const pos = this.handlePositions(box);
-    make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px });
-    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px });
+    make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px, ...turn });
+    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px, ...turn });
     for (const name of HANDLES) {
       const [hx, hy] = pos[name];
       make("rect", { x: hx - 7 * px, y: hy - 7 * px, width: 14 * px, height: 14 * px, rx: 3 * px,
-        class: "ov-handle", "stroke-width": 1.5 * px });
+        class: "ov-handle", "stroke-width": 1.5 * px, ...turn });
     }
   }
 
@@ -632,7 +696,9 @@ export class SlideEditor {
       const M = L.multiply(s.T0);
       for (const [a, v] of Object.entries(s.geometry)) s.el.setAttribute(a, v);
       const translateOnly = near(s.T0.a, 1) && near(s.T0.d, 1) && near(s.T0.b, 0) && near(s.T0.c, 0);
-      if (BAKEABLE.has(s.el.localName) && translateOnly && near(M.b, 0) && near(M.c, 0) && this.bake(s.el, M)) {
+      // An image's mirror cannot be written into its geometry: it stays a transform.
+      const mirrored = s.el.localName === "image" && (M.a < 0 || M.d < 0);
+      if (BAKEABLE.has(s.el.localName) && translateOnly && !mirrored && near(M.b, 0) && near(M.c, 0) && this.bake(s.el, M)) {
         s.el.removeAttribute("transform");
       } else {
         setTransform(s.el, M);
@@ -748,7 +814,7 @@ export class SlideEditor {
     // touch entries survived a missing release from a native iPad prompt.
     if (e.pointerType === "touch" && e.isPrimary) {
       for (const [id, pointer] of [...this.pointers]) {
-        if (pointer.type === "touch") this.onCancel({ pointerId: id, pointerType: "touch" });
+        if (pointer.type === "touch") this.onCancel({ pointerId: id, pointerType: "touch", clientX: pointer.x, clientY: pointer.y });
       }
     }
     if (e.pointerType === "pen") this.rejectTouches();
@@ -805,8 +871,7 @@ export class SlideEditor {
       case "bezier": return this.downPath(p, base);
       case "pen": return this.downPen(p, base, e);
       case "erase":
-        this.begin();
-        this.gesture = { kind: "erase", ...base, removed: [] };
+        this.gesture = { kind: "erase", ...base, removed: [], tx: this.begin() };
         this.eraseAt(e);
         return;
       case "text": this.gesture = { kind: "text", ...base }; return;
@@ -904,7 +969,11 @@ export class SlideEditor {
     const nodes = fitStroke(g.trail, tolerance, { reach: 14 / this.zoom });
     // A Pencil tap that slid a little is still a tap.
     const extent = Math.max(...g.trail.map((q) => Math.hypot(q.x - g.trail[0].x, q.y - g.trail[0].y)));
-    if (nodes.length < 2 || extent * this.zoom < 16) { if (!g.extend) draft.nodes.push(g.node); this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (nodes.length < 2 || extent * this.zoom < 16) {
+      if (!g.extend) draft.nodes.push(g.node);
+      draft.lastAt = performance.now();  // so a second tap on it finishes the path
+      this.drawOverlay(); this.hooks.select(this.selection); return;
+    }
     const reach = (g.pointerType === "touch" ? 18 : 10) / this.zoom;
     const near = (a, b) => a && b && Math.hypot(a.x - b.x, a.y - b.y) < reach;
     const alone = !draft.nodes.length, last = draft.nodes.at(-1);
@@ -1032,7 +1101,7 @@ export class SlideEditor {
     const model = el && this.nodeModel(el);
     if (model) {
       const { targets, map, matrix } = this.nodeTargets(el, model);
-      const radius = e.pointerType === "touch" ? 22 : 12;
+      const radius = { touch: 22, pen: 14 }[e.pointerType] || 12;
       let hit = null, score = Infinity;
       for (const t of targets) {
         const d = Math.hypot(t.p.x - p.x, t.p.y - p.y) * this.zoom;
@@ -1042,8 +1111,7 @@ export class SlideEditor {
       }
       if (hit) {
         this.nodeSel = { el, sub: hit.sub, i: hit.i };
-        this.begin();
-        this.gesture = { kind: "node", ...base, el, model, sub: hit.sub, i: hit.i, part: hit.part,
+        this.gesture = { kind: "node", ...base, tx: this.begin(), el, model, sub: hit.sub, i: hit.i, part: hit.part,
           inverse: matrix.inverse(), attr: model.kind === "path" ? "d" : "points",
           original: el.getAttribute(model.kind === "path" ? "d" : "points"), types: el.getAttribute("data-nodetypes") };
         this.lastSegmentTap = null;
@@ -1266,19 +1334,19 @@ export class SlideEditor {
   downSelect(e, p, base) {
     const handle = this.hitHandle(p, e.pointerType);
     if (handle === "end1" || handle === "end2") {
-      this.begin();
+      const tx = this.begin();
       const line = this.lineMode();
       const which = handle === "end1" ? 1 : 2;
-      this.gesture = { kind: "endpoint", ...base, line, which, inverse: toRoot(line, this.svg).inverse(),
+      this.gesture = { kind: "endpoint", ...base, tx, line, which, inverse: toRoot(line, this.svg).inverse(),
         original: [line.getAttribute(`x${which}`), line.getAttribute(`y${which}`)] };
       return;
     }
     if (handle) {
-      this.begin();
-      const box = this.selectionBox();
+      const tx = this.begin();
+      const box = this.selectionBox(), frame = this.selectionFrame();
       this.gesture = handle === "rotate"
-        ? { kind: "rotate", ...base, center: [box.x + box.width / 2, box.y + box.height / 2], snaps: this.snapshot() }
-        : { kind: "resize", ...base, handle, box, snaps: this.snapshot() };
+        ? { kind: "rotate", ...base, tx, center: [box.x + box.width / 2, box.y + box.height / 2], snaps: this.snapshot() }
+        : { kind: "resize", ...base, tx, handle, box: frame ? frame.box : box, frame, snaps: this.snapshot() };
       return;
     }
     let el = this.pick(e, p);
@@ -1324,9 +1392,9 @@ export class SlideEditor {
       path.setAttribute("stroke-linecap", "round");
       path.setAttribute("stroke-linejoin", "round");
     }
-    this.begin();
+    const tx = this.begin();
     this.adopt(path);
-    this.gesture = { kind: "draw", ...base, path, pressure, width: style.strokeWidth, level: null, points: [] };
+    this.gesture = { kind: "draw", ...base, tx, path, pressure, width: style.strokeWidth, level: null, points: [] };
     this.addInkPoint(this.gesture, p, e);
     this.drawInk(this.gesture, false);
   }
@@ -1392,7 +1460,7 @@ export class SlideEditor {
     g.moved = true;
     switch (g.kind) {
       case "move": {
-        if (!g.snaps) { this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
+        if (!g.snaps) { g.tx = this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
         let dx = p.x - g.start.x, dy = p.y - g.start.y;
         const horizontal = e.shiftKey && Math.abs(dx) > Math.abs(dy), vertical = e.shiftKey && !horizontal;
         if (!e.altKey) {
@@ -1475,6 +1543,7 @@ export class SlideEditor {
       case "marquee": break;
       case "create": this.moveCreate(g, p, e.shiftKey); break;
       case "draw": {
+        this.clearLongPress();  // the stroke has begun; a hold no longer opens the menu
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
         for (const ev of events.length ? events : [e]) this.addInkPoint(g, this.point(ev), ev);
         this.drawInk(g, false);
@@ -1500,14 +1569,23 @@ export class SlideEditor {
       el.remove();
     }
     if (hits.size) {
+      // Erasing is work a long press must not undo, however slow the finger.
+      this.clearLongPress();
       this.selection = this.selection.filter((el) => !hits.has(el));
       this.drawOverlay();
     }
   }
 
   moveResize(g, p, free) {
-    const { box, handle } = g;
-    p = this.snapPoint(p);
+    const { box, handle, frame } = g;
+    // The handle moves as far as the pointer, so grabbing it a little off
+    // its centre does not make the edge jump. A turned object is scaled
+    // along its own axes (in its frame); the grid only snaps upright edges.
+    const [hx, hy] = this.handlePositions(box)[handle];
+    if (frame) {
+      const d = frame.toFrame.transformPoint(new DOMPoint(p.x - g.start.x, p.y - g.start.y));
+      p = { x: hx + d.x, y: hy + d.y };
+    } else p = this.snapPoint({ x: hx + p.x - g.start.x, y: hy + p.y - g.start.y });
     const left = box.x, right = box.x + box.width, top = box.y, bottom = box.y + box.height;
     let sx = 1, sy = 1, ax = left, ay = top;
     if (handle.includes("e")) { ax = left; sx = box.width ? (p.x - left) / box.width : 1; }
@@ -1523,12 +1601,14 @@ export class SlideEditor {
     const min = 2 / Math.max(box.width, box.height, 1);
     if (Math.abs(sx) < min) sx = Math.sign(sx || 1) * min;
     if (Math.abs(sy) < min) sy = Math.sign(sy || 1) * min;
-    this.applyDelta(g.snaps, new DOMMatrix().translateSelf(ax, ay).scaleSelf(sx, sy).translateSelf(-ax, -ay));
+    let D = new DOMMatrix().translateSelf(ax, ay).scaleSelf(sx, sy).translateSelf(-ax, -ay);
+    if (frame) D = frame.toSlide.multiply(D).multiply(frame.toFrame);
+    this.applyDelta(g.snaps, D);
   }
 
   moveCreate(g, p, square) {
     if (!g.el) {
-      this.begin();
+      g.tx = this.begin();
       g.el = this.adopt(this.newShape(g.shape));
     }
     this.shapeGeometry(g.el, g.shape, this.snapPoint(g.start), this.snapPoint(p), square);
@@ -1647,7 +1727,7 @@ export class SlideEditor {
         return;
       case "none": return;
       case "erase":
-        if (g.removed.length) this.commit(); else this.before = null;
+        if (g.removed.length) this.commit(); else if (g.tx && this.tx === g.tx) this.abort();
         return;
       case "marquee": {
         if (!g.moved) { this.tap(e, p, null); this.drawOverlay(); return; }
@@ -1677,6 +1757,10 @@ export class SlideEditor {
         return;
       }
       case "text": {
+        // The undo step starts before the empty text exists, so undoing
+        // the finished text removes it completely.
+        this.endTextEdit(true);
+        this.begin();
         const t = this.newText(this.snapPoint(p));
         this.select([t]);
         this.editText(t, true);
@@ -1747,7 +1831,9 @@ export class SlideEditor {
     if (g.kind === "draw") g.path.remove();
     if (g.kind === "erase") for (const r of g.removed.reverse()) r.parent.insertBefore(r.el, r.next);
     if (g.kind === "create" && g.el) g.el.remove();
-    this.before = null;
+    // Only the undo step this gesture opened: a crop or adjustment in
+    // progress keeps its own.
+    if (g.tx && this.tx === g.tx) this.abort();
     this.drawOverlay();
   }
 
@@ -2012,14 +2098,14 @@ export class SlideEditor {
     t.removeAttribute("data-editing");
     // Put the style back exactly as written, so looking is not an edit.
     if (te.styleAttr === null) t.removeAttribute("style"); else t.setAttribute("style", te.styleAttr);
-    if (!save) { this.before = null; this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (!save) { this.abort(); this.drawOverlay(); this.hooks.select(this.selection); return; }
     const trim = (ls) => { while (ls.length && !ls[ls.length - 1].some((r) => r.text.trim())) ls.pop(); return ls; };
     trim(lines);
     if (!lines.length) {
       t.remove();
       this.selection = this.selection.filter((el) => el !== t);
       if (isNew) {
-        this.before = null;
+        this.abort();
         this.hooks.textChanged?.(this.serialize());
         this.drawOverlay();
         this.hooks.select(this.selection);

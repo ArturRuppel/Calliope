@@ -12,6 +12,7 @@ from xml.etree import ElementTree
 FORMAT = 1
 XLINK_HREF = "{http://www.w3.org/1999/xlink}href"
 REFERENCE_ATTRIBUTES = {"href", XLINK_HREF, "data-video"}
+LINK_ELEMENTS = {"a", "script"}
 
 
 @dataclass
@@ -22,7 +23,7 @@ class Deck:
     @classmethod
     def load(cls, path: Path) -> "Deck":
         path = Path(path)
-        meta = json.loads((path / "deck.json").read_text())
+        meta = json.loads((path / "deck.json").read_text(encoding="utf-8"))
         if meta.get("format") != FORMAT:
             raise ValueError(f"{path}: unsupported deck format {meta.get('format')!r}")
         return cls(path, meta)
@@ -34,16 +35,30 @@ class Deck:
     def slide_file(self, slide_id: str) -> Path:
         return self.path / "slides" / f"{slide_id}.svg"
 
-    def slide_sources(self) -> list[dict]:
-        return [{"id": s["id"], "notes": str(s.get("notes") or ""), "svg": self.slide_file(s["id"]).read_text()}
-                for s in self.meta["slides"]]
+    def _read_slide(self, slide_id: str) -> str:
+        try:
+            return self.slide_file(slide_id).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            raise FileNotFoundError(f"slide {slide_id!r}: file slides/{slide_id}.svg is missing") from None
+
+    def slide_sources(self, include_notes: bool = True) -> list[dict]:
+        sources = []
+        for s in self.meta["slides"]:
+            source = {"id": s["id"], "svg": self._read_slide(s["id"])}
+            if include_notes:
+                source["notes"] = str(s.get("notes") or "")
+            sources.append(source)
+        return sources
 
     def media_files(self) -> set[str]:
         """Deck-relative paths of every file the slides reference."""
         files = set()
         for slide in self.meta["slides"]:
-            root = ElementTree.parse(self.slide_file(slide["id"])).getroot()
+            root = ElementTree.fromstring(self._read_slide(slide["id"]).encode("utf-8"))
             for element in root.iter():
+                # Hyperlinks and scripts are not media the export has to carry.
+                if _local_name(element.tag) in LINK_ELEMENTS:
+                    continue
                 for attribute, ref in element.attrib.items():
                     if attribute not in REFERENCE_ATTRIBUTES:
                         continue
@@ -55,6 +70,10 @@ class Deck:
                         raise ValueError(f"reference is not relative: {ref}")
                     files.add((Path("slides") / path).as_posix())
         return {_normalize(f) for f in files}
+
+
+def _local_name(tag) -> str:
+    return tag.rsplit("}", 1)[-1] if isinstance(tag, str) else ""
 
 
 def _normalize(path: str) -> str:
@@ -70,7 +89,7 @@ def _normalize(path: str) -> str:
 
 
 def _asset(name: str) -> str:
-    return resources.files("svgdeck.player").joinpath(name).read_text()
+    return resources.files("svgdeck.player").joinpath(name).read_text(encoding="utf-8")
 
 
 def font_faces(fonts: list[dict], files: dict[str, str] | None = None) -> str:
@@ -87,11 +106,13 @@ def font_faces(fonts: list[dict], files: dict[str, str] | None = None) -> str:
     return "\n".join(rules)
 
 
-def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None) -> str:
+def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None,
+                include_notes: bool = True) -> str:
     """The self-contained player page: player, styles and all slides inline.
 
-    Media and fonts stay as files next to the page (media/, fonts/)."""
-    data = dict(deck.meta, slides=deck.slide_sources())
+    Media and fonts stay as files next to the page (media/, fonts/). Speaker
+    notes are inlined unless `include_notes` is false."""
+    data = dict(deck.meta, slides=deck.slide_sources(include_notes))
     # "</" would end the <script> element early.
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("</", "<\\/")

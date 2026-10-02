@@ -40,6 +40,12 @@ Each slide is a standalone SVG with `viewBox="0 0 W H"` equal to the deck
 `size`. Paths to media are relative to the slide file (`../media/x.png`), so a
 slide opens correctly on its own in a browser.
 
+A slide's `<style>` element applies to that slide only: the player scopes its
+rules and prefixes the ids and `url(#id)` references inside them. Presentation
+attributes on the root `<svg>` (font, fill, class and so on) apply to the whole
+slide. Relative `<a href>` links are left as written and are not treated as
+media.
+
 Ids only need to be unique within one slide; the player prefixes them per
 slide when it puts all slides in one page.
 
@@ -65,7 +71,8 @@ A movie is a top-level `<image>` whose `href` is a poster frame and whose
 | `data-sync` | none | sync group: moving between slides whose movies share a group keeps the playback time, so a movie continues across slides |
 
 Objects above the movie in stacking order are drawn on top of it.
-Movies are always muted.
+Movies are always muted. The player keeps only the current and the neighbouring
+slides' movies loaded.
 
 ### Editor attributes
 
@@ -78,7 +85,7 @@ Movies are always muted.
 | `data-hidden="true"` | hidden through the Objects panel; paired with inline `display:none` so it remains hidden outside the editor |
 | `data-crop="L T R B"` | image/movie crop insets in percent, each between 0 and 99.9; opposing insets must leave at least 0.1% visible |
 | `data-mask="rect"` or `"ellipse"` | crop mask shape; the editor also writes a native SVG `clipPath` in object-bounding-box units |
-| `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference |
+| `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference. The editor edits a clip in place only when this names the clip that `clip-path` references; any other `clip-path` is imported and left alone (`data-crop` alone does not make it editable) |
 
 ### Image adjustments
 
@@ -121,6 +128,8 @@ are immutable JSON manifests in `commits/manifests/<id>.json`, containing a
 parent ID, message, timestamp, and SHA-256 object references for the exact
 metadata and each referenced SVG. Content lives in `commits/objects/<sha256>`;
 unchanged files are shared across snapshots. Commit history is not pruned.
+`commits/HEAD` caches the id of the latest commit; it may be deleted and is
+rebuilt from the manifests.
 Media and fonts remain in their existing directories and are referenced rather
 than copied. Keep those assets with the deck when backing it up.
 

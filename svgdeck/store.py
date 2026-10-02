@@ -104,8 +104,12 @@ class Store:
             name = meta.parent.name
             with self._lock(name):
                 deck = Deck.load(meta.parent)
+                # Only the slides count: revisions/, trash/ and commits/ hold
+                # copies whose mtimes say nothing about the deck's last edit.
+                modified = max((p.stat().st_mtime for p in (meta.parent / "slides").glob("*.svg")),
+                               default=meta.stat().st_mtime)
                 out.append({"name": name, "title": deck.title, "slides": len(deck.meta["slides"]),
-                            "modified": max(p.stat().st_mtime for p in meta.parent.rglob("*.svg")) if deck.meta["slides"] else meta.stat().st_mtime})
+                            "modified": modified})
         return sorted(out, key=lambda d: -d["modified"])
 
     def create_deck(self, name: str, title: str, size=(1920, 1080)) -> dict:
@@ -249,7 +253,7 @@ class Store:
 
     def _read_manifest(self, name: str, commit: str) -> dict:
         try:
-            value = json.loads(self._manifest_path(name, commit).read_text())
+            value = json.loads(self._manifest_path(name, commit).read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
             raise KeyError(commit) from error
         if value.get("id") != commit or not isinstance(value.get("slides"), dict):
@@ -261,11 +265,26 @@ class Store:
         return value
 
     def _head_commit(self, name: str) -> str | None:
+        """The newest commit id. `commits/HEAD` caches it so a slide save does
+        not parse every manifest; a missing or stale file falls back to a scan."""
+        commits = self._commit_root(name)
+        try:
+            head = (commits / "HEAD").read_text(encoding="utf-8").strip()
+        except OSError:
+            head = ""
+        if COMMIT_ID.fullmatch(head) and (commits / "manifests" / f"{head}.json").is_file():
+            return head
+        head = self._scan_head_commit(name)
+        if head is not None:
+            write_atomic(commits / "HEAD", (head + "\n").encode())
+        return head
+
+    def _scan_head_commit(self, name: str) -> str | None:
         root = self._commit_root(name) / "manifests"
         candidates = []
         for path in root.glob("*.json") if root.is_dir() else []:
             try:
-                item = json.loads(path.read_text())
+                item = json.loads(path.read_text(encoding="utf-8"))
                 if item.get("id") == path.stem and COMMIT_ID.fullmatch(path.stem):
                     candidates.append((int(item["createdNs"]), path.stem))
             except (OSError, ValueError, KeyError, TypeError):
@@ -325,6 +344,7 @@ class Store:
             raise OSError("commit id collision")
         if not target.exists():
             write_atomic(target, encoded)
+        write_atomic(root / "HEAD", (commit + "\n").encode())
         return manifest
 
     def _ensure_baseline(self, name: str) -> None:
@@ -404,6 +424,8 @@ class Store:
             manifest = self._read_manifest(name, commit)
             deck_data = self._object(name, manifest["deck"])
             meta = json.loads(deck_data)
+            if not isinstance(meta, dict) or meta.get("format") != FORMAT:
+                raise ValueError("commit contains an unsupported deck format")
             if not all(isinstance(sid, str) and SLIDE_ID.fullmatch(sid) for sid in manifest["slides"]):
                 raise ValueError("commit manifest contains an invalid slide id")
             slides = {sid: self._object(name, digest) for sid, digest in manifest["slides"].items()}
@@ -583,7 +605,7 @@ class Store:
     def _trash_metadata(svg: Path) -> dict:
         sidecar = svg.with_suffix(".json")
         try:
-            value = json.loads(sidecar.read_text())
+            value = json.loads(sidecar.read_text(encoding="utf-8"))
             return value if isinstance(value, dict) else {}
         except (OSError, ValueError):
             return {}
@@ -608,27 +630,42 @@ class Store:
             if ext == ".svg":
                 check_svg(upload.read_bytes())
             target = media / f"{stem}-{digest}{ext}"
+            existed = target.exists()
             shutil.copyfile(upload, target)
+            try:
+                size = image_size(target)
+            except ValueError:
+                if not existed:
+                    target.unlink(missing_ok=True)
+                raise
             info = {"kind": "image", "href": f"../media/{target.name}"}
-            info.update(zip(("width", "height"), image_size(target)))
+            info.update(zip(("width", "height"), size))
             return info
         if ext in VIDEO_TYPES:
             target = media / f"{stem}-{digest}.mp4"
-            with tempfile.TemporaryDirectory(dir=media) as tmp:
-                source = Path(tmp) / f"upload{ext}"
-                shutil.copyfile(upload, source)
-                if ext == ".mp4" and probe_codec(source) == "h264":
-                    shutil.move(source, target)
-                else:
-                    # H.264 mp4 plays everywhere (Chrome has no HEVC from iPhone .mov).
-                    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(source), "-an",
-                                    "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
-                                    "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-movflags", "+faststart",
-                                    str(target)], check=True)
             poster = target.with_suffix(".poster.jpg")
-            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(target), "-frames:v", "1",
-                            "-q:v", "3", str(poster)], check=True)
-            w, h = probe_size(target)
+            existed = target.exists(), poster.exists()
+            try:
+                with tempfile.TemporaryDirectory(dir=media) as tmp:
+                    source = Path(tmp) / f"upload{ext}"
+                    shutil.copyfile(upload, source)
+                    if ext == ".mp4" and probe_codec(source) == "h264":
+                        shutil.move(source, target)
+                    else:
+                        # H.264 mp4 plays everywhere (Chrome has no HEVC from iPhone .mov).
+                        run_tool(["ffmpeg", "-loglevel", "error", "-y", "-i", str(source), "-an",
+                                  "-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p",
+                                  "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-movflags", "+faststart",
+                                  str(target)], "could not convert movie")
+                run_tool(["ffmpeg", "-loglevel", "error", "-y", "-i", str(target), "-frames:v", "1",
+                          "-q:v", "3", str(poster)], "could not make a poster frame")
+                w, h = probe_size(target)
+            except ValueError:
+                # Do not leave half-written files behind (but keep earlier uploads).
+                for path, kept in zip((target, poster), existed):
+                    if not kept:
+                        path.unlink(missing_ok=True)
+                raise
             return {"kind": "video", "href": f"../media/{poster.name}", "video": f"../media/{target.name}",
                     "width": w, "height": h}
         raise ValueError(f"unsupported file type {ext or '(none)'}")
@@ -712,18 +749,39 @@ def face_info(path: Path) -> dict:
             "name": (name.getDebugName(4) or family).strip()}
 
 
+def run_tool(command: list[str], failure: str) -> subprocess.CompletedProcess:
+    """Run ffmpeg/ffprobe; a missing tool or a failed run becomes a ValueError
+    (shown to the user as a 400 with this message)."""
+    try:
+        return subprocess.run(command, check=True, capture_output=True, text=True, errors="replace")
+    except FileNotFoundError:
+        raise ValueError(f"{command[0]} is not installed") from None
+    except subprocess.CalledProcessError as error:
+        lines = (error.stderr or "").strip().splitlines()
+        raise ValueError(f"{failure}: {lines[-1][:300] if lines else f'{command[0]} exited with status {error.returncode}'}") from error
+
+
 def probe_size(path: Path) -> tuple[int, int]:
-    out = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                          "stream=width,height", "-of", "csv=p=0", str(path)],
-                         check=True, capture_output=True, text=True).stdout
-    w, h = out.strip().split(",")[:2]
-    return int(w), int(h)
+    out = run_tool(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                    "stream=width,height", "-of", "csv=p=0", str(path)],
+                   "could not read the size of the file").stdout
+    try:
+        w, h = (int(part) for part in out.strip().split(",")[:2])
+    except ValueError:
+        w = h = 0
+    if w <= 0 or h <= 0:
+        # ffprobe reports 0,0 (or nothing) for a file it cannot decode.
+        raise ValueError("could not read the size of the file: no picture found")
+    return w, h
 
 
 def probe_codec(path: Path) -> str:
-    return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
-                           "stream=codec_name", "-of", "csv=p=0", str(path)],
-                          capture_output=True, text=True).stdout.strip()
+    try:
+        return subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+                               "stream=codec_name", "-of", "csv=p=0", str(path)],
+                              capture_output=True, text=True, errors="replace").stdout.strip()
+    except FileNotFoundError:
+        raise ValueError("ffprobe is not installed") from None
 
 
 def image_size(path: Path) -> tuple[int, int]:

@@ -59,8 +59,29 @@
 </main>
 <script>
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+  const status = document.getElementById("status");
+  /** The server's message for a failed response; the body need not be JSON. */
+  async function errorText(r, fallback) {
+    try {
+      const detail = (await r.json()).detail;
+      if (typeof detail === "string" && detail) return detail;
+    } catch (e) { /* not JSON */ }
+    return `${fallback} (${r.status} ${r.statusText})`.replace(/ \)$/, ")");
+  }
+  async function getJSON(url, what) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(await errorText(r, `Could not load ${what}`));
+    return r.json();
+  }
   async function load() {
-    const decks = await (await fetch("/api/decks")).json();
+    let decks;
+    try {
+      decks = await getJSON("/api/decks", "the decks");
+    } catch (e) {
+      document.getElementById("decks").textContent = "The decks could not be loaded. Reload the page to try again.";
+      status.textContent = e.message;
+      return;
+    }
     document.getElementById("decks").innerHTML = decks.length ? decks.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
@@ -68,7 +89,14 @@
         <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a>
         <button class="danger" data-delete="${esc(d.name)}">Delete</button></div>`).join("")
       : "<p>No decks yet.</p>";
-    const deleted = await (await fetch("/api/trash")).json();
+    let deleted;
+    try {
+      deleted = await getJSON("/api/trash", "recently deleted decks");
+    } catch (e) {
+      document.getElementById("deleted").innerHTML = "";
+      status.textContent = e.message;
+      return;
+    }
     document.getElementById("deleted").innerHTML = deleted.length ? `<h2>Recently deleted</h2>` + deleted.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · deleted ${new Date(d.deleted * 1000).toLocaleString()}</small></div>
@@ -92,16 +120,20 @@
       return;
     }
     if (!del) disarm();
-    if (del) {
-      armed = null;
-      const r = await fetch(`/api/decks/${encodeURIComponent(del.dataset.delete)}`, { method: "DELETE" });
-      document.getElementById("status").textContent = r.ok ? "" : (await r.json()).detail || "Could not delete the deck.";
-      load();
-    } else if (restore) {
-      const r = await fetch(`/api/trash/${encodeURIComponent(restore.dataset.restore)}/restore`, { method: "POST" });
-      document.getElementById("status").textContent = r.ok ? "" : (await r.json()).detail || "Could not restore the deck.";
-      load();
+    if (!del && !restore) return;
+    armed = null;
+    const [url, init, fallback] = del
+      ? [`/api/decks/${encodeURIComponent(del.dataset.delete)}`, { method: "DELETE" }, "Could not delete the deck"]
+      : [`/api/trash/${encodeURIComponent(restore.dataset.restore)}/restore`, { method: "POST" }, "Could not restore the deck"];
+    let message = "";
+    try {
+      const r = await fetch(url, init);
+      if (!r.ok) message = await errorText(r, fallback);
+    } catch (err) {
+      message = `${fallback}: ${err.message}`;
     }
+    status.textContent = message;
+    await load();
   });
   const form = document.getElementById("new");
   form.title.addEventListener("input", () => {
@@ -112,12 +144,17 @@
   form.name.addEventListener("input", () => { form.name.dataset.touched = "1"; });
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const r = await fetch("/api/decks", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: form.name.value, title: form.title.value }) });
-    if (r.ok) location.href = `/edit/${encodeURIComponent(form.name.value)}`;
-    else document.getElementById("error").textContent = (await r.json()).detail || "Could not create the deck.";
+    const error = document.getElementById("error");
+    try {
+      const r = await fetch("/api/decks", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: form.name.value, title: form.title.value }) });
+      if (r.ok) location.href = `/edit/${encodeURIComponent(form.name.value)}`;
+      else error.textContent = await errorText(r, "Could not create the deck");
+    } catch (err) {
+      error.textContent = `Could not create the deck: ${err.message}`;
+    }
   });
-  load();
+  load().catch((e) => { status.textContent = e.message; });
 </script>
 </body>
 </html>

@@ -60,3 +60,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
  .speaker-mode .svgdeck { right:0; bottom:55%; }
  .speaker-mode .speaker-panel { left:0; top:45%; min-height:55%; }
 }
+
+/* A slide that failed to load keeps its place in the deck. */
+.svgdeck-failed { background:#2a1316; }
+.svgdeck-error { position:absolute; inset:0; margin:0; display:flex; align-items:center; justify-content:center;
+  color:#ffd9d9; font:56px/1.2 system-ui, sans-serif; text-align:center; padding:0 80px; }
+.svgdeck-thumb-failed { display:flex; align-items:center; justify-content:center; aspect-ratio:16/9; background:#2a1316; color:#ffd9d9; }
+.speaker-status { margin:8px 0 0; font-weight:600; }
+.speaker-status[data-connected="true"] { color:#8be0a4; }
+.speaker-status[data-connected="false"] { color:#ffb86b; }

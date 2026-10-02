@@ -8,6 +8,11 @@ const round = (v) => +v.toFixed(2);
 
 export function installMediaTools({ editor, toast = () => {}, settle = () => {} }) {
   let session = null;
+  // Pointers the canvas is tracking for its own gestures (pan, pinch, select).
+  // The selection changes the moment one lands, so a selection change that would
+  // cancel the crop only suspends it until they are all up: a pinch puts the
+  // selection back and the crop resumes where it was.
+  const canvasPointers = new Set();
   const dialog = document.createElement("dialog");
   dialog.className = "media-tools direct-crop-tools";
   dialog.setAttribute("aria-label", "Crop media");
@@ -21,7 +26,8 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
 
   const selectedMedia = () => editor.selection.length === 1 && editor.selection[0].localName === "image" ? editor.selection[0] : null;
   const clipId = (el) => /^url\(\s*['"]?#([^'")\s]+)['"]?\s*\)$/.exec(el?.getAttribute("clip-path") || "")?.[1] || null;
-  const ownedClip = (el) => (el?.hasAttribute("data-crop") || el?.hasAttribute("data-mask")) ? clipId(el) : null;
+  // A clip is ours only when the element names it in data-svgdeck-clip and clip-path still points there.
+  const ownedClip = (el) => { const id = clipId(el); return id && el.getAttribute("data-svgdeck-clip") === id ? id : null; };
   const existingForeignClip = (el) => el?.hasAttribute("clip-path") && !ownedClip(el);
   const clipUsers = (id) => Array.from(editor.svg.querySelectorAll("[clip-path]")).filter((el) => clipId(el) === id);
   function ensureDefs() {
@@ -52,6 +58,7 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
   function writeClip(el, crop, mask) {
     let id = ownedClip(el);
     let clip = id && editor.svg.querySelector(`#${CSS.escape(id)}`);
+    if (clip && clip.localName !== "clipPath") clip = null;
     if (clip && clipUsers(id).some((user) => user !== el)) {
       clip = clip.cloneNode(true);
       id = uniqueId();
@@ -75,6 +82,7 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
       shape.setAttribute("x", left); shape.setAttribute("y", top);
       shape.setAttribute("width", width); shape.setAttribute("height", height);
     }
+    clip.setAttribute("clipPathUnits", "objectBoundingBox");
     clip.replaceChildren(shape);
     el.setAttribute("data-svgdeck-clip", id);
     el.setAttribute("clip-path", `url(#${id})`);
@@ -85,6 +93,7 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     if (!valid()) return;
     session.crop = normalized(crop, changed);
     session.mask = mask === "ellipse" ? "ellipse" : "rect";
+    if (session.suspended) { if (renderUi) render(); return; }
     session.media.setAttribute("data-crop", session.crop.join(" "));
     session.media.setAttribute("data-mask", session.mask);
     writeClip(session.media, session.crop, session.mask);
@@ -114,8 +123,12 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
 
   function finish(commit) {
     if (!session) return;
-    if (commit && valid()) editor.commit();
-    else { restore(); editor.before = null; }
+    canvasPointers.clear();
+    if (commit && valid() && !session.suspended) editor.commit();
+    else {
+      restore();
+      if (typeof editor.abort === "function") editor.abort(); else editor.before = null;
+    }
     session = null;
     if (dialog.open) dialog.close();
     dialog.replaceChildren();
@@ -231,7 +244,15 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
   function onPointerDown(e) {
     if (!valid()) return false;
     const handle = e.target?.getAttribute?.("data-crop-handle");
-    if (!handle) return true;
+    // Only handles belong to the crop. Anything else (a second finger, a tap on
+    // the stage) goes to the canvas to pan, zoom or change the selection, which
+    // cancels the crop. While a handle is held, a stray second pointer is ignored.
+    if (!handle) {
+      if (session.drag) return true;
+      canvasPointers.add(e.pointerId);
+      return false;
+    }
+    if (session.drag) return true;
     session.drag = { id: e.pointerId, handle, crop: [...session.crop] };
     editor.host.setPointerCapture(e.pointerId); e.preventDefault();
     return true;
@@ -249,15 +270,41 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     return true;
   }
   function onPointerUp(e) {
-    if (!session || session.drag?.id !== e.pointerId) return false;
+    canvasPointers.delete(e.pointerId);
+    if (!session) return false;
+    if (session.drag?.id !== e.pointerId) { queueMicrotask(afterCanvasGesture); return false; }
     session.drag = null; e.preventDefault(); return true;
   }
+  // Runs once the canvas has handled a pointer release.
+  function afterCanvasGesture() {
+    if (!session || canvasPointers.size) return;
+    if (session.suspended) {
+      session.suspended = false;
+      if (editor.selection.length !== 1 || editor.selection[0] !== session.media) {
+        finish(false);
+        editor.hooks?.select?.(editor.selection);
+        return;
+      }
+      session.original = snapshot(session.media);
+      editor.begin();
+      const { media } = session;
+      if (session.crop.join() !== cropOf(media).join() || session.mask !== (media.getAttribute("data-mask") || "rect")) preview(session.crop, session.mask);
+      return;
+    }
+    // The canvas may have committed its own gesture (moving the media) and with it the crop.
+    if (editor.before === null) finish(true);
+  }
   function onPointerCancel(e) {
+    canvasPointers.delete(e.pointerId);
+    if (session && session.drag?.id !== e.pointerId) queueMicrotask(afterCanvasGesture);
     if (!session || session.drag?.id !== e.pointerId) return false;
     const crop = session.drag.crop; session.drag = null; preview(crop, session.mask); e.preventDefault(); return true;
   }
   function onKeyDown(e) {
-    if (!session) return false;
+    if (!session || !valid()) return false;
+    // Keys typed into the notes, a commit message or any other field are theirs.
+    const target = e.target instanceof Element ? e.target : document.activeElement;
+    if (target && !dialog.contains(target) && target.closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return false;
     if (e.key === "Escape" || (e.key.toLowerCase() === "z" && (e.ctrlKey || e.metaKey))) {
       e.preventDefault(); e.stopPropagation(); finish(false); return true;
     }
@@ -271,7 +318,15 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
   }
   document.addEventListener("keydown",onKeyDown,true);
   const api = { open, render, drawOverlay, onPointerDown, onPointerMove, onPointerUp, onPointerCancel,
-    cancel: () => finish(false), finish: () => finish(true), active: () => !!session,
+    cancel() {
+      if (!canvasPointers.size) return finish(false);
+      if (!session || session.suspended) return;
+      // Put the slide back now so the canvas gesture cannot commit half a crop.
+      session.suspended = true;
+      restore();
+      if (typeof editor.abort === "function") editor.abort(); else editor.before = null;
+    },
+    finish: () => finish(true), active: () => !!session,
     onLoad() {
       if (session) finish(false);
       else { dialog.replaceChildren(); if (dialog.open) dialog.close(); }

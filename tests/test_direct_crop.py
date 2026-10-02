@@ -83,3 +83,19 @@ def test_foreign_clip_refuses_without_mutation(page, server):
     page.evaluate("""() => {const e=svgdeckEditor.editor,ns='http://www.w3.org/2000/svg',i=document.createElementNS(ns,'image');i.id='foreign';i.setAttribute('width',100);i.setAttribute('height',100);i.setAttribute('clip-path','url(#foreign-clip)');e.svg.append(i);e.select([i]);}""")
     assert page.evaluate("svgdeckEditor.mediaTools.open()") is False
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#foreign').getAttribute('clip-path')") == "url(#foreign-clip)"
+
+
+def test_clip_without_our_marker_is_never_rewritten(page, server):
+    # data-crop alone does not make a clip ours; only data-svgdeck-clip naming it does.
+    page.evaluate("""() => { const e=svgdeckEditor.editor, ns='http://www.w3.org/2000/svg';
+      const defs=document.createElementNS(ns,'defs');
+      defs.innerHTML='<clipPath id="imported"><circle cx="50" cy="50" r="40"/></clipPath>';
+      e.svg.prepend(defs);
+      const i=document.createElementNS(ns,'image');i.id='cropme';
+      for(const [k,v] of Object.entries({x:0,y:0,width:100,height:100,href:'photo.png','data-crop':'10 0 0 0',
+        'clip-path':'url(#imported)'}))i.setAttribute(k,v);
+      e.svg.append(i);e.select([i]);svgdeckEditor.mediaTools.open(); }""")
+    assert page.evaluate("svgdeckEditor.mediaTools.active()") is False
+    assert 'imported clip path' in page.locator('#toast').text_content()
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#imported').outerHTML") == \
+        '<clipPath id="imported"><circle cx="50" cy="50" r="40"></circle></clipPath>'

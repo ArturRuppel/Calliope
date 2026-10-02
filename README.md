@@ -12,6 +12,10 @@ uv venv .venv && uv pip install -p .venv -e ".[dev]"
 .venv/bin/python -m playwright install chromium   # for the tests
 ```
 
+The service needs `ffmpeg` and `ffprobe` on the path: movies are converted on
+upload and image sizes are probed with them. Slide, font and recovery request
+bodies are capped at 64 MiB; media uploads at 2 GiB.
+
 ## Use
 
 Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
@@ -21,6 +25,7 @@ Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed
 svgdeck export DECK_DIR OUT_DIR --zip talk.zip
+svgdeck export DECK_DIR OUT_DIR --no-notes   # leave the speaker notes out of the copy
 ```
 
 ## The service on sancho
@@ -64,7 +69,8 @@ The editor is laid out for an iPad in landscape:
   it; Escape cancels and Backspace removes the last node. **Continue path**, or
   clicking an endpoint of a selected open curve with Bézier, resumes drawing
   from that endpoint. Pending paths finish when switching tools,
-  presenting/exporting, or leaving the app. They remain a single undo
+  presenting/exporting, or leaving the editor; switching to another app only
+  saves and keeps the draft (text edits too). They remain a single undo
   operation.
 - **Path → Edit points (N)** works on every path (imported ones too: lines,
   arcs and quadratic curves become cubic segments when edited), polygon and
@@ -94,7 +100,8 @@ The editor is laid out for an iPad in landscape:
 - **Text (T)** and **Media** (pictures and movies; movies are converted to
   H.264 mp4 on upload so every browser can play them).
 
-- Tap to select, drag to move, drag the handles to resize (corners keep the
+- Tap to select, drag to move, drag the handles to resize (rotated objects
+  show their handles turned with them and resize along their own axes; corners keep the
   proportions; Shift frees them) or rotate. Drag on empty space to select
   several, or turn on **Several** in the view bar so taps add to (or take out
   of) the selection; the selection bar then offers **Group**. Right-click,
@@ -128,8 +135,10 @@ The editor is laid out for an iPad in landscape:
 - Cropped images and movies use their visible crop for selection bounds, resize handles, alignment and snapping. Crop mode retains access to the full source.
 - **Crop** (selection bar or Design tab) on an image or movie: drag its edge or
   corner handles; the faded original stays visible. Done/Enter accepts the
-  crop as one undo step; Cancel/Escape discards it. Advanced offers numeric
-  insets and rectangle/ellipse masks; Reset restores the full image. Source
+  crop as one undo step; Cancel/Escape discards it. Two fingers still pan and
+  zoom while cropping, and tapping another object cancels the crop. Advanced offers numeric
+  insets and rectangle/ellipse masks; Reset restores the full image. Deleting
+  a cropped or adjusted image also removes its clip path and filter. Source
   media and imported clip paths remain untouched.
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
@@ -170,10 +179,13 @@ The editor is laid out for an iPad in landscape:
   press **Assign a key or button**, then press it. Actions set the Pencil's
   or the finger's tool, set a Pencil tool only while held, or run undo, redo,
   delete, fit and slide changes. Bindings are kept per browser.
-- Edits autosave to the **working copy**. **Deck menu → Commit snapshot…**
+- Edits autosave to the **working copy**. While the service cannot be reached
+  the status reads "Not saved · retrying" and saving is retried with backoff;
+  leaving the editor waits for the save first. **Deck menu → Commit snapshot…**
   saves a named, immutable snapshot of the whole deck, including slide order
   and notes. Its history offers text diffs against the previous commit or
-  working copy and full-deck restore. The first edit protects the original as
+  working copy and full-deck restore (restore asks for a second confirmation).
+  The first edit protects the original as
   a baseline; restoring also saves the working copy as a safety commit.
   Unchanged content is shared and media is never copied into commits.
   Undo/redo remains per slide. Concurrent edits stop saving or restoring
@@ -203,17 +215,24 @@ The controls are a small bar of icons (previous, slide number, next,
 overview, back to editor, full screen). They show for three seconds at the
 start and then hide; a mouse move, the Tab key, or on a touch screen a tap
 along the bottom edge brings them back. The idle mouse cursor hides too.
-Press **O** or **Escape** to toggle the overview; tap a thumbnail to jump to
-that slide. Overview pauses active movies until returning to the presentation.
+Press **O** to toggle the overview (Escape only closes it, so a clicker's
+Escape cannot open it mid-talk); tap a thumbnail to jump to that slide.
+Overview pauses active movies until returning to the presentation. Only the
+current and neighbouring slides' movies stay loaded. Speaker notes are included
+in offline exports by default so speaker view works there; `--no-notes` omits
+them.
 The live service also has **Back to editor**, returning to the current slide.
 Offline exports retain the overview and navigation without an editor dependency.
 Speaker view is also available from the presentation controls in offline exports.
 Its audience window displays only the presentation, with no speaker controls or notes.
 
 
-Arrows / space / page keys / click or swipe to move, a number then
-Enter to jump, `b` or `.` for a blank screen, `f` or double-click for full
-screen. The address bar shows `#slide.step`.
+Arrows / space / page keys / click or swipe to move (`n`/`p` work too), a
+number then Enter to jump, `b` or `.` for a blank screen, `f` or a mouse
+double-click for full screen. A single mouse click advances after a short
+pause so a double-click never changes the slide; taps advance at once. The
+speaker window keeps its session in the address bar, so reloading it
+reconnects the audience window. The address bar shows `#slide.step`.
 
 ## Development tools
 
@@ -237,7 +256,10 @@ on video, so movie tests only run in Chromium.
 
 The installed `svgdeck.service` user unit starts under `default.target`, restarts
 on failure, and binds only the Tailscale address on port 8490. User lingering
-keeps it running across logouts and starts the user manager at boot. Switchboard
-registers the unit with a health URL and `client_url` for its **Open** button.
+keeps it running across logouts and starts the user manager at boot. The unit
+refuses to start until Tailscale has an IPv4 address (an empty address would
+bind every interface) and retries every few seconds. Switchboard registers the
+unit with `GET /healthz` as the health URL (it answers without touching the data
+directory) and `client_url` for its **Open** button.
 These machine-local settings stay outside the repository; decks and licensed
 fonts remain in the separate data directory.
