@@ -1636,6 +1636,19 @@ document.addEventListener("keydown", (e) => {
   if (controller.keydown(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  // Escape closes an open flyout or menu before it acts on the canvas.
+  if (k === "escape" && (flyout || contextMenu || !$("doc-menu").hidden || !$("slide-menu").hidden)) {
+    e.preventDefault();
+    closeFlyout();
+    closeContextMenu(true);
+    closeMenus();
+    return;
+  }
+  // A focused button or link outside the stage keeps its own keys: Enter
+  // and Space activate it rather than editing the selection, Delete does
+  // not delete objects. (Tool letters and arrows still apply.)
+  const control = e.target.closest?.("button, a[href], summary, [role=button], [role=menuitem], [role=tab]");
+  if (control && !$("stage").contains(control) && !mod && ["enter", " ", "delete", "backspace", "escape"].includes(k)) return;
   if (editor.pathDraft && ["enter", "escape", "backspace", "delete"].includes(k)) {
     e.preventDefault();
     if (k === "enter") editor.finishPath(e.shiftKey);
@@ -1884,9 +1897,11 @@ function pasteClipboard() {
 }
 
 function undo() {
+  // While editing text, Undo ends the edit (keeping it as one undo step);
+  // the next Undo takes it back.
+  if (editor.textEdit) { editor.endTextEdit(true); return; }
   const rec = state.slides.get(state.current);
   if (!rec?.undo.length) return;
-  editor.endTextEdit(true);
   rec.redo.push(rec.text);
   const text = rec.undo.pop();
   editor.load(text, { keepView: true });
@@ -1894,6 +1909,7 @@ function undo() {
 }
 
 function redo() {
+  if (editor.textEdit) { editor.endTextEdit(true); return; }
   const rec = state.slides.get(state.current);
   if (!rec?.redo.length) return;
   rec.undo.push(rec.text);
@@ -1913,6 +1929,10 @@ async function present(speaker = false) {
 function wire() {
   $("undo").onclick = undo;
   $("redo").onclick = redo;
+  for (const id of ["undo", "redo"]) {
+    // Keep an open text box focused until the click, which ends the edit as one step.
+    $(id).addEventListener("pointerdown", (e) => { if (editor.textEdit) { editor.textEdit.holding = true; e.preventDefault(); } });
+  }
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
   $("zoom-out").onclick = () => editor.zoomBy(0.8);
   $("zoom-fit").onclick = () => editor.fit();
