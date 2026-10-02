@@ -16,7 +16,8 @@ from .deck import Deck, render_page
 from .export import export
 from .store import Conflict, Store
 
-MAX_UPLOAD = 2 * 1024**3
+MAX_UPLOAD = 2 * 1024**3   # movies and images, streamed to disk
+MAX_BODY = 64 * 1024**2    # slides and fonts, held in memory
 
 
 def create_app(data: Path) -> FastAPI:
@@ -33,11 +34,27 @@ def create_app(data: Path) -> FastAPI:
         except KeyError:
             raise HTTPException(404, "no such deck")
 
+    def deck_problem(error: Exception) -> HTTPException:
+        """A deck that cannot be loaded or rendered: a dangling slide entry, a
+        broken or unsupported deck.json."""
+        if isinstance(error, FileNotFoundError):
+            return HTTPException(404, f"the deck is incomplete: {error}")
+        if isinstance(error, KeyError):
+            return HTTPException(400, f"deck.json is missing {error}")
+        return HTTPException(400, f"the deck cannot be read: {error}")
+
     async def body(request: Request) -> bytes:
-        data = await request.body()
-        if len(data) > MAX_UPLOAD:
+        """A request body that is held in memory, so it is limited to MAX_BODY."""
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > MAX_BODY:
             raise HTTPException(413, "file too large")
-        return data
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > MAX_BODY:
+                raise HTTPException(413, "file too large")
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     async def spooled(request: Request) -> Path:
         """Stream an upload to a file in the data dir (movies can be large)."""
@@ -60,12 +77,12 @@ def create_app(data: Path) -> FastAPI:
     # --- pages ---------------------------------------------------------------
     @app.get("/", response_class=HTMLResponse)
     def index():
-        return (editor_dir / "decks.html").read_text()
+        return (editor_dir / "decks.html").read_text(encoding="utf-8")
 
     @app.get("/edit/{name}", response_class=HTMLResponse)
     def edit(name: str):
         deck_dir(name)
-        return (editor_dir / "editor.html").read_text().replace("{{DECK}}", html.escape(name))
+        return (editor_dir / "editor.html").read_text(encoding="utf-8").replace("{{DECK}}", html.escape(name))
 
     @app.get("/editor/{path:path}")
     def editor_file(path: str):
@@ -74,6 +91,11 @@ def create_app(data: Path) -> FastAPI:
             raise HTTPException(404)
         return FileResponse(target, headers={"Cache-Control": "no-cache"})
 
+    @app.get("/healthz")
+    async def healthz():
+        """Cheap liveness check: does not touch the data directory."""
+        return {"ok": True}
+
     @app.get("/d/{name}")
     def deck_redirect(name: str):
         return RedirectResponse(f"/d/{name}/")
@@ -81,8 +103,11 @@ def create_app(data: Path) -> FastAPI:
     @app.get("/d/{name}/", response_class=HTMLResponse)
     def present(name: str):
         deck_dir(name)
-        with store._lock(name):
-            return render_page(Deck.load(store.deck_dir(name)), editor_url=f"/edit/{name}")
+        try:
+            with store._lock(name):
+                return render_page(Deck.load(store.deck_dir(name)), editor_url=f"/edit/{name}")
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            raise deck_problem(e)
 
     @app.get("/d/{name}/{path:path}")
     def deck_file(name: str, path: str):
@@ -101,7 +126,7 @@ def create_app(data: Path) -> FastAPI:
     async def create_deck(request: Request):
         req = await request.json()
         try:
-            return store.create_deck(str(req.get("name", "")), str(req.get("title", "")))
+            return await to_thread.run_sync(store.create_deck, str(req.get("name", "")), str(req.get("title", "")))
         except FileExistsError:
             raise HTTPException(409, "a deck with that name exists")
         except ValueError as e:
@@ -135,7 +160,7 @@ def create_app(data: Path) -> FastAPI:
         deck_dir(name)
         req = await request.json()
         try:
-            return store.put_deck(name, req.get("deck", {}), req.get("base"))
+            return await to_thread.run_sync(store.put_deck, name, req.get("deck", {}), req.get("base"))
         except Conflict:
             raise HTTPException(409, "the deck changed elsewhere; reload")
         except ValueError as e:
@@ -152,8 +177,8 @@ def create_app(data: Path) -> FastAPI:
         deck_dir(name)
         req = await request.json()
         try:
-            return store.create_commit(name, str(req.get("message", "")),
-                                       req.get("expectedDeck"), req.get("expectedSlides"))
+            return await to_thread.run_sync(store.create_commit, name, str(req.get("message", "")),
+                                            req.get("expectedDeck"), req.get("expectedSlides"))
         except Conflict:
             raise HTTPException(409, "the working copy changed while committing; try again")
         except ValueError as error:
@@ -175,7 +200,8 @@ def create_app(data: Path) -> FastAPI:
         deck_dir(name)
         req = await request.json()
         try:
-            return store.restore_commit(name, commit, req.get("expectedDeck"), req.get("expectedSlides"))
+            return await to_thread.run_sync(store.restore_commit, name, commit,
+                                            req.get("expectedDeck"), req.get("expectedSlides"))
         except KeyError:
             raise HTTPException(404, "no such commit")
         except Conflict:
@@ -197,13 +223,14 @@ def create_app(data: Path) -> FastAPI:
     async def put_slide(name: str, slide: str, request: Request):
         deck_dir(name)
         base = request.headers.get("If-Match", "").strip('"') or None
+        data = await body(request)
         try:
-            ver = store.put_slide(name, slide, await body(request), base)
+            ver = await to_thread.run_sync(store.put_slide, name, slide, data, base)
         except KeyError:
             raise HTTPException(404, "no such slide")
         except Conflict:
             raise HTTPException(409, "the slide changed elsewhere; reload")
-        except Exception as e:
+        except ValueError as e:
             raise HTTPException(400, f"not a valid slide: {e}")
         return {"version": ver}
 
@@ -211,7 +238,7 @@ def create_app(data: Path) -> FastAPI:
     async def slide_revisions(name: str, slide: str):
         deck_dir(name)
         try:
-            return store.list_revisions(name, slide)
+            return await to_thread.run_sync(store.list_revisions, name, slide)
         except KeyError:
             raise HTTPException(404, "no such slide")
 
@@ -219,7 +246,7 @@ def create_app(data: Path) -> FastAPI:
     async def slide_revision(name: str, slide: str, token: str):
         deck_dir(name)
         try:
-            data, ver = store.get_revision(name, slide, token)
+            data, ver = await to_thread.run_sync(store.get_revision, name, slide, token)
         except (KeyError, ValueError):
             raise HTTPException(404, "no such revision")
         return Response(data, media_type="image/svg+xml", headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache"})
@@ -251,7 +278,7 @@ def create_app(data: Path) -> FastAPI:
     @app.get("/api/decks/{name}/trash")
     async def trash(name: str):
         deck_dir(name)
-        return store.list_trash(name)
+        return await to_thread.run_sync(store.list_trash, name)
 
     @app.post("/api/decks/{name}/trash/{token}/restore")
     async def restore_trash(name: str, token: str):
@@ -293,7 +320,8 @@ def create_app(data: Path) -> FastAPI:
     @app.post("/api/fonts")
     async def add_font(filename: str, request: Request):
         try:
-            return store.add_font(filename, await body(request))
+            data = await body(request)
+            return await to_thread.run_sync(store.add_font, filename, data)
         except ValueError as e:
             raise HTTPException(400, str(e))
 
@@ -301,18 +329,46 @@ def create_app(data: Path) -> FastAPI:
     async def use_family(name: str, request: Request):
         deck_dir(name)
         try:
-            return store.use_family(name, str((await request.json()).get("family", "")))
+            family = str((await request.json()).get("family", ""))
+            return await to_thread.run_sync(store.use_family, name, family)
         except KeyError:
             raise HTTPException(404, "no such font family in the library")
 
     # --- API: export ------------------------------------------------------------------
+    def snapshot_deck(name: str, dest: Path) -> Deck:
+        """Copy deck.json and the slides into `dest` under the deck's write lock.
+        media/ and fonts/ are linked, not copied: files there are only ever added,
+        so the (slow) export can run without holding the lock."""
+        with store._lock(name):
+            origin = store.deck_dir(name)
+            deck = Deck.load(origin)
+            (dest / "slides").mkdir(parents=True)
+            shutil.copyfile(origin / "deck.json", dest / "deck.json")
+            for entry in deck.meta["slides"]:
+                try:
+                    shutil.copyfile(deck.slide_file(entry["id"]), dest / "slides" / f"{entry['id']}.svg")
+                except FileNotFoundError:
+                    raise FileNotFoundError(f"slide {entry['id']} has no file") from None
+            for sub in ("media", "fonts"):
+                if (origin / sub).is_dir():
+                    (dest / sub).symlink_to((origin / sub).resolve(), target_is_directory=True)
+        return Deck.load(dest)
+
     @app.get("/api/decks/{name}/export.zip")
     def export_zip(name: str):
         deck_dir(name)
         tmp = Path(tempfile.mkdtemp(prefix="svgdeck-export-", dir=store.data))
         try:
-            with store._lock(name):
-                export(Deck.load(store.deck_dir(name)), tmp / name, tmp / f"{name}.zip")
+            try:
+                snapshot = snapshot_deck(name, tmp / ".snapshot" / name)
+            except KeyError as e:
+                raise HTTPException(404, "no such deck") if e.args == (name,) else deck_problem(e)
+            except (FileNotFoundError, ValueError) as e:
+                raise deck_problem(e)
+            export(snapshot, tmp / name, tmp / f"{name}.zip")
+        except HTTPException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
         except Exception as e:
             shutil.rmtree(tmp, ignore_errors=True)
             raise HTTPException(400, f"export failed: {e}")

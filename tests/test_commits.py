@@ -212,3 +212,72 @@ def test_font_library_filename_collision_never_overwrites_committed_asset(tmp_pa
     manifest = store._read_manifest("talk", commit["id"])
     committed = json.loads(store._object("talk", manifest["deck"]))
     assert committed["fonts"][0]["file"] == "fonts/family.ttf"
+
+
+def test_head_file_is_kept_current_and_a_slide_save_does_not_scan_manifests(tmp_path, monkeypatch):
+    _, root, store = setup(tmp_path)
+    deck_ver, slide_vers = versions(store)
+    head_file = root / "commits" / "HEAD"
+
+    first = store.create_commit("talk", "Initial", deck_ver, slide_vers)
+    assert head_file.read_text(encoding="utf-8").strip() == first["id"]
+    second = store.create_commit("talk", "Again", deck_ver, slide_vers)
+    assert head_file.read_text(encoding="utf-8").strip() == second["id"]
+
+    changed = store.put_slide("talk", "one", SLIDE.format(color="#999999", body="").encode(), slide_vers["one"])
+    result = store.restore_commit("talk", first["id"], deck_ver, {"one": changed, "two": slide_vers["two"]})
+    # The restore adds a safety snapshot, which is the new head.
+    assert head_file.read_text(encoding="utf-8").strip() == result["safetyCommit"]
+    assert store._head_commit("talk") == result["safetyCommit"]
+
+    def no_scan(self, name):
+        raise AssertionError("manifests were scanned although HEAD is valid")
+
+    monkeypatch.setattr(Store, "_scan_head_commit", no_scan)
+    store.put_slide("talk", "two", SLIDE.format(color="#777777", body="").encode(), slide_vers["two"])
+
+
+def test_deleted_or_stale_head_is_recovered_by_scanning(tmp_path):
+    _, root, store = setup(tmp_path)
+    deck_ver, slide_vers = versions(store)
+    store.create_commit("talk", "Initial", deck_ver, slide_vers)
+    newest = store.create_commit("talk", "Newest", deck_ver, slide_vers)
+    head_file = root / "commits" / "HEAD"
+
+    head_file.unlink()
+    assert store._head_commit("talk") == newest["id"]
+    assert head_file.read_text(encoding="utf-8").strip() == newest["id"]
+
+    head_file.write_text("0" * 20 + "\n", encoding="utf-8")  # names a manifest that does not exist
+    assert store._head_commit("talk") == newest["id"]
+    assert head_file.read_text(encoding="utf-8").strip() == newest["id"]
+
+    head_file.write_text("garbage", encoding="utf-8")
+    assert store._head_commit("talk") == newest["id"]
+    # The next commit chains onto the real head even when HEAD was lost.
+    head_file.unlink()
+    third = store.create_commit("talk", "Third", deck_ver, slide_vers)
+    assert third["parent"] == newest["id"]
+
+
+def test_restore_rejects_a_commit_with_an_unsupported_deck_format(tmp_path):
+    _, root, store = setup(tmp_path)
+    deck_ver, slide_vers = versions(store)
+    commit = store.create_commit("talk", "Initial", deck_ver, slide_vers)
+    # Build a second, well-formed commit whose deck.json has another format.
+    manifest = store._read_manifest("talk", commit["id"])
+    meta = json.loads(store._object("talk", manifest["deck"]))
+    meta["format"] = 2
+    bad_deck = store._put_object(root / "commits", json.dumps(meta).encode())
+    body = {"parent": commit["id"], "message": "Future", "createdNs": manifest["createdNs"] + 1,
+            "deck": bad_deck, "slides": manifest["slides"]}
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    bad_id = store._sha256(encoded)[:20]
+    store_module.write_atomic(root / "commits" / "manifests" / f"{bad_id}.json",
+                              json.dumps({"id": bad_id, **body}).encode())
+
+    before = (root / "deck.json").read_bytes()
+    with pytest.raises(ValueError, match="format"):
+        store.restore_commit("talk", bad_id, deck_ver, slide_vers)
+    assert (root / "deck.json").read_bytes() == before
+    assert len(store.list_commits("talk")) == 2  # no safety snapshot for a rejected restore
