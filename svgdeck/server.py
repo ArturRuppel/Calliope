@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import html
+import importlib
+import json
 import shutil
 import tempfile
 from importlib import resources
@@ -9,15 +11,19 @@ from pathlib import Path
 
 from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.background import BackgroundTask
 
 from .deck import Deck, render_page
 from .export import export
-from .store import Conflict, Store
+from .store import Conflict, Store, check_name
 
 MAX_UPLOAD = 2 * 1024**3   # movies and images, streamed to disk
 MAX_BODY = 64 * 1024**2    # slides and fonts, held in memory
+
+
+def truthy(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
 
 
 def create_app(data: Path) -> FastAPI:
@@ -27,6 +33,7 @@ def create_app(data: Path) -> FastAPI:
     # Serialize CPU-heavy conversions without blocking saves or consuming the
     # thread-pool capacity used by the read endpoints. Waiting stays async.
     media_limiter = CapacityLimiter(1)
+    pdf_limiter = CapacityLimiter(1)  # a headless browser per PDF: one at a time
 
     def deck_dir(name: str) -> Path:
         try:
@@ -42,6 +49,26 @@ def create_app(data: Path) -> FastAPI:
         if isinstance(error, KeyError):
             return HTTPException(400, f"deck.json is missing {error}")
         return HTTPException(400, f"the deck cannot be read: {error}")
+
+    async def json_object(request: Request, optional: bool = False) -> dict:
+        """The JSON object in a request body; with `optional`, an empty body is {}."""
+        raw = await request.body()
+        if optional and not raw.strip():
+            return {}
+        try:
+            value = json.loads(raw)
+        except ValueError:
+            raise HTTPException(400, "the request body must be a JSON object")
+        if not isinstance(value, dict):
+            raise HTTPException(400, "the request body must be a JSON object")
+        return value
+
+    def new_name(req: dict):
+        """The "name" of a rename, duplicate or restore body; None when absent."""
+        name = req.get("name")
+        if name is not None and not isinstance(name, str):
+            raise HTTPException(400, "deck names use letters, digits, - _ and .")
+        return name
 
     async def body(request: Request) -> bytes:
         """A request body that is held in memory, so it is limited to MAX_BODY."""
@@ -142,13 +169,50 @@ def create_app(data: Path) -> FastAPI:
         return store.list_deleted_decks()
 
     @app.post("/api/trash/{token}/restore")
-    def restore_deck(token: str):
+    async def restore_deck(token: str, request: Request):
+        name = new_name(await json_object(request, optional=True))
         try:
-            return store.restore_deck(token)
+            return await to_thread.run_sync(store.restore_deck, token, name)
         except KeyError:
             raise HTTPException(404, "no such deleted deck")
         except FileExistsError:
-            raise HTTPException(409, "a deck with that name exists; rename it first")
+            raise HTTPException(409, "a deck with that name exists; restore it under another name")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/decks/{name}/rename")
+    async def rename_deck(name: str, request: Request):
+        deck_dir(name)
+        target = new_name(await json_object(request))
+        try:
+            return await to_thread.run_sync(store.rename_deck, name, "" if target is None else target)
+        except KeyError:
+            raise HTTPException(404, "no such deck")
+        except FileExistsError:
+            raise HTTPException(409, "a deck with that name exists")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.post("/api/decks/{name}/duplicate")
+    async def duplicate_deck(name: str, request: Request):
+        deck_dir(name)
+        target = new_name(await json_object(request, optional=True))
+        if target is not None:
+            try:
+                check_name(target)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+        try:
+            summary = await to_thread.run_sync(store.duplicate_deck, name, target)
+        except KeyError as e:
+            if e.args == (name,):
+                raise HTTPException(404, "no such deck")
+            raise deck_problem(e)
+        except FileExistsError:
+            raise HTTPException(409, "a deck with that name exists")
+        except (FileNotFoundError, ValueError) as e:
+            raise deck_problem(e)
+        return JSONResponse(summary, status_code=201)
 
     @app.get("/api/decks/{name}")
     def get_deck(name: str):
@@ -354,17 +418,20 @@ def create_app(data: Path) -> FastAPI:
                     (dest / sub).symlink_to((origin / sub).resolve(), target_is_directory=True)
         return Deck.load(dest)
 
+    def snapshot_or_http(name: str, dest: Path) -> Deck:
+        try:
+            return snapshot_deck(name, dest)
+        except KeyError as e:
+            raise HTTPException(404, "no such deck") if e.args == (name,) else deck_problem(e)
+        except (FileNotFoundError, ValueError) as e:
+            raise deck_problem(e)
+
     @app.get("/api/decks/{name}/export.zip")
     def export_zip(name: str):
         deck_dir(name)
         tmp = Path(tempfile.mkdtemp(prefix="svgdeck-export-", dir=store.data))
         try:
-            try:
-                snapshot = snapshot_deck(name, tmp / ".snapshot" / name)
-            except KeyError as e:
-                raise HTTPException(404, "no such deck") if e.args == (name,) else deck_problem(e)
-            except (FileNotFoundError, ValueError) as e:
-                raise deck_problem(e)
+            snapshot = snapshot_or_http(name, tmp / ".snapshot" / name)
             export(snapshot, tmp / name, tmp / f"{name}.zip")
         except HTTPException:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -373,6 +440,33 @@ def create_app(data: Path) -> FastAPI:
             shutil.rmtree(tmp, ignore_errors=True)
             raise HTTPException(400, f"export failed: {e}")
         return FileResponse(tmp / f"{name}.zip", filename=f"{name}.zip", media_type="application/zip",
+                            background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True))
+
+    @app.get("/api/decks/{name}/pdf")
+    async def export_pdf(name: str, notes: str = "", steps: str = ""):
+        """The deck as a PDF, rendered by svgdeck.pdf (needs Playwright)."""
+        deck_dir(name)
+        try:
+            pdf = importlib.import_module(f"{__package__}.pdf")
+        except ImportError:
+            raise HTTPException(501, "PDF export is not available on this server")
+        tmp = Path(tempfile.mkdtemp(prefix="svgdeck-pdf-", dir=store.data))
+        out = tmp / f"{name}.pdf"
+        try:
+            snapshot = await to_thread.run_sync(snapshot_or_http, name, tmp / ".snapshot" / name)
+            await to_thread.run_sync(
+                lambda: pdf.render_pdf(snapshot.path, out, notes=truthy(notes), steps=truthy(steps)),
+                limiter=pdf_limiter)
+        except HTTPException:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise
+        except RuntimeError as e:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise HTTPException(501, str(e))
+        except Exception as e:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise HTTPException(500, f"PDF export failed: {e}")
+        return FileResponse(out, filename=f"{name}.pdf", media_type="application/pdf",
                             background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True))
 
     return app
