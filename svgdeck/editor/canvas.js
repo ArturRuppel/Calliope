@@ -26,6 +26,19 @@ const INHERITED_PRESENTATION = new Set([
   "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width",
   "text-anchor", "text-rendering", "visibility", "word-spacing", "writing-mode",
 ]);
+// Stroke styles the inspector sets, with the values each takes.
+const STROKE_STYLE = new Set(["stroke-dasharray", "stroke-linecap", "stroke-linejoin"]);
+const STROKE_KEYWORDS = { "stroke-linecap": ["butt", "round", "square"], "stroke-linejoin": ["miter", "round", "bevel"] };
+/** A stroke style value written plainly, or null if the property does not take it. */
+function strokeStyleValue(prop, value) {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (prop !== "stroke-dasharray") return STROKE_KEYWORDS[prop].includes(v) ? v : null;
+  if (v === "" || v === "none") return "none";
+  const parts = v.split(/[\s,]+/);
+  if (!parts.every((p) => /^(\d*\.?\d+)(px|%)?$/.test(p))) return null;
+  // All zero draws nothing at all; SVG treats that as no dashes.
+  return parts.every((p) => !parseFloat(p)) ? "none" : parts.join(" ");
+}
 const hasMovie = (el) => el.matches("image[data-video]") || !!el.querySelector("image[data-video]");
 
 const num = (el, name) => parseFloat(el.getAttribute(name)) || 0;
@@ -2704,6 +2717,10 @@ export class SlideEditor {
    *  to descendants that set it themselves. */
   setStyle(prop, value, elements = this.selection) {
     if (!elements.length) return;
+    if (STROKE_STYLE.has(prop)) {
+      value = strokeStyleValue(prop, value);
+      if (value === null) return;  // not a value this property takes
+    }
     this.change(() => {
       for (const el of elements) this.applyStyle(el, prop, value);
       if (prop === "stroke" || prop === "stroke-width") this.recolorMarkers(elements);
@@ -2711,15 +2728,22 @@ export class SlideEditor {
   }
 
   applyStyle(el, prop, value) {
+    // Pressure ink is a filled outline: a dash or line cap would not apply.
+    if (STROKE_STYLE.has(prop) && el.getAttribute("data-ink") === "pressure") return;
     if (el.localName === "text") { this.applyTextStyle(el, prop, value); return; }
-    el.style.setProperty(prop, value);
-    el.removeAttribute(prop);
+    const set = (node) => {
+      node.removeAttribute(prop);
+      if (prop === "stroke-dasharray" && value === "none") {
+        // No dashes: drop the property, or say none if it would inherit some.
+        node.style.removeProperty(prop);
+        if (getComputedStyle(node).strokeDasharray !== "none") node.style.setProperty(prop, "none");
+      } else node.style.setProperty(prop, value);
+    };
+    set(el);
     if (el.localName === "g" || el.localName === "text" || el.localName === "a") {
       for (const d of el.querySelectorAll("*")) {
-        if (d.style.getPropertyValue(prop) || d.hasAttribute(prop)) {
-          d.style.setProperty(prop, value);
-          d.removeAttribute(prop);
-        }
+        if (STROKE_STYLE.has(prop) && d.getAttribute("data-ink") === "pressure") continue;
+        if (d.style.getPropertyValue(prop) || d.hasAttribute(prop)) set(d);
       }
     }
   }

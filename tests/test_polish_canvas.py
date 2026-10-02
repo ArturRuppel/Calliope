@@ -421,3 +421,53 @@ def test_radius_is_clamped_and_survives_resize_duplicate_and_copy(page, server):
     assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('rect[rx=\"20\"][ry=\"20\"]').length") == 3
     page.evaluate("svgdeckEditor.editor.setRadius(0)")
     assert page.evaluate(radius) == [None, None, 0]
+
+
+# --- 6. stroke styles ------------------------------------------------------------------------------------
+
+def stroke_style(page, selector):
+    return page.evaluate(f"""(() => {{ const cs = getComputedStyle(svgdeckEditor.editor.svg.querySelector({selector!r}));
+      return [cs.strokeDasharray, cs.strokeLinecap, cs.strokeLinejoin]; }})()""")
+
+
+def test_stroke_dash_cap_and_join_on_a_rect(page, server):
+    js(page, """e.change(() => { const r = document.createElementNS(arg, 'rect'); r.id = 'framed';
+      for (const [k, v] of Object.entries({x: 100, y: 100, width: 200, height: 100, stroke: '#000', 'stroke-width': 6,
+        'stroke-linejoin': 'round'})) r.setAttribute(k, v);
+      e.svg.append(r); e.selection = [r]; }); e.select(e.selection);""", NS)
+    depth = undo_depth(page)
+    page.evaluate("""const e = svgdeckEditor.editor; e.setStyle('stroke-dasharray', '12 6');
+      e.setStyle('stroke-linecap', 'square'); e.setStyle('stroke-linejoin', 'bevel')""")
+    assert stroke_style(page, "#framed") == ["12px, 6px", "square", "bevel"]
+    assert undo_depth(page) == depth + 3
+    # Written as inline style, like the stroke colour; the attribute goes.
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#framed').hasAttribute('stroke-linejoin')") is False
+    assert 'stroke-dasharray' in page.evaluate("svgdeckEditor.editor.svg.querySelector('#framed').getAttribute('style')")
+    # Values the property does not take change nothing.
+    page.evaluate("""const e = svgdeckEditor.editor; e.setStyle('stroke-linecap', 'pointy'); e.setStyle('stroke-dasharray', '12 banana')""")
+    assert undo_depth(page) == depth + 3
+    page.evaluate("svgdeckEditor.editor.setStyle('stroke-dasharray', 'none')")
+    assert stroke_style(page, "#framed")[0] == "none"
+    assert "dasharray" not in page.evaluate("svgdeckEditor.editor.svg.querySelector('#framed').getAttribute('style')")
+    assert "stroke-dasharray" not in saved_slide(page, server)
+
+
+def test_stroke_styles_reach_a_groups_children_but_not_pressure_ink(page, server):
+    js(page, """e.change(() => { const g = document.createElementNS(arg, 'g'); g.id = 'grp';
+      g.innerHTML = '<line id="l" x1="0" y1="0" x2="100" y2="0" stroke="#000" stroke-dasharray="2 2"/>' +
+        '<polyline id="p" points="0,50 50,80 100,50" fill="none" stroke="#000" style="stroke-linecap:butt"/>' +
+        '<path id="ink" d="M0,0 L10,10 Z" fill="#000" stroke="none" data-ink="pressure"/>';
+      e.svg.append(g); e.selection = [g]; }); e.select(e.selection);""", NS)
+    page.evaluate("""const e = svgdeckEditor.editor; e.setStyle('stroke-dasharray', '10, 4');
+      e.setStyle('stroke-linecap', 'round'); e.setStyle('stroke-linejoin', 'miter')""")
+    assert stroke_style(page, "#l") == ["10px, 4px", "round", "miter"]
+    assert stroke_style(page, "#p") == ["10px, 4px", "round", "miter"]
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#l').getAttribute('stroke-dasharray')") is None
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#ink').getAttribute('style')") is None
+    # No dashes for the group: a child that had its own loses them too.
+    page.evaluate("svgdeckEditor.editor.setStyle('stroke-dasharray', 'none')")
+    assert stroke_style(page, "#l")[0] == "none" and stroke_style(page, "#p")[0] == "none"
+    # A child inside a dashed group asked for none says so explicitly.
+    page.evaluate("""const e = svgdeckEditor.editor; e.setStyle('stroke-dasharray', '8 8');
+      e.setStyle('stroke-dasharray', 'none', [e.svg.querySelector('#p')])""")
+    assert stroke_style(page, "#l")[0] == "8px, 8px" and stroke_style(page, "#p")[0] == "none"
