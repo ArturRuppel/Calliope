@@ -654,7 +654,9 @@ export class SlideEditor {
       const M = L.multiply(s.T0);
       for (const [a, v] of Object.entries(s.geometry)) s.el.setAttribute(a, v);
       const translateOnly = near(s.T0.a, 1) && near(s.T0.d, 1) && near(s.T0.b, 0) && near(s.T0.c, 0);
-      if (BAKEABLE.has(s.el.localName) && translateOnly && near(M.b, 0) && near(M.c, 0) && this.bake(s.el, M)) {
+      // An image's mirror cannot be written into its geometry: it stays a transform.
+      const mirrored = s.el.localName === "image" && (M.a < 0 || M.d < 0);
+      if (BAKEABLE.has(s.el.localName) && translateOnly && !mirrored && near(M.b, 0) && near(M.c, 0) && this.bake(s.el, M)) {
         s.el.removeAttribute("transform");
       } else {
         setTransform(s.el, M);
