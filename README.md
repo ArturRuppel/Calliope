@@ -99,7 +99,8 @@ The editor is laid out for an iPad in landscape:
 - **Text (T)** and **Media** (pictures and movies; movies are converted to
   H.264 mp4 on upload so every browser can play them).
 
-- Tap to select, drag to move, drag the handles to resize (corners keep the
+- Tap to select, drag to move, drag the handles to resize (rotated objects
+  show their handles turned with them and resize along their own axes; corners keep the
   proportions; Shift frees them) or rotate. Drag on empty space to select
   several, or turn on **Several** in the view bar so taps add to (or take out
   of) the selection; the selection bar then offers **Group**. Right-click,
@@ -135,7 +136,8 @@ The editor is laid out for an iPad in landscape:
   corner handles; the faded original stays visible. Done/Enter accepts the
   crop as one undo step; Cancel/Escape discards it. Two fingers still pan and
   zoom while cropping, and tapping another object cancels the crop. Advanced offers numeric
-  insets and rectangle/ellipse masks; Reset restores the full image. Source
+  insets and rectangle/ellipse masks; Reset restores the full image. Deleting
+  a cropped or adjusted image also removes its clip path and filter. Source
   media and imported clip paths remain untouched.
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
