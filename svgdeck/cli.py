@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> None:
     exp.add_argument("out", type=Path, help="output directory (replaced if it is an earlier export)")
     exp.add_argument("--zip", type=Path, help="also write the export as this zip file")
 
+    exp.add_argument("--no-notes", action="store_true", help="leave speaker notes out of the export")
+
     args = parser.parse_args(argv)
     if args.command == "serve":
         import uvicorn
@@ -31,7 +33,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "export":
         from .deck import Deck
         from .export import export
-        out = export(Deck.load(args.deck), args.out, args.zip)
+        out = export(Deck.load(args.deck), args.out, args.zip, include_notes=not args.no_notes)
         print(f"exported to {out}/index.html" + (f" and {args.zip}" if args.zip else ""))
 
 
