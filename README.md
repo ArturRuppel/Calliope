@@ -222,9 +222,12 @@ Speaker view is also available from the presentation controls in offline exports
 Its audience window displays only the presentation, with no speaker controls or notes.
 
 
-Arrows / space / page keys / click or swipe to move, a number then
-Enter to jump, `b` or `.` for a blank screen, `f` or double-click for full
-screen. The address bar shows `#slide.step`.
+Arrows / space / page keys / click or swipe to move (`n`/`p` work too), a
+number then Enter to jump, `b` or `.` for a blank screen, `f` or a mouse
+double-click for full screen. A single mouse click advances after a short
+pause so a double-click never changes the slide; taps advance at once. The
+speaker window keeps its session in the address bar, so reloading it
+reconnects the audience window. The address bar shows `#slide.step`.
 
 ## Development tools
 
