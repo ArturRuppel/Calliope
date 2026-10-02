@@ -1,4 +1,5 @@
 """Focused browser tests for the standalone rich colour control."""
+from playwright.sync_api import expect
 from test_editor import drag, page, saved_slide, server, to_screen
 
 
@@ -164,7 +165,14 @@ def test_copy_puts_the_value_on_the_clipboard(page):
     assert page.evaluate("navigator.clipboard.readText()") == "rgba(51, 102, 153, 0.5)"
     page.evaluate("navigator.clipboard.writeText('hsl(0, 100%, 50%)')")
     dialog.get_by_role("button", name="Paste colour", exact=True).click()
-    assert dialog.get_by_label("HEX").input_value() == "#FF0000"
+    expect(dialog.get_by_label("HEX")).to_have_value("#FF0000")
+
+
+def test_transparent_states_its_own_opacity(page):
+    mount(page, "#33669980")
+    dialog = open_editor(page)
+    assert paste_text(dialog.get_by_label("HEX"), "transparent") is False
+    assert dialog.get_by_label("Opacity percent").input_value() == "0"
 
 
 def test_colour_fields_are_selectable_in_the_editor(page):

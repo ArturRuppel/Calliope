@@ -88,8 +88,8 @@ function anyColor(text) {
   return seen[0] === seen[1] ? parseColor(seen[0]) : null;
 }
 
-// Whether typed or pasted text names its own opacity ("#rgba", "rgba(…)", "… / 50%").
-const statesAlpha = (text) => /^#?(?:[\da-f]{4}|[\da-f]{8})$/i.test(text) || /^(?:rgba|hsla)/i.test(text) ||
+// Whether typed or pasted text names its own opacity ("#rgba", "rgba(…)", "… / 50%", "transparent").
+const statesAlpha = (text) => /^#?(?:[\da-f]{4}|[\da-f]{8})$/i.test(text) || /^transparent$/i.test(text.trim()) || /^(?:rgba|hsla)/i.test(text) ||
   /\//.test(text) || (text.match(/[+-]?(?:\d+\.?\d*|\.\d+)/g) || []).length === 4;
 
 function cssColor(color) {

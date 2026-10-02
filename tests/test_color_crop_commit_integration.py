@@ -60,6 +60,7 @@ def test_commit_ui_flushes_diffs_and_restores_working_copy(page, server):
     page.wait_for_function("document.querySelector('.commit-diff pre')?.textContent.includes('#abcdef')")
     assert '#123456' in dialog.locator('.commit-diff pre').inner_text()
     row.get_by_role('button',name='Restore',exact=True).click()
+    row.get_by_role('button',name='Confirm restore').click()
     page.wait_for_function("!document.querySelector('.commits-dialog').open")
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#committed-shape').getAttribute('fill')")=='#123456'
     open_doc_menu(page); page.locator('#commit-deck').click()

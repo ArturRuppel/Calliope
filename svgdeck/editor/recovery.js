@@ -1,7 +1,14 @@
 // Slide revision/trash browser and conflict preservation.
-export function installRecovery({ editor, state, api, toast, settle, flush, openSlide,
-                                  renderStrip, refreshStatus, putDeck }) {
+export function installRecovery({ state, api, toast, settle, flush, openSlide,
+                                  renderStrip, refreshStatus }) {
   let dialog = null;
+  let busy = false;
+
+  function setBusy(value) {
+    busy = value;
+    const close = dialog?.querySelector("header button");
+    if (close) close.disabled = value;
+  }
 
   const cleanRecord = (text, version) => ({ text, version, dirty: false, saving: false,
     savePromise: null, saveError: null, conflict: false, undo: [], redo: [] });
@@ -66,7 +73,8 @@ export function installRecovery({ editor, state, api, toast, settle, flush, open
     dialog.className = "recovery-dialog";
     dialog.setAttribute("aria-label", "Slide recovery");
     dialog.innerHTML = `<form method="dialog"><header><strong>Slide recovery</strong><button value="close" aria-label="Close">×</button></header></form><div class="recovery-body"></div>`;
-    dialog.addEventListener("click", (event) => { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener("click", (event) => { if (event.target === dialog && !busy) dialog.close(); });
+    dialog.addEventListener("cancel", (event) => { if (busy) event.preventDefault(); });
     document.body.append(dialog);
     return dialog;
   }
@@ -97,9 +105,10 @@ export function installRecovery({ editor, state, api, toast, settle, flush, open
     el.type = "button";
     el.textContent = label;
     el.addEventListener("click", async () => {
-      el.disabled = true;
+      if (busy) return;
+      el.disabled = true; setBusy(true);
       try { await action(); } catch (error) { toast(error.message, 8000); }
-      finally { el.disabled = false; }
+      finally { el.disabled = false; setBusy(false); }
     });
     return el;
   }
@@ -161,19 +170,21 @@ export function installRecovery({ editor, state, api, toast, settle, flush, open
     settle?.();
     const el = ensureDialog();
     const body = el.querySelector(".recovery-body");
-    body.replaceChildren();
     body.textContent = "Loading recovery history…";
     el.showModal();
+    setBusy(true);
+    // Build off-screen so the loading text stays until the data has arrived.
+    const content = document.createDocumentFragment();
     try {
-      body.replaceChildren();
-      conflictsSection(body);
-      if (state.current) await revisionsSection(body, state.current);
-      await trashSection(body);
+      conflictsSection(content);
+      if (state.current) await revisionsSection(content, state.current);
+      await trashSection(content);
+      body.replaceChildren(content);
     } catch (error) {
       const message = document.createElement("p");
       message.textContent = `Could not load recovery history: ${error.message}`;
-      body.append(message);
-    }
+      body.replaceChildren(message);
+    } finally { setBusy(false); }
   }
 
   return { open, preserveConflict };
