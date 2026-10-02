@@ -12,6 +12,10 @@ uv venv .venv && uv pip install -p .venv -e ".[dev]"
 .venv/bin/python -m playwright install chromium   # for the tests
 ```
 
+The service needs `ffmpeg` and `ffprobe` on the path: movies are converted on
+upload and image sizes are probed with them. Slide, font and recovery request
+bodies are capped at 64 MiB; media uploads at 2 GiB.
+
 ## Use
 
 Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
@@ -237,7 +241,10 @@ on video, so movie tests only run in Chromium.
 
 The installed `svgdeck.service` user unit starts under `default.target`, restarts
 on failure, and binds only the Tailscale address on port 8490. User lingering
-keeps it running across logouts and starts the user manager at boot. Switchboard
-registers the unit with a health URL and `client_url` for its **Open** button.
+keeps it running across logouts and starts the user manager at boot. The unit
+refuses to start until Tailscale has an IPv4 address (an empty address would
+bind every interface) and retries every few seconds. Switchboard registers the
+unit with `GET /healthz` as the health URL (it answers without touching the data
+directory) and `client_url` for its **Open** button.
 These machine-local settings stay outside the repository; decks and licensed
 fonts remain in the separate data directory.

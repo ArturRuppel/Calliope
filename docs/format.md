@@ -121,6 +121,8 @@ are immutable JSON manifests in `commits/manifests/<id>.json`, containing a
 parent ID, message, timestamp, and SHA-256 object references for the exact
 metadata and each referenced SVG. Content lives in `commits/objects/<sha256>`;
 unchanged files are shared across snapshots. Commit history is not pruned.
+`commits/HEAD` caches the id of the latest commit; it may be deleted and is
+rebuilt from the manifests.
 Media and fonts remain in their existing directories and are referenced rather
 than copied. Keep those assets with the deck when backing it up.
 
