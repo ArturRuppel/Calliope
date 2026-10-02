@@ -1,8 +1,7 @@
 // Explicit, immutable full-deck snapshots. Autosave continues to own the working copy.
-export function installCommits({state, api, editor, flush, settle, toast,
+export function installCommits({state, api, flush, settle, toast,
                                 renderStrip, openSlide, refreshStatus}) {
   let dialog = null;
-  let knownHead = null;
   let busy = false;
 
   function button(label, action, className = "") {
@@ -45,6 +44,28 @@ export function installCommits({state, api, editor, flush, settle, toast,
     return {deck: state.version, slides: versions};
   }
 
+  // A 409 means the deck or a slide moved on under us. Refresh what the client
+  // knows of the deck before telling the user what to do next.
+  async function conflictError(error) {
+    if (error?.status !== 409) return error;
+    try {
+      const known = state.deck.slides.map(slide => slide.id).join();
+      const fresh = await api.deck();
+      state.deck = fresh.deck;
+      state.version = fresh.version;
+      let stale = fresh.deck.slides.map(slide => slide.id).join() !== known;
+      for (const item of fresh.deck.slides) {
+        const rec = state.slides.get(item.id);
+        if (rec?.version && !rec.dirty && !rec.saving && !rec.conflict &&
+            (await api.slide(item.id)).version !== rec.version) stale = true;
+      }
+      if (stale) return new Error("The deck was changed somewhere else; reload the page.");
+      return new Error("The deck changed while committing. It has been refreshed; try again.");
+    } catch (_) {
+      return new Error("The deck changed somewhere else; reload the page.");
+    }
+  }
+
   async function create(message) {
     if (busy) throw new Error("Another commit operation is still running");
     busy = true; setClosable(false);
@@ -53,10 +74,10 @@ export function installCommits({state, api, editor, flush, settle, toast,
     await flush();
     const expected = await expectedVersions();
     const result = await api.createCommit(message, expected.deck, expected.slides);
-    knownHead = result.id;
     toast("Deck committed.");
     return result;
-    } finally { busy = false; setClosable(true); }
+    } catch (error) { throw await conflictError(error); }
+    finally { busy = false; setClosable(true); }
   }
 
   function setClosable(enabled) {
@@ -87,9 +108,9 @@ export function installCommits({state, api, editor, flush, settle, toast,
     const titleNode = document.getElementById("deck-title");
     if (titleNode) titleNode.textContent = title;
     document.title = `${title} · svgdeck`;
-    knownHead = result.safetyCommit || knownHead;
     toast("Commit restored. The replaced working copy was saved as a safety commit.", 7000);
-    } finally { busy = false; setClosable(true); }
+    } catch (error) { throw await conflictError(error); }
+    finally { busy = false; setClosable(true); }
   }
 
   function showDiff(body, text, label) {
@@ -108,7 +129,6 @@ export function installCommits({state, api, editor, flush, settle, toast,
     const body = ensureDialog().querySelector(".commits-body");
     body.textContent = "Loading commits…";
     const items = await api.commits();
-    knownHead = items[0]?.id || null;
     body.replaceChildren();
 
     const createSection = document.createElement("section");
@@ -135,16 +155,22 @@ export function installCommits({state, api, editor, flush, settle, toast,
       meta.textContent = `${new Date(item.created * 1000).toLocaleString()} · ${item.slides} slide${item.slides === 1 ? "" : "s"} · ${item.id.slice(0, 8)}`;
       description.append(message, meta);
       const actions = document.createElement("div"); actions.className = "commit-actions";
-      actions.append(
+      const choices = [
         button("Previous diff", async () => showDiff(body, await api.commitDiff(item.id, "parent"), "Changes in this commit")),
         button("Working diff", async () => {
           settle?.(); await flush();
           showDiff(body, await api.commitDiff(item.id, "working"), "Commit compared with working copy");
         }),
+        // Restoring replaces the whole deck, so it takes a second, explicit click.
         button("Restore", async () => {
-          await restore(item); dialog.close();
+          const ask = document.createElement("span"); ask.className = "commit-confirm"; ask.setAttribute("role", "alert");
+          ask.textContent = `Restore \u201c${item.message || "Untitled commit"}\u201d? The whole deck goes back to this snapshot; the current working copy is saved as a safety commit first.`;
+          actions.replaceChildren(ask,
+            button("Confirm restore", async () => { await restore(item); dialog.close(); }, "danger"),
+            button("Keep working copy", async () => actions.replaceChildren(...choices)));
         }, "danger")
-      );
+      ];
+      actions.append(...choices);
       row.append(description, actions); history.append(row);
     }
     body.append(history);
@@ -162,13 +188,5 @@ export function installCommits({state, api, editor, flush, settle, toast,
     }
   }
 
-  async function refresh() {
-    try {
-      const items = await api.commits();
-      knownHead = items[0]?.id || null;
-      return knownHead;
-    } catch (_) { return knownHead; }
-  }
-
-  return {open, commit: create, refresh};
+  return {open, commit: create};
 }

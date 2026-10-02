@@ -15,6 +15,7 @@
 .commit-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 64px; border-top: 1px solid var(--line, #ccd1d6); }
 .commit-row > div:first-child { min-width: 180px; }
 .commit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.commit-confirm { flex-basis: 100%; text-align: right; color: #a21d28; }
 .commit-diff pre { max-height: 330px; overflow: auto; padding: 12px; white-space: pre; font: 12px/1.45 ui-monospace, monospace; color: #e7edf4; background: #182028; border-radius: 6px; }
 @media (max-width: 680px) {
   .commit-create, .commit-row { align-items: stretch; flex-direction: column; padding: 10px 0; }
