@@ -64,7 +64,7 @@ def test_corner_drag_and_reset_preview(page, server):
     page.mouse.move(box["x"]-100,box["y"]-60,steps=5);page.mouse.up()
     crop = page.evaluate("svgdeckEditor.editor.svg.querySelector('#cropme').getAttribute('data-crop').split(' ').map(Number)")
     assert crop[2] > 10 and crop[3] > 10
-    page.get_by_role("button", name="Reset").click()
+    page.get_by_role("button", name="Reset", exact=True).click()
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#cropme').hasAttribute('data-crop')") is False
 
 

@@ -25,8 +25,15 @@
   <button class="btn icon-btn" id="undo" title="Undo (Ctrl+Z)" aria-label="Undo"><svg class="icon" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button>
   <button class="btn icon-btn" id="redo" title="Redo (Ctrl+Shift+Z)" aria-label="Redo"><svg class="icon" viewBox="0 0 24 24"><path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg></button>
   <span class="vrule"></span>
+  <div class="view-bar" id="view-bar">
+    <button class="btn icon-btn" id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
+    <button class="btn zoom-fit" id="zoom-fit" title="Fit slide"><span id="zoom-label">Fit</span></button>
+    <button class="btn icon-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
+    <span class="view-toggles" id="view-toggles"></span>
+  </div>
+  <span class="vrule"></span>
   <button class="btn icon-btn" id="toggle-panel" title="Inspector" aria-label="Inspector" aria-pressed="true"><svg class="icon" viewBox="0 0 24 24"><path d="M3 3h18v18H3zM15 3v18"/></svg></button>
-  <button class="btn primary" id="present" title="Present from this slide"><svg class="icon small filled" viewBox="0 0 24 24"><path d="M6 4v16l14-8z"/></svg>Present</button>
+  <button class="btn primary" id="present" title="Present from this slide"><svg class="icon small filled" viewBox="0 0 24 24"><path d="M6 4v16l14-8z"/></svg><span class="label">Present</span></button>
 </header>
 <main>
   <nav class="rail" id="tools" aria-label="Tools"></nav>
@@ -45,13 +52,6 @@
   </aside>
   <div class="stage-wrap" id="stage-wrap">
     <section class="stage" id="stage"></section>
-    <div class="view-bar floating" id="view-bar">
-      <button class="btn icon-btn" id="zoom-out" title="Zoom out" aria-label="Zoom out">−</button>
-      <button class="btn zoom-fit" id="zoom-fit" title="Fit slide"><span id="zoom-label">Fit</span></button>
-      <button class="btn icon-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">+</button>
-      <span class="vrule"></span>
-      <span class="view-toggles" id="view-toggles"></span>
-    </div>
     <div class="sel-bar" id="sel-bar" hidden>
       <div class="sel-row" id="sel-row" role="toolbar" aria-label="Selection"></div>
       <div class="sel-row" id="align-row" role="toolbar" aria-label="Align" hidden></div>

@@ -6,6 +6,7 @@ import threading
 import time
 
 import pytest
+from conftest import select_several
 import uvicorn
 
 from svgdeck.server import create_app
@@ -484,7 +485,7 @@ def test_grid_snaps_new_and_moved_shapes(page, server):
 
 def test_select_several_by_tapping_then_group_and_ungroup(page, server):
     add_rects(page, [[100, 100, 100, 100], [400, 100, 100, 100], [700, 400, 100, 100]])
-    page.click("#multi")
+    select_several(page)
     for x, y in ((150, 150), (450, 150), (750, 450)):
         page.mouse.click(*to_screen(page, x, y))
     assert page.evaluate("svgdeckEditor.editor.selection.length") == 3

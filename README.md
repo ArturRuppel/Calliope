@@ -78,6 +78,19 @@ The editor is laid out for an iPad in landscape:
   segment after it; **Open path** opens a closed outline at the chosen point,
   **Close path** joins the ends, **Subdivide** doubles the points without
   changing the shape. **Done** returns to Select.
+- **Clipboard images:** touch and hold on the slide, then choose **Paste** to
+  insert at that spot. Approve iPad’s native **Paste** prompt if shown. Over
+  HTTP, a small **Paste here** target stays on the canvas if the prompt is not
+  available; touch and hold it and choose **Paste**. **Paste copied objects**
+  in the actions menu inserts objects copied inside Calliope.
+  You can also choose **Media**, then **Paste image**, or touch and hold
+  in the paste box and choose iOS **Paste**. Over HTTP, **Paste image** focuses
+  the box and requests iPad’s native Paste prompt; approve **Paste** there.
+  If no prompt appears, touch and hold in the box and choose **Paste**.
+  Images inserted directly into the box by Safari are imported too.
+  Keyboard paste inserts copied
+  images on the slide; text fields keep their usual paste behavior. Images use
+  the same saved media and undo path as file uploads.
 - **Text (T)** and **Media** (pictures and movies; movies are converted to
   H.264 mp4 on upload so every browser can play them).
 
@@ -85,8 +98,8 @@ The editor is laid out for an iPad in landscape:
   proportions; Shift frees them) or rotate. Drag on empty space to select
   several, or turn on **Several** in the view bar so taps add to (or take out
   of) the selection; the selection bar then offers **Group**. Right-click,
-  **tap with two fingers** or **More** opens the actions menu: copy, cut,
-  paste, duplicate, group, ungroup, stacking order, lock and delete. Movies
+  **touch and hold on the slide**, **tap with two fingers** or **More** opens
+  the actions menu: copy, cut, paste, duplicate, group, ungroup, stacking order, lock and delete. Movies
   must stay outside groups; grouping them or pasting them into a group is
   refused so they remain playable.
 - The selection bar depends on what is selected: text gets font, size, bold,
@@ -112,11 +125,13 @@ The editor is laid out for an iPad in landscape:
   for touch. **Builds** assigns when selected objects appear, lists their
   sequence, and previews the slide from its initial state. Objects sharing a
   step appear together. Preview visibility is never saved into the SVG.
+- Cropped images and movies use their visible crop for selection bounds, resize handles, alignment and snapping. Crop mode retains access to the full source.
 - **Crop** (selection bar or Design tab) on an image or movie: drag its edge or
   corner handles; the faded original stays visible. Done/Enter accepts the
   crop as one undo step; Cancel/Escape discards it. Advanced offers numeric
   insets and rectangle/ellipse masks; Reset restores the full image. Source
   media and imported clip paths remain untouched.
+- **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
   fields, a visual picker, and an opacity slider. Colour transparency is
   independent of whole-object opacity.
@@ -166,6 +181,9 @@ The editor is laid out for an iPad in landscape:
   Ctrl+D duplicate, Ctrl+G / Ctrl+Shift+G group, Delete, arrow keys nudge
   (Shift ×10), Page Up/Down change slide.
 - Deleted slides go to the deck's `trash/` folder.
+- **Delete** on the decks page (tap twice) moves the whole deck to
+  `<data>/trash/<name>.<timestamp>/`; **Recently deleted** below the list
+  restores it. Nothing is purged automatically: remove the folder by hand.
 - **Deck menu → History and recovery** lists the last 30 saved slide revisions
   and deleted slides, with restore controls. Restoring a revision checkpoints
   the current artwork first. If saving detects a conflict, **Keep both versions**

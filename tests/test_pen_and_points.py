@@ -2,6 +2,7 @@
 import pytest
 from conftest import open_doc_menu, pick_tool, tool_button, tool_pressed
 from test_editor import BROWSER, page, server, to_screen, drag, add_rects, saved_slide
+from test_touch_tools import touch
 
 chromium_only = pytest.mark.skipif(BROWSER != 'chromium', reason='pen input is injected through Chromium CDP')
 
@@ -75,6 +76,55 @@ def test_pencil_and_finger_keep_their_own_tools(page):
     page.wait_for_function('window.svgdeckEditor?.editor.svg')
     assert page.evaluate('svgdeckEditor.editor.tools.pen') == 'erase'
     assert page.evaluate('svgdeckEditor.editor.penSeen') is True
+
+
+@chromium_only
+def test_palm_down_before_the_pencil_is_undone_and_ignored(page):
+    add_rects(page, [[800, 300, 200, 200]])
+    session = page.context.new_cdp_session(page)
+    pen_stroke(page, session, [(200, 200), (300, 260), (400, 240)])
+    page.evaluate('svgdeckEditor.editor.penUpAt = -Infinity')
+    rect_x = '+svgdeckEditor.editor.svg.querySelector("rect:not([data-locked])").getAttribute("x")'
+    # The hand lands on the rectangle and slides a little before the Pencil touches.
+    x, y = to_screen(page, 900, 400)
+    touch(session, 'touchStart', [(1, x, y)])
+    touch(session, 'touchMove', [(1, x + 40, y + 10)])
+    assert page.evaluate(rect_x) != pytest.approx(800, abs=1)
+    pen(session, 'mouseMoved', *to_screen(page, 200, 600), buttons=0)
+    pen(session, 'mousePressed', *to_screen(page, 200, 600))
+    # The palm's drag is undone and its selection dropped; more palm contacts do nothing.
+    assert page.evaluate(rect_x) == pytest.approx(800, abs=1)
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 0
+    zoom = page.evaluate('svgdeckEditor.editor.zoom')
+    touch(session, 'touchMove', [(1, x + 90, y + 30)])
+    touch(session, 'touchStart', [(1, x + 90, y + 30), (2, x + 160, y + 60)])
+    touch(session, 'touchMove', [(1, x + 60, y + 30), (2, x + 220, y + 90)])
+    for p in [(300, 700), (400, 650), (500, 720)]:
+        pen(session, 'mouseMoved', *to_screen(page, *p))
+    touch(session, 'touchEnd', [])
+    pen(session, 'mouseReleased', *to_screen(page, 500, 720), buttons=0)
+    assert paths(page) == 2
+    assert page.evaluate('svgdeckEditor.editor.zoom') == zoom
+    assert page.evaluate(rect_x) == pytest.approx(800, abs=1)
+    assert page.evaluate('svgdeckEditor.editor.gesture') is None
+
+
+@chromium_only
+def test_palm_just_after_the_pencil_lifts_is_ignored(page):
+    add_rects(page, [[800, 300, 200, 200]])
+    session = page.context.new_cdp_session(page)
+    pen_stroke(page, session, [(200, 200), (300, 260), (400, 240)])
+    x, y = to_screen(page, 900, 400)
+    touch(session, 'touchStart', [(1, x, y)])
+    touch(session, 'touchMove', [(1, x + 40, y + 10)])
+    touch(session, 'touchEnd', [])
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 0
+    assert page.evaluate('+svgdeckEditor.editor.svg.querySelector("rect:not([data-locked])").getAttribute("x")') == pytest.approx(800, abs=1)
+    # Later, a finger works again.
+    page.evaluate('svgdeckEditor.editor.penUpAt = -Infinity')
+    touch(session, 'touchStart', [(1, x, y)])
+    touch(session, 'touchEnd', [])
+    assert page.evaluate('svgdeckEditor.editor.selection.length') == 1
 
 
 @chromium_only
@@ -350,3 +400,65 @@ def test_polygon_points_can_be_added_and_removed(page):
     assert js(page, 's.points.numberOfItems') == 3
     page.keyboard.press('Delete')
     assert js(page, 's.points.numberOfItems') == 3  # a polygon keeps three
+
+
+# --- freehand strokes with the Bézier tool ------------------------------------------------
+
+def arc_points(cx, cy, r, a0, a1, n=60):
+    import math
+    return [(cx + r * math.cos(a0 + (a1 - a0) * i / n), cy + r * math.sin(a0 + (a1 - a0) * i / n)) for i in range(n + 1)]
+
+
+@chromium_only
+def test_pencil_stroke_with_bezier_tool_is_fitted(page):
+    import math
+    session = page.context.new_cdp_session(page)
+    page.evaluate('svgdeckEditor.editor.penSeen = true; svgdeckEditor.editor.tools.pen = "bezier"')
+    # Half a circle: a handful of smooth points, and a finished, selected path.
+    pen_stroke(page, session, arc_points(500, 400, 200, math.pi, 2 * math.pi))
+    assert paths(page) == 1
+    assert js(page, 'e.pathDraft') is None
+    types = js(page, 'e.nodeModel(s).subs[0].nodes.map(n => n.type).join("")')
+    assert 2 <= len(types) <= 5 and set(types[1:-1]) <= {'s'}
+    assert js(page, 's.getAttribute("d")').count('C') == len(types) - 1
+    # An L keeps its corner.
+    pen_stroke(page, session, [(200, 600 - 5 * i) for i in range(41)] + [(200 + 5 * i, 400) for i in range(1, 41)])
+    assert js(page, 'e.nodeModel(s).subs[0].nodes.length') == 3
+    assert js(page, 'e.nodeModel(s).subs[0].nodes[1].type') == 'c'
+    # A stroke from the end of the selected path carries it on; ending on its
+    # start closes it.
+    pen_stroke(page, session, [(400, 400 + 5 * i) for i in range(41)] + [(400 - 5 * i, 600) for i in range(1, 41)])
+    assert paths(page) == 2
+    assert js(page, 'e.nodeModel(s).subs[0].closed') is True
+    # A Pencil tap that slides a few pixels still places a point.
+    pen_stroke(page, session, [(700, 200), (701, 201)])
+    assert js(page, 'e.pathDraft.nodes.length') == 1
+
+
+def test_curved_mouse_drag_draws_freehand(page):
+    page.keyboard.press('b')
+    pts = [to_screen(page, *p) for p in arc_points(500, 400, 200, 0, 3.5)]
+    page.mouse.move(*pts[0]); page.mouse.down()
+    for x, y in pts[1:]: page.mouse.move(x, y)
+    page.mouse.up()
+    assert js(page, 'e.pathDraft') is None
+    n = js(page, 'e.nodeModel(s).subs[0].nodes.length')
+    assert 2 <= n <= 6
+    # Starting on its end draws it on; ending on its start closes it.
+    back = [to_screen(page, *p) for p in arc_points(500, 400, 200, 3.5, 6.2832)]
+    page.mouse.move(*back[0]); page.mouse.down()
+    for x, y in back[1:]: page.mouse.move(x, y)
+    page.mouse.up()
+    assert page.evaluate('svgdeckEditor.editor.svg.querySelectorAll("path").length') == 1
+    assert js(page, 'e.nodeModel(s).subs[0].closed') is True
+    # Looser smoothing, fewer points.
+    page.evaluate('svgdeckEditor.state.prefs.fitTolerance = 1')
+    wave = [to_screen(page, 100 + 10 * i, 700 + 60 * __import__('math').sin(i / 6)) for i in range(80)]
+    counts = []
+    for tolerance in (1, 30):
+        page.evaluate(f'svgdeckEditor.state.prefs.fitTolerance = {tolerance}; svgdeckEditor.editor.select([])')
+        page.mouse.move(*wave[0]); page.mouse.down()
+        for x, y in wave[1:]: page.mouse.move(x, y)
+        page.mouse.up()
+        counts.append(js(page, 'e.nodeModel(s).subs[0].nodes.length'))
+    assert counts[0] > counts[1]

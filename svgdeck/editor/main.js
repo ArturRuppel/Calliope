@@ -8,6 +8,7 @@ import { installMediaTools } from "./media-tools.js";
 import { installRecovery } from "./recovery.js";
 import { installCommits } from "./commits.js";
 import { createColorControl } from "./colors.js";
+import { IMAGE_ADJUSTMENTS, adjustmentValue, setImageAdjustment, resetImageAdjustments, upgradeImageAdjustments } from "./image-adjustments.js";
 
 const DECK = document.body.dataset.deck;
 const $ = (id) => document.getElementById(id);
@@ -156,6 +157,7 @@ const editor = new SlideEditor($("stage"), {
   toolDone: (slot) => setTool("select", { keepEdit: true, slot }),
   inputChanged: () => { updateToolButtons(); renderPanel(); updateSelBar(); },
   usePressure: () => state.prefs.pressure,
+  fitTolerance: () => state.prefs.fitTolerance || 5,
   penFound: () => {
     state.prefs.penSeen = true; savePrefs();
     updateToolButtons();
@@ -308,6 +310,7 @@ async function openSlide(id) {
   state.current = id;
   try {
     editor.load(rec.text);
+    upgradeImageAdjustments(editor);
   } catch (e) {
     toast(e.message, 8000);
   }
@@ -430,7 +433,7 @@ const FAMILIES = {
   shapes: { name: "Shapes", tools: ["rect", "ellipse", "circle", "polygon", "line", "arrow"] },
   paths: { name: "Path", tools: ["bezier", "nodes"] },
 };
-const RAIL = ["select", "pen", "erase", null, "shapes", "paths", null, "text", "media"];
+const RAIL = ["select", "pan", "pen", "erase", null, "shapes", "paths", null, "text", "media"];
 const familyOf = (tool) => Object.keys(FAMILIES).find((f) => FAMILIES[f].tools.includes(tool));
 const lastInFamily = { shapes: "rect", paths: "bezier" };
 
@@ -456,6 +459,11 @@ function buildRail() {
       b.title = FAMILIES[id].name;
       b.setAttribute("aria-haspopup", "menu");
       b.setAttribute("aria-expanded", "false");
+    } else if (id === "select") {
+      Object.assign(b.dataset, { tool: id, more: "" });
+      b.title = "Select (V); tap again for Select several";
+      b.setAttribute("aria-haspopup", "menu");
+      b.setAttribute("aria-expanded", "false");
     } else if (id === "media") {
       b.id = "media-tool";
       b.title = "Insert image or movie";
@@ -470,8 +478,9 @@ function buildRail() {
     b.addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
     b.addEventListener("click", () => {
       const slot = takeSlot();
-      if (id === "media") { $("media-file").click(); return; }
+      if (id === "media") { showMediaPaste(); return; }
       if (FAMILIES[id]) { toggleFlyout(id, b, slot); return; }
+      if (id === "select" && editor.tools[slot] === "select") { toggleSelectFlyout(b, slot); return; }
       closeFlyout();
       setTool(id, { slot });
     });
@@ -484,7 +493,35 @@ function closeFlyout() {
   if (!flyout) return;
   flyout.remove();
   flyout = null;
-  for (const b of document.querySelectorAll("#tools [data-family]")) b.setAttribute("aria-expanded", "false");
+  for (const b of document.querySelectorAll("#tools [aria-haspopup]")) b.setAttribute("aria-expanded", "false");
+}
+
+const SELECT_MODES = [
+  ["select", "Select", TOOLS[0][2], "V", false],
+  ["multi", "Select several", "M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z", "", true],
+];
+
+/** Select's flyout: one object at a time, or taps that add to the selection. */
+function toggleSelectFlyout(anchor, slot) {
+  const same = flyout?.dataset.family === "select";
+  closeFlyout();
+  if (same) return;
+  flyout = el("div", { class: "flyout", id: "tool-flyout", role: "menu", "aria-label": "Select", "data-family": "select", "data-slot": slot },
+    el("div", { class: "flyout-title", role: "presentation" }, "Select"));
+  for (const [id, name, path, key, additive] of SELECT_MODES) {
+    const b = el("button", { type: "button", role: "menuitemradio", id, "aria-pressed": String(!!editor.additive === additive) });
+    b.innerHTML = icon(path);
+    b.append(el("span", { class: "name" }, name));
+    if (key) b.append(el("kbd", {}, key));
+    b.addEventListener("click", () => { closeFlyout(); setAdditive(additive); });
+    flyout.append(b);
+  }
+  flyout.append(el("div", { class: "flyout-hint", role: "presentation" }, "Several: taps add to or remove from the selection."));
+  document.body.append(flyout);
+  const r = anchor.getBoundingClientRect();
+  flyout.style.left = `${r.right + 2}px`;
+  flyout.style.top = `${Math.max(8, Math.min(r.top, innerHeight - flyout.offsetHeight - 8))}px`;
+  anchor.setAttribute("aria-expanded", "true");
 }
 
 function toggleFlyout(family, anchor, slot) {
@@ -515,7 +552,7 @@ function toggleFlyout(family, anchor, slot) {
   updateToolButtons();
 }
 
-// The view bar floats over the stage: zoom, grid, snap, guides, selecting several, pan.
+// The view controls sit in the top bar: zoom, grid, snap, guides.
 function buildViewBar() {
   editor.smartSnap = state.prefs.smartSnap !== false;
   const toggle = (id, label, path, title, onclick, attrs = {}) => {
@@ -530,14 +567,7 @@ function buildViewBar() {
     toggle("snap", "Snap", "M6 15l-4-4 7-7a7.8 7.8 0 0 1 11 11l-7 7-4-4 6.4-6.4a2.1 2.1 0 0 0-3-3z", "Snap objects to the grid",
       () => setGrid({ snap: !state.prefs.grid.snap })),
     toggle("smart-guides", "Guides", "M12 2v20M2 12h20", "Snap moved objects to edges, centres and equal gaps; hold Alt to bypass",
-      () => setGuides(!editor.smartSnap)),
-    toggle("multi", "Several", "M3 3h8v8H3zM13 13h8v8h-8zM15 5h4v4h-4zM5 15h4v4H5z", "Select several: taps add to or remove from the selection",
-      () => setAdditive(!editor.additive)),
-    toggle("pan-tool", "Pan", TOOL.pan.path, TOOL.pan.title, () => {
-      const slot = takeSlot();
-      setTool(editor.tools[slot] === "pan" ? "select" : "pan", { slot });
-    }, { "data-tool": "pan" }));
-  $("pan-tool").addEventListener("pointerdown", (e) => { toolPointer = e.pointerType; });
+      () => setGuides(!editor.smartSnap)));
   paintViewBar();
 }
 
@@ -545,7 +575,13 @@ function paintViewBar() {
   $("grid").setAttribute("aria-pressed", String(!!state.prefs.grid.show));
   $("snap").setAttribute("aria-pressed", String(!!state.prefs.grid.snap));
   $("smart-guides").setAttribute("aria-pressed", String(!!editor.smartSnap));
-  $("multi").setAttribute("aria-pressed", String(!!editor.additive));
+  // Select shows which mode it is in.
+  const select = document.querySelector('#tools [data-tool="select"]');
+  if (select) {
+    const [, name, path] = SELECT_MODES[editor.additive ? 1 : 0];
+    select.innerHTML = icon(path);
+    select.append(el("span", {}, editor.additive ? "Several" : name));
+  }
 }
 
 /** Pressed: the finger's tool. Pencil badge: the Pencil's own tool. */
@@ -562,7 +598,7 @@ function updateToolButtons() {
     b.setAttribute("aria-pressed", String(touch));
     b.dataset.pen = String(pen);
   }
-  for (const b of document.querySelectorAll("#tools [data-tool], #tool-flyout [data-tool], #pan-tool")) {
+  for (const b of document.querySelectorAll("#tools [data-tool], #tool-flyout [data-tool]")) {
     b.setAttribute("aria-pressed", String(b.dataset.tool === editor.tools.touch));
     b.dataset.pen = String(own && b.dataset.tool === editor.tools.pen);
   }
@@ -978,7 +1014,8 @@ function showContextMenu(x, y) {
     action("Copy", () => copySelection(false), { key: "⌘C" });
     action("Cut", () => copySelection(true), { key: "⌘X" });
   }
-  if (clipboardData()) action("Paste", pasteClipboard, { key: "⌘V" });
+  action("Paste", () => pasteSystemClipboard(x, y), { key: "⌘V" });
+  if (clipboardData()) action("Paste copied objects", pasteClipboard);
   if (count) action("Duplicate", () => editor.duplicate(), { key: "⌘D" });
   if (count) {
     sep();
@@ -1062,7 +1099,7 @@ function buildDocMenu() {
 
 document.addEventListener("pointerdown", (e) => {
   if (contextMenu && !contextMenu.contains(e.target) && !e.target.closest("#object-actions")) closeContextMenu();
-  if (flyout && !flyout.contains(e.target) && !e.target.closest("#tools [data-family]")) closeFlyout();
+  if (flyout && !flyout.contains(e.target) && !e.target.closest("#tools [aria-haspopup]")) closeFlyout();
   if (!e.target.closest("#doc-menu, #doc-menu-btn, #slide-menu, #slide-menu-btn")) closeMenus();
 }, true);
 window.addEventListener("resize", () => { closeContextMenu(); closeFlyout(); placeSelBar(); });
@@ -1104,9 +1141,7 @@ async function exportDeck() {
   location.href = `/api/decks/${DECK}/export.zip`;
 }
 
-async function uploadMedia(files) {
-  const target = state.current;
-  const center = editor.visibleCenter();
+async function uploadMedia(files, target = state.current, center = editor.visibleCenter()) {
   for (const file of files) {
     const video = file.type.startsWith("video/");
     toast(video ? `Uploading ${file.name} (movies are converted for playback, this can take a while)…` : `Uploading ${file.name}…`, 60000);
@@ -1207,6 +1242,9 @@ function renderPanel() {
     el("p", {class:"hint"}, "Drag to draw a polygon. Use Edit points to move individual vertices.")));
   if (editor.usesTool("bezier") || editor.pathDraft) parts.push(section("Drawing a path",
     el("p", {class:"hint"}, "Tap to add points; drag while placing a point to pull out its curve handles. Enter, double-tap or right-click finishes. Tap the first point to close. Escape cancels; Backspace removes the last point."),
+    el("p", {class:"hint"}, "Draw a line freehand (the Pencil always does; a finger or the mouse once the drag curves) and it becomes a few smooth points, with corners where it turns sharply. Start on the end of a path to continue it; end on its start to close it."),
+    row("Smoothing", numberControl(state.prefs.fitTolerance || 5, {min:1,max:40,step:1,suffix:"px"}, v => {state.prefs.fitTolerance = Math.max(1,Math.min(40,v)); savePrefs();})),
+    el("p", {class:"hint"}, "Higher smoothing gives fewer points and a looser fit. It is measured on screen, so zooming in gives finer detail."),
     editor.pathDraft ? buttonRow([
       ["Finish path", "Finish path (Enter)", () => editor.finishPath()],
       ["Close path", "Connect back to the first point", () => editor.finishPath(true)],
@@ -1273,6 +1311,44 @@ function renderPanel() {
       el("p", {class:"hint"}, "Drag the edges or corners to crop. Your original media stays intact.")));
   }
 
+  if (sel.every(image => image.localName === "image" && !image.hasAttribute("data-video"))) {
+    parts.push(section("Image adjustments",
+      ...IMAGE_ADJUSTMENTS.map(spec => {
+        const value = adjustmentValue(first, spec);
+        const slider = el("input", {type:"range", min:spec.min, max:spec.max, step:1, value,
+          "aria-label":spec.label, style:"width:100%;min-width:0"});
+        let pending = false;
+        const preview = v => {
+          if (!Number.isFinite(v)) return;
+          setImageAdjustment(editor, spec, v, sel, true);
+          pending = true;
+        };
+        const finish = () => {
+          if (!pending) return;
+          pending = false;
+          editor.commit();
+        };
+        const numeric = numberControl(value, {min:spec.min, max:spec.max, step:1, suffix:spec.unit},
+          v => { preview(v); finish(); });
+        const input = numeric.querySelector("input");
+        input.setAttribute("aria-label", `${spec.label} value`);
+        input.addEventListener("input", () => {
+          if (input.value === "" || !input.validity.valid) return;
+          slider.value = input.value;
+          preview(+input.value);
+        });
+        slider.addEventListener("input", () => { input.value = slider.value; preview(+slider.value); });
+        slider.addEventListener("change", () => { preview(+slider.value); finish(); });
+        for (const control of [slider, input]) {
+          control.addEventListener("blur", finish);
+          control.addEventListener("pointercancel", finish);
+        }
+        return row(spec.label, slider, numeric);
+      }),
+      buttonRow([["Reset adjustments", "Restore original image colours", () => resetImageAdjustments(editor, sel)]]),
+      el("p", {class:"hint"}, "Saturation 0% makes grayscale. Original images stay intact.")));
+  }
+
   if (inks) {
     // Pressure strokes are filled outlines: their colour is the fill.
     parts.push(section(sel.length > 1 ? `${sel.length} ink strokes` : "Ink stroke",
@@ -1291,7 +1367,7 @@ function renderPanel() {
         (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   } else {
     parts.push(section("Style", row("Opacity", numberControl(Math.round((Number.isFinite(parseFloat(cs.opacity)) ? parseFloat(cs.opacity) : 1) * 100),
-      { min: 0, max: 100, step: 5, suffix: "%" }, (v) => editor.setStyle("opacity", String(v / 100))))));
+      { min: 0, max: 100, step: 5, suffix: "%" }, (v) => editor.setStyle("opacity", String(Math.max(0, Math.min(100, v)) / 100))))));
   }
 
   if (texts.length) {
@@ -1487,7 +1563,7 @@ document.addEventListener("keydown", (e) => {
   if (controller.learning) { if (e.key === "Escape") e.preventDefault(); controller.keydown(e); return; }
   const modal = document.querySelector("dialog[open]");
   if (modal && !(modal.classList.contains("media-tools") && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) return;
-  if (e.target.closest("input, textarea, select") || editor.textEdit) return;
+  if (e.target.closest("input, textarea, select, [contenteditable]") || editor.textEdit) return;
   if (controller.keydown(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
@@ -1509,7 +1585,7 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (mod && k === "v") {
-    if (clipboardData()) { e.preventDefault(); pasteClipboard(); }
+    // Let the native paste event deliver system images before internal objects.
     return;
   }
   if (mod) return;
@@ -1542,6 +1618,180 @@ document.addEventListener("keydown", (e) => {
     setTool(KEYS[k]);
     if (editor.input === "pen") toast(actionLabel(`pen:${KEYS[k]}`), 1200);
   }
+});
+
+// Image paste shares the upload path, including origin-slide tracking and undo.
+function imageFiles(data) {
+  const files = [...(data?.files || [])].filter(f => f.type.startsWith("image/"));
+  if (files.length) return files;
+  return [...(data?.items || [])].filter(i => i.kind === "file" && i.type.startsWith("image/"))
+    .map(i => i.getAsFile()).filter(Boolean);
+}
+
+async function readImageClipboard() {
+  const items = await navigator.clipboard.read();
+  const files = [];
+  for (const item of items) {
+    const type = item.types.find(t => t.startsWith("image/"));
+    if (!type) continue;
+    const blob = await item.getType(type);
+    const ext = type === "image/jpeg" ? "jpg" : type.split("/")[1].split("+")[0];
+    files.push(new File([blob], `pasted-image.${ext}`, { type }));
+  }
+  return files;
+}
+
+async function insertedImageFiles(box) {
+  const files = [];
+  for (const image of box.querySelectorAll("img")) {
+    const src = image.getAttribute("src") || "";
+    if (!/^(blob:|data:image\/)/i.test(src)) continue;
+    const response = await fetch(src);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) continue;
+    const ext = blob.type === "image/jpeg" ? "jpg" : blob.type.split("/")[1].split("+")[0];
+    files.push(new File([blob], `pasted-image.${ext}`, { type: blob.type }));
+  }
+  return files;
+}
+
+let clearCanvasPaste = null;
+async function pasteSystemClipboard(x, y) {
+  clearCanvasPaste?.();
+  const target = state.current;
+  const center = editor.point({ clientX: x, clientY: y });
+  if (navigator.clipboard?.read) {
+    try {
+      // Start the read in the menu click, before any asynchronous work.
+      const files = await readImageClipboard();
+      if (files.length) { uploadMedia(files, target, center); return; }
+      if (clipboardData() && state.current === target) { pasteClipboard(); return; }
+      toast("No image found. Copy an image and choose Paste again.");
+      return;
+    } catch (error) { /* expose a native paste target on the canvas */ }
+  }
+  // HTTP has no async clipboard API. Use WebKit's native user-initiated paste
+  // into a temporary editable on the main canvas, never into the saved SVG.
+  const box = el("div", { id: "canvas-paste-target", contenteditable: "true", role: "textbox",
+    "aria-label": "Paste on slide", style: `position:fixed;z-index:1000;left:${Math.max(8, Math.min(x, innerWidth - 168))}px;top:${Math.max(8, Math.min(y, innerHeight - 56))}px;width:160px;min-height:44px;padding:10px;background:var(--color-bg);border:1px solid var(--accent);user-select:text;-webkit-user-select:text;-webkit-touch-callout:default` }, "Paste here");
+  let active = true, importing = false;
+  let timeout;
+  const clear = () => {
+    active = false;
+    clearTimeout(timeout);
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", escape, true);
+    box.remove();
+    if (clearCanvasPaste === clear) clearCanvasPaste = null;
+  };
+  const outside = e => { if (!box.contains(e.target)) clear(); };
+  const escape = e => { if (e.key === "Escape") clear(); };
+  const insert = files => {
+    if (!active || importing || !files.length) return;
+    importing = true;
+    clear(); uploadMedia(files, target, center);
+  };
+  box.addEventListener("paste", e => {
+    e.stopPropagation();
+    const files = imageFiles(e.clipboardData);
+    if (files.length) { e.preventDefault(); insert(files); }
+    // Preserve native image insertion even when Safari exposes no clipboard
+    // types. Internal objects have their own menu action.
+  });
+  box.addEventListener("input", async () => {
+    try {
+      const files = await insertedImageFiles(box);
+      if (files.length) insert(files);
+      else if (active) toast("No image found. Copy an image from Photos and try Paste again.");
+    } catch (error) { if (active) toast("Could not read this image. Try copying it from Photos."); }
+  });
+  document.body.append(box);
+  clearCanvasPaste = clear;
+  document.addEventListener("pointerdown", outside, true);
+  document.addEventListener("keydown", escape, true);
+  timeout = setTimeout(clear, 60000);
+  box.focus({ preventScroll: true });
+  const range = document.createRange(); range.selectNodeContents(box);
+  const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+  try { document.execCommand("paste"); } catch (error) { /* native touch callout remains available */ }
+  if (active) toast("Choose Paste in iPad’s prompt, or touch and hold Paste here.", 8000);
+}
+
+function showMediaPaste() {
+  if (document.querySelector("dialog[open]")) return;
+  const dialog = el("dialog", { class: "settings-dialog", id: "image-paste-dialog", "aria-labelledby": "image-paste-title" });
+  const hint = el("p", { class: "hint" }, "Copy an image, tap Paste image, then approve iPad’s Paste prompt. You can also touch and hold in the box and choose Paste.");
+  const target = state.current, center = editor.visibleCenter();
+  const box = el("div", { id: "image-paste-target", contenteditable: "true", role: "textbox", "aria-label": "Paste an image here",
+    style: "min-height:80px;padding:16px;border:1px solid currentColor;user-select:text;-webkit-user-select:text;-webkit-touch-callout:default" });
+  const close = () => dialog.close();
+  let importing = false;
+  const insert = files => {
+    if (importing || !dialog.open || !files.length) return;
+    importing = true;
+    close(); uploadMedia(files, target, center);
+  };
+  const focusBox = () => {
+    box.focus();
+    const range = document.createRange();
+    range.selectNodeContents(box); range.collapse(false);
+    const selection = window.getSelection();
+    selection.removeAllRanges(); selection.addRange(range);
+  };
+  // iPad can insert an image into contenteditable without exposing a File in
+  // the paste event. Let that native insertion finish and import its bytes.
+  box.addEventListener("input", async () => {
+    const images = [...box.querySelectorAll("img")];
+    if (!images.length) return;
+    try {
+      const files = await insertedImageFiles(box);
+      if (files.length) insert(files);
+      else hint.textContent = "This image’s bytes are unavailable. Copy it from Photos, or choose a file.";
+    } catch (error) {
+      hint.textContent = "Could not read this image. Copy it from Photos, or choose a file.";
+    }
+  });
+  const read = el("button", { class: "btn", type: "button", onclick: async () => {
+    if (!navigator.clipboard?.read) {
+      // WebKit supports this user-initiated paste over HTTP, where the async
+      // clipboard API is absent. It may show the native iOS Paste callout.
+      focusBox();
+      try { document.execCommand("paste"); } catch (error) { /* use the native callout below */ }
+      if (dialog.open) hint.textContent = "Choose Paste in iPad’s prompt. If it does not appear, touch and hold in the box and choose Paste.";
+      return;
+    }
+    try {
+      // Call read directly in the click gesture: Safari requires user activation.
+      const files = await readImageClipboard();
+      if (!dialog.open) return;
+      if (!files.length) { hint.textContent = "No image found. Copy an image, then try again."; return; }
+      insert(files);
+    } catch (error) {
+      if (dialog.open) hint.textContent = "Clipboard access was not available. Touch and hold in the box below and choose Paste, or choose a file.";
+    }
+  } }, "Paste image");
+  box.addEventListener("paste", e => {
+    e.stopPropagation();
+    const files = imageFiles(e.clipboardData);
+    if (files.length) { e.preventDefault(); insert(files); }
+    // With no files, preserve Safari’s default rich image insertion; input
+    // above imports it. Preventing default here used to discard that image.
+  });
+  dialog.append(el("header", {}, el("h2", { id: "image-paste-title" }, "Insert media"),
+    el("button", { class: "btn", type: "button", onclick: close, "aria-label": "Close" }, "×")),
+    el("div", { class: "panel settings-body" },
+      el("button", { class: "btn", type: "button", onclick: () => { close(); $("media-file").click(); } }, "Choose image or movie…"),
+      read, hint, box));
+  dialog.addEventListener("close", () => dialog.remove(), { once: true });
+  document.body.append(dialog); dialog.showModal();
+}
+
+document.addEventListener("paste", e => {
+  if (e.defaultPrevented || document.querySelector("dialog[open]") || editor.textEdit ||
+      e.target.closest?.("input, textarea, select, [contenteditable]")) return;
+  const files = imageFiles(e.clipboardData);
+  if (files.length) { e.preventDefault(); uploadMedia(files); return; }
+  if (clipboardData()) { e.preventDefault(); pasteClipboard(); }
 });
 
 // The clipboard lives in localStorage, so it works across slides and decks.

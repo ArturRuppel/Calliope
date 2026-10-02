@@ -1,6 +1,6 @@
 """Pan, independent grid controls and context menus for mouse and touch."""
 import pytest
-from conftest import pick_tool, tool_button, tool_pressed
+from conftest import pick_tool, select_several, tool_button, tool_pressed
 from test_editor import BROWSER, page, server, to_screen, drag, add_rects
 
 
@@ -43,7 +43,7 @@ def test_multiselect_group_button_and_right_click_ungroup(page):
     add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150]])
     assert page.locator('#group-selection').count() == 0  # the bar offers Group only for several objects
     pick_tool(page, 'pan')
-    page.click('#multi')
+    select_several(page)
     assert page.evaluate('svgdeckEditor.editor.tool') == 'select'
     page.mouse.click(*to_screen(page, 175, 175))
     page.mouse.click(*to_screen(page, 475, 175))
@@ -164,3 +164,122 @@ def test_tools_and_menu_fit_tablet_and_phone_viewports(page, width, height, tmp_
     assert box['y'] >= 0 and box['y']+box['height'] <= height
     assert menu.get_by_role('menuitem',name='Group',exact=True).is_disabled()
     page.screenshot(path=str(tmp_path/'tools-and-menu.png'))
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+@pytest.mark.parametrize('tool', ['select', 'pan', 'pen', 'rect', 'erase'])
+def test_long_press_opens_paste_without_editing(page, tool):
+    pick_tool(page, tool)
+    source = page.evaluate('svgdeckEditor.editor.serialize()')
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    touch(session, 'touchStart', [(1, x, y)])
+    page.locator('#context-menu').wait_for(state='visible')
+    touch(session, 'touchEnd', [])
+    assert page.locator('#context-menu').get_by_role('menuitem', name='Paste', exact=True).is_enabled()
+    assert page.evaluate('svgdeckEditor.editor.serialize()') == source
+    assert page.evaluate('svgdeckEditor.editor.gesture') is None
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+@pytest.mark.parametrize('cancel', ['move', 'cancel', 'second-finger'])
+def test_interrupted_hold_does_not_open_menu(page, cancel):
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    touch(session, 'touchStart', [(1, x, y)])
+    if cancel == 'move':
+        touch(session, 'touchMove', [(1, x+40, y)])
+    elif cancel == 'cancel':
+        touch(session, 'touchCancel', [])
+    else:
+        touch(session, 'touchStart', [(1, x, y), (2, x+40, y)])
+    page.wait_for_timeout(650)
+    assert page.locator('#context-menu').count() == 0
+    if cancel != 'cancel':
+        touch(session, 'touchEnd', [])
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+def test_long_press_paste_inserts_system_image_on_slide(page):
+    page.evaluate("""() => {
+      localStorage.setItem('svgdeck-clipboard', 'stale objects');
+      Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{read:async () => {
+        const canvas=document.createElement('canvas');canvas.width=12;canvas.height=8;
+        const blob=await new Promise(resolve=>canvas.toBlob(resolve));
+        return [{types:['image/png'], getType:async () => blob}];
+      }}});
+    }""")
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    touch(session, 'touchStart', [(1, x, y)])
+    page.locator('#context-menu').wait_for(state='visible')
+    touch(session, 'touchEnd', [])
+    button = page.locator('#context-menu').get_by_role('menuitem', name='Paste', exact=True).bounding_box()
+    touch(session, 'touchStart', [(1, button['x']+30, button['y']+20)])
+    touch(session, 'touchEnd', [])
+    page.wait_for_function("svgdeckEditor.editor.svg.querySelectorAll('image').length === 1")
+    assert page.locator('dialog[open]').count() == 0
+    assert page.locator('#context-menu').count() == 0
+    image = page.locator('.page > svg:first-child image')
+    assert float(image.get_attribute('x')) + float(image.get_attribute('width')) / 2 == pytest.approx(1000, abs=3)
+    assert float(image.get_attribute('y')) + float(image.get_attribute('height')) / 2 == pytest.approx(600, abs=3)
+    page.evaluate('svgdeckEditor.undo()')
+    assert page.locator('.page > svg:first-child image').count() == 0
+
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+def test_long_press_releases_pointer_before_menu_intercepts_lift(page):
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    touch(session, 'touchStart', [(1, x, y)])
+    page.locator('#context-menu').wait_for(state='visible')
+    assert page.evaluate('svgdeckEditor.editor.pointers.size') == 0
+    assert page.evaluate('svgdeckEditor.editor.gesture') is None
+    touch(session, 'touchEnd', [])
+    page.keyboard.press('Escape')
+    touch(session, 'touchStart', [(1, x, y)])
+    assert page.evaluate('svgdeckEditor.editor.gesture.kind') != 'pinch'
+    page.locator('#context-menu').wait_for(state='visible')
+    touch(session, 'touchEnd', [])
+    assert page.evaluate('svgdeckEditor.editor.pointers.size') == 0
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+def test_lost_capture_cancels_touch_and_next_touch_is_not_zoom(page):
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    touch(session, 'touchStart', [(1, x, y)])
+    page.evaluate("""() => {
+      const e = svgdeckEditor.editor;
+      const id = [...e.pointers.keys()][0];
+      e.host.releasePointerCapture(id);
+    }""")
+    touch(session, 'touchMove', [(1, x+1, y)])
+    page.wait_for_function('svgdeckEditor.editor.pointers.size === 0')
+    assert page.evaluate('svgdeckEditor.editor.gesture') is None
+    touch(session, 'touchEnd', [])
+    page.keyboard.press('Escape')  # release can also trigger the browser context menu
+    x, y = to_screen(page, 500, 400)
+    touch(session, 'touchStart', [(1, x, y)])
+    assert page.evaluate('svgdeckEditor.editor.pointers.size') == 1
+    assert page.evaluate('svgdeckEditor.editor.gesture.kind') != 'pinch'
+    touch(session, 'touchEnd', [])
+
+
+@pytest.mark.skipif(BROWSER != 'chromium', reason='real touch injection uses Chromium CDP')
+def test_new_primary_touch_recovers_stale_zoom_state(page):
+    page.evaluate("""() => {
+      const e = svgdeckEditor.editor;
+      e.pointers.set(999, {type:'touch', x:100, y:100, startX:100, startY:100, started:0});
+      e.gesture = {kind:'pinch', tapCandidate:false, dist:40, mid:{x:100,y:100}};
+    }""")
+    session = page.context.new_cdp_session(page)
+    x, y = to_screen(page, 1000, 600)
+    zoom = page.evaluate('svgdeckEditor.editor.zoom')
+    touch(session, 'touchStart', [(1, x, y)])
+    assert page.evaluate('svgdeckEditor.editor.gesture.kind') != 'pinch'
+    assert page.evaluate('svgdeckEditor.editor.pointers.size') == 1
+    touch(session, 'touchEnd', [])
+    assert page.evaluate('svgdeckEditor.editor.pointers.size') == 0
+    assert page.evaluate('svgdeckEditor.editor.zoom') == zoom

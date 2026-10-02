@@ -107,6 +107,24 @@ def create_app(data: Path) -> FastAPI:
         except ValueError as e:
             raise HTTPException(400, str(e))
 
+    @app.delete("/api/decks/{name}")
+    def delete_deck(name: str):
+        deck_dir(name)
+        return store.delete_deck(name)
+
+    @app.get("/api/trash")
+    def deleted_decks():
+        return store.list_deleted_decks()
+
+    @app.post("/api/trash/{token}/restore")
+    def restore_deck(token: str):
+        try:
+            return store.restore_deck(token)
+        except KeyError:
+            raise HTTPException(404, "no such deleted deck")
+        except FileExistsError:
+            raise HTTPException(409, "a deck with that name exists; rename it first")
+
     @app.get("/api/decks/{name}")
     def get_deck(name: str):
         deck_dir(name)

@@ -34,6 +34,17 @@ export function toRoot(el, svg) {
 export function rootBox(el, svg) {
   let b;
   try { b = el.getBBox(); } catch (e) { return null; }
+  // SVG getBBox() ignores clipping. Selection and transforms use the visible
+  // crop; media-tools keeps the original image geometry for editing the crop.
+  if (el.localName === "image" && el.hasAttribute("data-crop")) {
+    const crop = el.getAttribute("data-crop").trim().split(/[ ,]+/).map(Number);
+    if (crop.length === 4 && crop.every(Number.isFinite)) {
+      const [left, top, right, bottom] = crop.map(v => Math.max(0, Math.min(99.9, v)) / 100);
+      b = {x: b.x + b.width * left, y: b.y + b.height * top,
+        width: b.width * Math.max(.001, 1 - left - right),
+        height: b.height * Math.max(.001, 1 - top - bottom)};
+    }
+  }
   const m = toRoot(el, svg);
   const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]]
     .map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
@@ -356,6 +367,149 @@ export function nearestOnSegment(a, b, p, map = (q) => q) {
   }
   const t = (lo + hi) / 2;
   return { t, dist: d(t) };
+}
+
+// --- freehand fitting ----------------------------------------------------------
+// A freehand stroke becomes a few cubic Béziers (Schneider, "An algorithm for
+// automatically fitting digitized curves", Graphics Gems 1990). Sharp turns are
+// found first and kept as corners; the pieces between them are fitted with
+// tangent-continuous (smooth) joins.
+
+const sub2 = (a, b) => pt(a.x - b.x, a.y - b.y);
+const dot2 = (a, b) => a.x * b.x + a.y * b.y;
+const unit = (v) => { const l = Math.hypot(v.x, v.y) || 1; return pt(v.x / l, v.y / l); };
+const along = (p, v, s) => pt(p.x + v.x * s, p.y + v.y * s);
+
+function bezierAt(b, t) {
+  const u = 1 - t;
+  return pt(u * u * u * b[0].x + 3 * u * u * t * b[1].x + 3 * u * t * t * b[2].x + t * t * t * b[3].x,
+            u * u * u * b[0].y + 3 * u * u * t * b[1].y + 3 * u * t * t * b[2].y + t * t * t * b[3].y);
+}
+
+/** Least-squares cubic with fixed end tangents t1 (leaving) and t2 (arriving, reversed). */
+function generateBezier(d, u, t1, t2) {
+  const first = d[0], last = d.at(-1);
+  let c00 = 0, c01 = 0, c11 = 0, x0 = 0, x1 = 0;
+  for (let i = 0; i < d.length; i++) {
+    const s = u[i], v = 1 - s, b0 = v * v * v, b1 = 3 * s * v * v, b2 = 3 * s * s * v, b3 = s * s * s;
+    const a1 = pt(t1.x * b1, t1.y * b1), a2 = pt(t2.x * b2, t2.y * b2);
+    c00 += dot2(a1, a1); c01 += dot2(a1, a2); c11 += dot2(a2, a2);
+    const tmp = sub2(d[i], pt(first.x * (b0 + b1) + last.x * (b2 + b3), first.y * (b0 + b1) + last.y * (b2 + b3)));
+    x0 += dot2(a1, tmp); x1 += dot2(a2, tmp);
+  }
+  const det = c00 * c11 - c01 * c01;
+  let alpha1 = det ? (x0 * c11 - x1 * c01) / det : 0, alpha2 = det ? (c00 * x1 - c01 * x0) / det : 0;
+  const seg = Math.hypot(last.x - first.x, last.y - first.y), eps = 1e-6 * seg;
+  // Degenerate solutions fall back to the Wu/Barsky heuristic.
+  if (alpha1 < eps || alpha2 < eps) alpha1 = alpha2 = seg / 3;
+  return [first, along(first, t1, alpha1), along(last, t2, alpha2), last];
+}
+
+/** One Newton step towards each point's nearest parameter on the curve. */
+function reparameterize(b, d, u) {
+  const q1 = [0, 1, 2].map((i) => pt(3 * (b[i + 1].x - b[i].x), 3 * (b[i + 1].y - b[i].y)));
+  const q2 = [0, 1].map((i) => pt(2 * (q1[i + 1].x - q1[i].x), 2 * (q1[i + 1].y - q1[i].y)));
+  return u.map((t, i) => {
+    const v = 1 - t;
+    const p = bezierAt(b, t);
+    const d1 = pt(v * v * q1[0].x + 2 * v * t * q1[1].x + t * t * q1[2].x, v * v * q1[0].y + 2 * v * t * q1[1].y + t * t * q1[2].y);
+    const d2 = pt(v * q2[0].x + t * q2[1].x, v * q2[0].y + t * q2[1].y);
+    const diff = sub2(p, d[i]);
+    const den = dot2(d1, d1) + dot2(diff, d2);
+    const next = den ? t - dot2(diff, d1) / den : t;
+    return Math.max(0, Math.min(1, next));
+  });
+}
+
+function chordParams(d) {
+  const u = [0];
+  for (let i = 1; i < d.length; i++) u.push(u[i - 1] + Math.hypot(d[i].x - d[i - 1].x, d[i].y - d[i - 1].y));
+  const total = u.at(-1) || 1;
+  return u.map((v) => v / total);
+}
+
+function maxError(d, b, u) {
+  let max = 0, split = Math.floor(d.length / 2);
+  for (let i = 1; i < d.length - 1; i++) {
+    const q = bezierAt(b, u[i]), e = (q.x - d[i].x) ** 2 + (q.y - d[i].y) ** 2;
+    if (e > max) { max = e; split = i; }
+  }
+  return { max, split };
+}
+
+/** Béziers ([p0, c1, c2, p3]) through d within `error`, with the given end tangents. */
+function fitCubic(d, t1, t2, error, depth = 0) {
+  if (d.length === 2) {
+    const dist = Math.hypot(d[1].x - d[0].x, d[1].y - d[0].y) / 3;
+    return [[d[0], along(d[0], t1, dist), along(d[1], t2, dist), d[1]]];
+  }
+  let u = chordParams(d), b = generateBezier(d, u, t1, t2), { max, split } = maxError(d, b, u);
+  const err2 = error * error;
+  if (max < err2 || depth > 12) return [b];
+  if (max < err2 * 16) {
+    for (let k = 0; k < 8; k++) {
+      u = reparameterize(b, d, u);
+      b = generateBezier(d, u, t1, t2);
+      ({ max, split } = maxError(d, b, u));
+      if (max < err2) return [b];
+    }
+  }
+  const centre = unit(sub2(d[split - 1], d[split + 1]));
+  return [...fitCubic(d.slice(0, split + 1), t1, centre, error, depth + 1),
+          ...fitCubic(d.slice(split), pt(-centre.x, -centre.y), t2, error, depth + 1)];
+}
+
+/** The direction the stroke leaves d[i] in, looking `reach` along it (step ±1). */
+function strokeTangent(d, i, step, reach) {
+  let j = i + step;
+  while (j > 0 && j < d.length - 1 && Math.hypot(d[j].x - d[i].x, d[j].y - d[i].y) < reach) j += step;
+  return unit(sub2(d[j], d[i]));
+}
+
+/** Indices where the stroke turns sharper than `cornerDeg` within `reach`. */
+function strokeCorners(d, reach, cornerDeg) {
+  const turn = d.map((p, i) => {
+    if (i === 0 || i === d.length - 1) return 0;
+    const back = strokeTangent(d, i, -1, reach), ahead = strokeTangent(d, i, 1, reach);
+    return Math.acos(Math.max(-1, Math.min(1, -dot2(back, ahead)))) * 180 / Math.PI;
+  });
+  const corners = [0];
+  for (let i = 1; i < d.length - 1; i++) {
+    if (turn[i] < cornerDeg) continue;
+    // The sharpest point of the bend, and not too close to the last corner.
+    let j = i;
+    while (j + 1 < d.length - 1 && turn[j + 1] >= cornerDeg) j++;
+    let best = i;
+    for (let k = i; k <= j; k++) if (turn[k] > turn[best]) best = k;
+    const prev = d[corners.at(-1)];
+    if (Math.hypot(d[best].x - prev.x, d[best].y - prev.y) > reach) corners.push(best);
+    i = j;
+  }
+  const end = d.length - 1;
+  if (corners.length > 1 && Math.hypot(d[end].x - d[corners.at(-1)].x, d[end].y - d[corners.at(-1)].y) < reach) corners.pop();
+  corners.push(end);
+  return corners;
+}
+
+/** Nodes ({x, y, in, out, type}) for a freehand stroke of {x, y} points:
+ *  `error` is the largest allowed deviation; a turn sharper than `cornerDeg`
+ *  within `reach` along the stroke is a corner ("c"), other joins are smooth ("s"). */
+export function fitStroke(points, error, { reach = error * 4, cornerDeg = 55 } = {}) {
+  const d = [];
+  for (const p of points) if (!d.length || Math.hypot(p.x - d.at(-1).x, p.y - d.at(-1).y) > error / 8) d.push(pt(p.x, p.y));
+  if (d.length < 2) return d.map((p) => ({ x: p.x, y: p.y, in: pt(p.x, p.y), out: pt(p.x, p.y), type: "c" }));
+  const corners = strokeCorners(d, reach, cornerDeg);
+  const nodes = [{ x: d[0].x, y: d[0].y, in: pt(d[0].x, d[0].y), out: pt(d[0].x, d[0].y), type: "c" }];
+  for (let c = 0; c < corners.length - 1; c++) {
+    const piece = d.slice(corners[c], corners[c + 1] + 1);
+    const t1 = strokeTangent(piece, 0, 1, reach), t2 = strokeTangent(piece, piece.length - 1, -1, reach);
+    const curves = fitCubic(piece, t1, t2, error);
+    curves.forEach((b, k) => {
+      nodes.at(-1).out = pt(b[1].x, b[1].y);
+      nodes.push({ x: b[3].x, y: b[3].y, in: pt(b[2].x, b[2].y), out: pt(b[3].x, b[3].y), type: k < curves.length - 1 ? "s" : "c" });
+    });
+  }
+  return nodes;
 }
 
 // --- pressure ink ------------------------------------------------------------

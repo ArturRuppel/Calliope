@@ -10,9 +10,9 @@
 <link rel="apple-touch-icon" href="/editor/apple-touch-icon.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
 <style>
-  /* The Modernist system, as in the editor: flat, square, near-black ink on cool grey, one purple accent. */
-  :root { --ink: #1c1b22; --muted: #5c5b63; --line: color-mix(in srgb, #1c1b22 40%, transparent); --accent: #6b3fa0;
-    --accent-600: #5a3389; --n200: #e8e8ea; --bg: #f3f3f4;
+  /* The Modernist system, as in the editor: flat, square, near-black ink on cool grey, one teal accent. */
+  :root { --ink: #1c1b22; --muted: #5c5b63; --line: color-mix(in srgb, #1c1b22 40%, transparent); --accent: #0e7c7b;
+    --accent-600: #0a6564; --n200: #e8e8ea; --bg: #f3f3f4;
     font: 15px/1.4 "Archivo", system-ui, -apple-system, sans-serif; color: var(--ink); }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); }
@@ -35,12 +35,20 @@
   input { height: 44px; padding: 0 12px; border: 2px solid var(--line); border-radius: 0; background: #fff; font: inherit; flex: 1; min-width: 10rem; }
   input:focus { outline: none; border-color: var(--ink); }
   .error { color: #b3261e; width: 100%; }
+  button.danger { color: #b3261e; border-color: #b3261e; }
+  button.danger.armed { background: #b3261e; color: #fff; }
+  #deleted:empty { display: none; }
+  #deleted { margin-top: 32px; padding-top: 16px; border-top: 2px solid var(--line); }
+  #deleted h2 { margin: 0 0 4px; font-size: 18px; font-weight: 800; }
+  #deleted .deck strong { color: var(--muted); }
 </style>
 </head>
 <body>
 <header><h1><img class="mark" src="/editor/icon.svg" alt="">Calliope</h1><a class="btn primary" href="#new" onclick="document.querySelector('#new input').focus()">New deck</a></header>
 <main>
+  <p class="error" id="status"></p>
   <div id="decks">Loading…</div>
+  <section id="deleted"></section>
   <form id="new">
     <h2>New deck</h2>
     <input name="title" placeholder="Title, e.g. Group meeting" required>
@@ -57,9 +65,44 @@
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
         <a class="btn primary" href="/edit/${encodeURIComponent(d.name)}">Edit</a>
-        <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a></div>`).join("")
+        <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a>
+        <button class="danger" data-delete="${esc(d.name)}">Delete</button></div>`).join("")
       : "<p>No decks yet.</p>";
+    const deleted = await (await fetch("/api/trash")).json();
+    document.getElementById("deleted").innerHTML = deleted.length ? `<h2>Recently deleted</h2>` + deleted.map((d) => `
+      <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
+        <small>${esc(d.name)} · deleted ${new Date(d.deleted * 1000).toLocaleString()}</small></div>
+        <button data-restore="${esc(d.token)}">Restore</button></div>`).join("") : "";
   }
+  // Two taps instead of confirm(): a modal dialog mid-gesture loses focus on iPad.
+  let armed = null;
+  function disarm() {
+    if (!armed) return;
+    armed.classList.remove("armed");
+    armed.textContent = "Delete";
+    armed = null;
+  }
+  document.addEventListener("click", async (e) => {
+    const del = e.target.closest("[data-delete]"), restore = e.target.closest("[data-restore]");
+    if (del && del !== armed) {
+      disarm();
+      armed = del;
+      del.classList.add("armed");
+      del.textContent = "Tap again to delete";
+      return;
+    }
+    if (!del) disarm();
+    if (del) {
+      armed = null;
+      const r = await fetch(`/api/decks/${encodeURIComponent(del.dataset.delete)}`, { method: "DELETE" });
+      document.getElementById("status").textContent = r.ok ? "" : (await r.json()).detail || "Could not delete the deck.";
+      load();
+    } else if (restore) {
+      const r = await fetch(`/api/trash/${encodeURIComponent(restore.dataset.restore)}/restore`, { method: "POST" });
+      document.getElementById("status").textContent = r.ok ? "" : (await r.json()).detail || "Could not restore the deck.";
+      load();
+    }
+  });
   const form = document.getElementById("new");
   form.title.addEventListener("input", () => {
     if (form.name.dataset.touched) return;

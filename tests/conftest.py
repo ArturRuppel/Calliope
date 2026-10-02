@@ -64,14 +64,12 @@ FAMILIES = {"rect": "shapes", "ellipse": "shapes", "circle": "shapes", "polygon"
 
 def tool_button(page, tool: str):
     """The editor's button for a tool: rail buttons are always there; shapes
-    and paths sit in a flyout, opened here. Pan lives in the view bar."""
+    and paths sit in a flyout, opened here."""
     family = FAMILIES.get(tool)
     if family:
         if page.locator(f'#tool-flyout[data-family="{family}"]').count() == 0:
             page.click(f'#tools [data-family="{family}"]')
         return page.locator(f'#tool-flyout [data-tool="{tool}"]')
-    if tool == "pan":
-        return page.locator("#pan-tool")
     return page.locator(f'#tools [data-tool="{tool}"]')
 
 
@@ -90,5 +88,14 @@ def tool_pressed(page, tool: str) -> bool:
     through their family button."""
     family = FAMILIES.get(tool)
     selector = (f'#tools [data-family="{family}"]' if family else
-                "#pan-tool" if tool == "pan" else f'#tools [data-tool="{tool}"]')
+                f'#tools [data-tool="{tool}"]')
     return page.locator(selector).get_attribute("aria-pressed") == "true"
+
+
+def select_several(page) -> None:
+    """Select several lives in Select's flyout: a second tap on Select opens it."""
+    if not tool_pressed(page, "select"):
+        pick_tool(page, "select")
+    if page.locator('#tool-flyout[data-family="select"]').count() == 0:
+        page.click('#tools [data-tool="select"]')
+    page.click("#multi")

@@ -80,6 +80,20 @@ Movies are always muted.
 | `data-mask="rect"` or `"ellipse"` | crop mask shape; the editor also writes a native SVG `clipPath` in object-bounding-box units |
 | `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference |
 
+### Image adjustments
+
+Still images may carry `data-image-saturation`, `data-image-hue`,
+`data-image-brightness` and `data-image-contrast`. Percent values range from
+0 to 1000 (default 100); hue is degrees from -180 to 180 (default 0).
+The editor writes native SVG filter definitions referenced by the image's inline style,
+so standalone SVGs, the presenter and exports render the same adjustments.
+The order is saturation, hue, contrast, then brightness. Zero contrast gives
+uniform gray, which brightness can darken to black or brighten to white.
+`data-image-original-filter` retains the previous inline filter for reset;
+`data-svgdeck-image-filter` identifies the editor-owned filter definition; imported
+filter attributes remain intact. Whole-object opacity controls
+transparency separately. Source media files are never changed.
+
 ### Builds
 
 Any element with `data-step="n"` (n ≥ 1) is hidden until the n-th step of the
@@ -95,6 +109,10 @@ The service keeps up to 30 preceding artwork versions per slide in
 with a JSON sidecar retaining their slide metadata, including speaker notes.
 These recovery files remain in the working deck and are not included in the
 standalone presentation export.
+
+A deleted deck is moved whole, recovery files included, to
+`<data>/trash/<name>.<YYYYMMDDTHHMMSS>-<hex>/` and can be restored from the
+decks page as long as no other deck has taken its name.
 
 ### Deck commits
 

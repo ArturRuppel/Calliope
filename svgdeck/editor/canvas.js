@@ -2,7 +2,7 @@
 // Pointer events throughout, so mouse, finger and Apple Pencil share one path.
 import {
   SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, smartSnapDelta, simplify, smoothPath, polylinePath, toHex,
-  parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline,
+  parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline, fitStroke,
 } from "./geom.js";
 
 const HANDLE_PX = { mouse: 12, pen: 14, touch: 24 };  // handle hit radius, screen pixels
@@ -16,6 +16,7 @@ const SKIP = new Set(["defs", "title", "desc", "metadata", "style", "script"]);
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const ERASABLE = new Set(["path", "line", "polyline"]);  // strokes, not shapes, text or media
 const ERASER_PX = 7;  // eraser reach around the pointer, screen pixels
+const PALM_MS = 500;  // touches this soon after the Pencil lifts are the resting hand
 const INHERITED_PRESENTATION = new Set([
   "color", "color-interpolation", "color-interpolation-filters", "color-rendering", "cursor", "direction",
   "fill", "fill-opacity", "fill-rule", "font-family", "font-size", "font-size-adjust", "font-stretch",
@@ -161,6 +162,8 @@ export class SlideEditor {
     this.gesture = null;
     this.pointers = new Map();
     this.touchStart = null;
+    this.palms = new Set();  // touches rejected as the hand holding the Pencil
+    this.penUpAt = -Infinity;
     this.lastTap = null;
     this.textEdit = null;
     this.before = null;
@@ -173,10 +176,24 @@ export class SlideEditor {
     host.addEventListener("pointermove", (e) => this.onMove(e));
     host.addEventListener("pointerup", (e) => this.onUp(e));
     host.addEventListener("pointercancel", (e) => this.onCancel(e));
+    host.addEventListener("lostpointercapture", (e) => {
+      if (this.pointers.has(e.pointerId) && !host.hasPointerCapture(e.pointerId)) this.onCancel(e);
+    });
+    // Native menus can retarget a release away from the captured stage.
+    for (const type of ["pointerup", "pointercancel"]) {
+      window.addEventListener(type, e => {
+        if (!host.contains(e.target) && (this.pointers.has(e.pointerId) || this.palms.has(e.pointerId))) {
+          if (type === "pointerup") this.onUp(e); else this.onCancel(e);
+        }
+      }, true);
+    }
+    window.addEventListener("blur", () => this.resetPointers());
+    document.addEventListener("visibilitychange", () => { if (document.hidden) this.resetPointers(); });
     host.addEventListener("wheel", (e) => this.onWheel(e), { passive: false });
     host.addEventListener("contextmenu", (e) => {
       if (e.target.closest?.(".text-edit")) return;
       e.preventDefault();
+      this.cancelGesture();
       this.openContextMenu(e.clientX, e.clientY);
     });
     // Remember the selected words while the panel is used to format them.
@@ -213,6 +230,7 @@ export class SlideEditor {
     // finish it before loading.
     this.cancelGesture();
     this.pointers.clear();
+    this.palms.clear();
     this.touchStart = null;
     this.before = null;
     this.pathDraft = null;
@@ -519,7 +537,9 @@ export class SlideEditor {
     if (this.pathDraft) {
       const draft = this.pathDraft;
       const nodes = [...draft.nodes];
-      if (this.gesture?.kind === "path-node") nodes.push(this.gesture.node);
+      const g = this.gesture?.kind === "path-node" ? this.gesture : null;
+      if (g?.freehand) make("polyline", {points:g.trail.map((q) => `${q.x},${q.y}`).join(" "), class:"ov-box", "stroke-width":2*px});
+      else if (g) nodes.push(g.node);
       else if (draft.hover) nodes.push(this.pathNode(draft.hover));
       if (nodes.length > 1) make("path", {d:this.pathData(nodes), class:"ov-box", "stroke-width":2*px});
       for (const [i,n] of nodes.entries()) {
@@ -669,6 +689,7 @@ export class SlideEditor {
   openContextMenu(x, y, preserveSelection = false) {
     if (this.pathDraft) { this.finishPath(); return; }
     if (!this.svg) return;
+    this.resetPointers();
     this.endTextEdit(true);
     this.lastTap = null;
     if (!preserveSelection || !this.selection.length) {
@@ -679,20 +700,64 @@ export class SlideEditor {
     this.hooks.contextMenu?.(x, y);
   }
 
+  resetPointers() {
+    this.cancelGesture();
+    const ids = [...this.pointers.keys()];
+    this.pointers.clear();
+    this.palms.clear();
+    this.touchStart = null;
+    // Clear bookkeeping before release: lostpointercapture can fire here.
+    for (const id of ids) {
+      if (this.host.hasPointerCapture(id)) this.host.releasePointerCapture(id);
+    }
+    document.body.classList.remove("gesturing");
+  }
+
+  clearLongPress() {
+    clearTimeout(this.longPressTimer);
+    this.longPressTimer = null;
+  }
+
+  startLongPress(e) {
+    this.longPressTimer = setTimeout(() => {
+      const pointer = this.pointers.get(e.pointerId);
+      if (!pointer || this.pointers.size !== 1 || this.gesture?.moved || this.pathDraft) return;
+      this.cancelGesture();
+      if (this.touchStart) {
+        this.context = this.touchStart.context;
+        this.select(this.touchStart.selection.filter(item => this.svg.contains(item)));
+      }
+      this.touchStart = null;
+      this.openContextMenu(pointer.startX, pointer.startY);
+    }, 550);
+  }
+
   onDown(e) {
+    this.clearLongPress();
     if (e.target.closest && e.target.closest(".text-edit")) return;
     if (!this.svg) return;
     if (e.pointerType === "mouse" && e.button === 2) return;
+    // Once a Pencil is in use, touches while it is down or just lifted are
+    // the palm; a Pencil landing takes over from touches that came first.
+    if (e.pointerType === "touch" && this.penSeen && (this.penDown() || performance.now() - this.penUpAt < PALM_MS)) {
+      this.palms.add(e.pointerId);
+      e.preventDefault();
+      return;
+    }
+    // A new primary touch starts a new physical touch sequence. Any old
+    // touch entries survived a missing release from a native iPad prompt.
+    if (e.pointerType === "touch" && e.isPrimary) {
+      for (const [id, pointer] of [...this.pointers]) {
+        if (pointer.type === "touch") this.onCancel({ pointerId: id, pointerType: "touch" });
+      }
+    }
+    if (e.pointerType === "pen") this.rejectTouches();
     if (this.mediaTools?.onPointerDown?.(e, this.point(e))) return;
     this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, type: e.pointerType,
       startX: e.clientX, startY: e.clientY, started: performance.now() });
     this.host.setPointerCapture(e.pointerId);
     e.preventDefault();
 
-    if (e.pointerType === "touch" && this.gesture && this.gesture.pointerType === "pen") {
-      this.pointers.delete(e.pointerId);  // a palm or finger while the Pencil is down
-      return;
-    }
     const touches = [...this.pointers.values()].filter((p) => p.type === "touch");
     if (e.pointerType === "touch" && touches.length === 1) {
       this.touchStart = { selection: [...this.selection], context: this.context };
@@ -720,6 +785,7 @@ export class SlideEditor {
     this.setInput(this.slotFor(e.pointerType));
 
     const p = this.point(e);
+    if (e.pointerType === "touch" && touches.length === 1 && !this.pathDraft) this.startLongPress(e);
     // The chosen tool applies to every pointer. Pan is explicit; a previous
     // Pencil stroke must not silently change what a later finger drag does.
     if (this.tool === "pan" || e.button === 1) {
@@ -766,7 +832,12 @@ export class SlideEditor {
         const m=toRoot(el,this.svg);
         for (const [index,reverse] of [[0,true],[points.length-1,false]]) {
           const q=m.transformPoint(new DOMPoint(points[index].x,points[index].y));
-          if (Math.hypot(q.x-p.x,q.y-p.y)*this.zoom < 14) {this.extendCurve(reverse); return;}
+          if (Math.hypot(q.x-p.x,q.y-p.y)*this.zoom < 14) {
+            // A tap continues the path from this end; a stroke is drawn on from it.
+            this.extendCurve(reverse);
+            if (this.pathDraft) this.gesture = {kind:"path-node",...base,node:this.pathNode(p),trail:[base.start],extend:true};
+            return;
+          }
         }
       }
       this.pathDraft = {nodes:[],hover:null}; this.select([]);
@@ -775,7 +846,7 @@ export class SlideEditor {
     const near = a => a && Math.hypot(a.x-p.x,a.y-p.y)*this.zoom < (base.pointerType === "touch" ? 18 : 10);
     if (draft.nodes.length > 2 && near(first)) { this.finishPath(true); return; }
     if (draft.nodes.length > 1 && near(last) && performance.now()-draft.lastAt < 450) { this.finishPath(); return; }
-    this.gesture = {kind:"path-node",...base,node:this.pathNode(p)};
+    this.gesture = {kind:"path-node",...base,node:this.pathNode(p),trail:[base.start]};
     draft.hover = null;
     this.drawOverlay();
   }
@@ -809,6 +880,54 @@ export class SlideEditor {
     if (!this.pathDraft) return;
     this.pathDraft.nodes.pop();
     if (!this.pathDraft.nodes.length) this.cancelPath();
+    else { this.drawOverlay(); this.hooks.select(this.selection); }
+  }
+
+  /** Whether a drag has curved away from the straight line between its ends. */
+  bends(trail) {
+    const a = trail[0], b = trail.at(-1), len = Math.hypot(b.x - a.x, b.y - a.y);
+    let dev = 0, far = 0;
+    for (const q of trail) {
+      dev = Math.max(dev, len ? Math.abs((b.x - a.x) * (a.y - q.y) - (a.x - q.x) * (b.y - a.y)) / len : 0);
+      far = Math.max(far, Math.hypot(q.x - a.x, q.y - a.y));
+    }
+    // Bent sideways, or doubled back towards the start.
+    return dev * this.zoom > Math.max(12, 0.2 * len * this.zoom) || (far * this.zoom > 40 && len < far * 0.6);
+  }
+
+  /** A freehand stroke with the Bézier tool, fitted with a few points. A
+   *  stroke on its own is a finished path; one that starts at the end of an
+   *  open path (or of the points placed so far) carries on from it, and one
+   *  that ends on the path's first point closes it. */
+  endStroke(g) {
+    const draft = this.pathDraft, tolerance = (this.hooks.fitTolerance?.() || 5) / this.zoom;
+    const nodes = fitStroke(g.trail, tolerance, { reach: 14 / this.zoom });
+    // A Pencil tap that slid a little is still a tap.
+    const extent = Math.max(...g.trail.map((q) => Math.hypot(q.x - g.trail[0].x, q.y - g.trail[0].y)));
+    if (nodes.length < 2 || extent * this.zoom < 16) { if (!g.extend) draft.nodes.push(g.node); this.drawOverlay(); this.hooks.select(this.selection); return; }
+    const reach = (g.pointerType === "touch" ? 18 : 10) / this.zoom;
+    const near = (a, b) => a && b && Math.hypot(a.x - b.x, a.y - b.y) < reach;
+    const alone = !draft.nodes.length, last = draft.nodes.at(-1);
+    if (near(last, nodes[0])) {
+      // Join onto the last point, smoothly if the stroke leaves in line with it.
+      const first = nodes.shift(), dx = last.x - first.x, dy = last.y - first.y;
+      last.out = { x: first.out.x + dx, y: first.out.y + dy };
+      const vin = { x: last.x - last.in.x, y: last.y - last.in.y }, vout = { x: last.out.x - last.x, y: last.out.y - last.y };
+      const lin = Math.hypot(vin.x, vin.y), lout = Math.hypot(vout.x, vout.y);
+      if (lin > 1e-6 && lout > 1e-6 && (vin.x * vout.x + vin.y * vout.y) / (lin * lout) > Math.cos(Math.PI / 9)) {
+        last.out = { x: last.x + vin.x / lin * lout, y: last.y + vin.y / lin * lout };
+        last.type = "s";
+      }
+    }
+    draft.nodes.push(...nodes);
+    draft.hover = null;
+    draft.lastAt = performance.now();
+    const all = draft.nodes, end = all.at(-1);
+    if (all.length > 2 && near(all[0], end)) {
+      all[0].in = { x: end.in.x + all[0].x - end.x, y: end.in.y + all[0].y - end.y };
+      all.pop();
+      this.finishPath(true);
+    } else if (alone || g.extend) this.finishPath();
     else { this.drawOverlay(); this.hooks.select(this.selection); }
   }
 
@@ -1237,9 +1356,13 @@ export class SlideEditor {
   }
 
   onMove(e) {
+    if (this.palms.has(e.pointerId)) return;
     if (this.mediaTools?.onPointerMove?.(e, this.point(e))) return;
     const ptr = this.pointers.get(e.pointerId);
-    if (ptr) { ptr.x = e.clientX; ptr.y = e.clientY; }
+    if (ptr) {
+      ptr.x = e.clientX; ptr.y = e.clientY;
+      if (Math.hypot(ptr.x - ptr.startX, ptr.y - ptr.startY) >= TAP_PX.touch) this.clearLongPress();
+    }
     const g = this.gesture;
     // Pencil hover (and the mouse) show what that input is about to do.
     if (!g && !e.buttons && e.pointerType !== "touch") this.setInput(this.slotFor(e.pointerType));
@@ -1285,6 +1408,16 @@ export class SlideEditor {
         break;
       }
       case "path-node": {
+        const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+        for (const ev of events.length ? events : [e]) g.trail.push(this.point(ev));
+        // The Pencil draws freehand; a finger or the mouse pulls out handles
+        // until the drag bends away from a straight line.
+        if (!g.freehand && (e.pointerType === "pen" || this.bends(g.trail))) {
+          g.freehand = true;
+          g.node = this.pathNode(g.node);
+        }
+        if (g.freehand) break;
+        if (g.extend) break;
         const q = this.snapPoint(p), a = g.node;
         a.out = {x:q.x,y:q.y};
         a.in = {x:2*a.x-q.x,y:2*a.y-q.y};
@@ -1463,6 +1596,9 @@ export class SlideEditor {
   }
 
   onUp(e) {
+    this.clearLongPress();
+    if (this.palms.delete(e.pointerId)) return;
+    if (e.pointerType === "pen") this.penUpAt = performance.now();
     if (this.mediaTools?.onPointerUp?.(e, this.point(e))) return;
     const ptr = this.pointers.get(e.pointerId);
     if (this.gesture?.kind === "pinch" && ptr &&
@@ -1488,7 +1624,8 @@ export class SlideEditor {
     const p = this.point(e);
     switch (g.kind) {
       case "path-node":
-        this.pathDraft.nodes.push(g.node);
+        if (g.freehand) { this.endStroke(g); return; }
+        if (!g.extend) this.pathDraft.nodes.push(g.node);
         this.pathDraft.hover = null;
         this.pathDraft.lastAt = performance.now();
         this.drawOverlay();
@@ -1567,13 +1704,33 @@ export class SlideEditor {
   }
 
   onCancel(e) {
+    this.clearLongPress();
+    if (this.palms.delete(e.pointerId)) return;
+    if (e.pointerType === "pen") this.penUpAt = performance.now();
     if (this.mediaTools?.onPointerCancel?.(e, this.point(e))) return;
     this.pointers.delete(e.pointerId);
     this.touchStart = null;
     if (this.gesture && (this.gesture.id === e.pointerId || this.gesture.kind === "pinch")) this.cancelGesture();
   }
 
+  penDown() { return [...this.pointers.values()].some((p) => p.type === "pen"); }
+
+  /** The Pencil landed: touches already down were the palm. Undo what they
+      started (a stroke, a drag, a pinch, a selection) and ignore them. */
+  rejectTouches() {
+    const touches = [...this.pointers].filter(([, p]) => p.type === "touch");
+    if (!touches.length) return;
+    for (const [id] of touches) { this.pointers.delete(id); this.palms.add(id); }
+    if (this.gesture && (this.gesture.kind === "pinch" || this.gesture.pointerType === "touch")) this.cancelGesture();
+    if (this.touchStart) {
+      this.context = this.touchStart.context;
+      this.select(this.touchStart.selection.filter((el) => this.svg.contains(el)));
+      this.touchStart = null;
+    }
+  }
+
   cancelGesture() {
+    this.clearLongPress();
     const g = this.gesture;
     this.gesture = null;
     this.smartGuides = [];

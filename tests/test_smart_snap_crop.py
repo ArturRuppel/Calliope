@@ -121,7 +121,7 @@ def test_duplicate_gets_private_clip_before_edit_and_reset(page, server):
     shapes = page.evaluate("""() => [...svgdeckEditor.editor.svg.querySelectorAll('image')].map(i=>{
       const id=/#[^)]+/.exec(i.getAttribute('clip-path'))[0].slice(1);return svgdeckEditor.editor.svg.querySelector('#'+id).firstElementChild.localName})""")
     assert shapes == ['rect', 'ellipse']
-    page.get_by_role('button', name='Reset').click()
+    page.get_by_role('button', name='Reset', exact=True).click()
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#original').getAttribute('data-crop')") == '10 0 0 0'
 
 
@@ -135,7 +135,7 @@ def test_copy_paste_clip_is_independent_on_reset(page, server):
     page.locator('.media-tools summary').click()
     refs = page.evaluate("""() => [...svgdeckEditor.editor.svg.querySelectorAll('image')].map(i=>[i.getAttribute('clip-path'),i.getAttribute('data-svgdeck-clip')])""")
     assert refs[0][0] != refs[1][0] and refs[1][0].endswith(refs[1][1] + ')')
-    page.get_by_role('button', name='Reset').click()
+    page.get_by_role('button', name='Reset', exact=True).click()
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#source').getAttribute('data-crop')") == '0 0 15 0'
 
 

@@ -1,13 +1,13 @@
 /* svgdeck editor, in the Modernist system: flat, square, near-black ink on
-   cool grey. Purple marks what you act on; teal marks what the Pencil owns.
+   cool grey. Teal marks what you act on; purple marks what the Pencil owns.
    Tokens first; the older names (--ink, --line, --surface…) stay because
    colors.css, commits.css and recovery.css read them. */
 :root {
-  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #6b3fa0;
+  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #0e7c7b;
   --color-divider: color-mix(in srgb, #1c1b22 40%, transparent);
   --n100: #f8f8f9; --n200: #e8e8ea; --n300: #d4d4d8; --n400: #b6b6bc; --n600: #7a7a82; --n700: #5c5b63; --n800: #403f47;
-  --a100: #eee7f7; --a600: #5a3389; --a700: #4a2a78;
-  --pen: #0e7c7b;
+  --a100: #e3f2f1; --a600: #0a6564; --a700: #075453;
+  --pen: #6b3fa0;
   --font: "Archivo", system-ui, -apple-system, sans-serif;
   --shadow-sm: 0 1px 2px color-mix(in srgb, #1c1b22 14%, transparent);
   --shadow-md: 0 3px 10px color-mix(in srgb, #1c1b22 16%, transparent);
@@ -56,7 +56,7 @@ button { border-radius: 0; }
 .doc-btn:hover, .doc-btn[aria-expanded="true"] { background: var(--n300); }
 .doc-text { display: flex; flex-direction: column; min-width: 0; }
 .deck-title { font: 800 15px/1.1 var(--font); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 22rem; }
-.doc-sub { font-size: 11px; color: var(--n700); white-space: nowrap; }
+.doc-sub { font-size: 11px; color: var(--n700); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .status[data-kind="error"] { color: var(--danger); font-weight: 800; }
 
 main { display: grid; grid-template-columns: var(--rail-w) var(--strip-w) minmax(0, 1fr) var(--panel-w); min-height: 0; }
@@ -144,24 +144,25 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .ov-box { fill: none; stroke: var(--accent); }
 .ov-item { fill: none; stroke: var(--accent); stroke-dasharray: 4 3; opacity: .7; }
 .ov-group { fill: none; stroke: var(--n600); stroke-dasharray: 6 4; }
-.ov-marquee { fill: rgba(236, 48, 19, .06); stroke: var(--accent); stroke-dasharray: 4 3; }
+.ov-marquee { fill: color-mix(in srgb, var(--accent) 6%, transparent); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
 .ov-handle.ov-chosen { fill: var(--accent); }
 .ov-offpage { fill: var(--stage); fill-opacity: .6; fill-rule: evenodd; stroke: none; }
 .ov-edge { fill: none; stroke: var(--n600); }
 .ov-gridline { fill: none; stroke: rgba(32, 30, 29, .16); }
 /* Line ends: hollow rings, so arrowheads under them stay visible. */
-.ov-end { fill: rgba(236, 48, 19, .1); stroke: var(--accent); }
+.ov-end { fill: color-mix(in srgb, var(--accent) 10%, transparent); stroke: var(--accent); }
 .text-edit { position: absolute; z-index: 5; margin: 0; padding: 2px 4px; border: 2px solid var(--accent);
   background: rgba(255, 255, 255, .92); outline: none; overflow: visible; white-space: pre; width: max-content;
   -webkit-user-select: text; user-select: text; cursor: text; }
 .text-edit > div { min-height: 1em; }
 
 .floating { position: absolute; z-index: 4; display: flex; align-items: center; background: var(--color-bg); box-shadow: var(--shadow-sm); }
-.view-bar { left: 12px; top: 12px; max-width: calc(100% - 24px); flex-wrap: wrap; }
+.view-bar { display: flex; align-items: center; gap: 2px; flex: none; }
+.view-bar .btn { flex: none; }
 .view-bar .btn { height: 40px; min-width: 40px; font-weight: 800; }
+.view-toggles .btn[aria-pressed="true"] { background: var(--n300); color: inherit; }
 .view-bar .zoom-fit { min-width: 52px; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.view-bar .vrule { height: 24px; margin: 0; }
 .view-toggles { display: contents; }
 .view-toggles .btn { font-size: 12px; font-weight: 600; padding: 0 10px; }
 .view-toggles .icon { width: 16px; height: 16px; }
@@ -280,9 +281,14 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
   :root { --strip-w: 136px; --panel-w: 248px; --rail-w: 64px; }
   .deck-title { max-width: 12rem; }
   .btn.primary { min-width: 0; }
+  .view-toggles .btn { padding: 0 8px; }
+  .view-toggles .btn .label { display: none; }
+}
+@media (max-width: 900px) {
+  #present { min-width: 44px; padding: 0; justify-content: center; }
+  #present .label { display: none; }
 }
 @media (max-width: 700px) {
   .doc-sub { display: none; }
-  .view-toggles .btn { padding: 0 6px; }
-  .view-toggles .btn .label { display: none; }
+  #zoom-in, #zoom-out { display: none; }
 }

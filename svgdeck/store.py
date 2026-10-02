@@ -2,6 +2,7 @@
 
 Layout:  <data>/decks/<name>/   one deck each (docs/format.md)
          <data>/fonts/          font library (OTF/TTF, any subfolders)
+         <data>/trash/<name>.<stamp>/   deleted decks, restorable
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"}
 VIDEO_TYPES = {".mp4", ".mov", ".m4v", ".webm", ".mkv", ".avi"}
 FONT_TYPES = {".otf", ".ttf"}
 RECOVERY_TOKEN = re.compile(r"^[A-Za-z0-9_.-]{1,180}$")
+DECK_TRASH_TOKEN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,99})\.(\d{8}T\d{6}-[0-9a-f]{6})$")
 COMMIT_ID = re.compile(r"^[0-9a-f]{20}$")
 REVISION_LIMIT = 30
 
@@ -81,6 +83,7 @@ class Store:
         self.data = Path(data)
         self.decks = self.data / "decks"
         self.fonts = self.data / "fonts"
+        self.trash = self.data / "trash"
         self._locks_guard = threading.Lock()
         self._locks: dict[str, threading.RLock] = {}
 
@@ -118,6 +121,43 @@ class Store:
         meta = {"format": FORMAT, "title": title or name, "size": list(size), "background": "#000000",
                 "slides": [{"id": slide}], "fonts": []}
         write_atomic(path / "deck.json", (json.dumps(meta, indent=2) + "\n").encode())
+        return self.get_deck(name)
+
+    def delete_deck(self, name: str) -> dict:
+        """Move a deck, with its history and media, to <data>/trash/."""
+        with self._lock(name):
+            path = self.deck_dir(name)
+            self.trash.mkdir(parents=True, exist_ok=True)
+            token = f"{name}.{time.strftime('%Y%m%dT%H%M%S')}-{os.urandom(3).hex()}"
+            title = Deck.load(path).title
+            os.rename(path, self.trash / token)
+            return {"token": token, "name": name, "title": title}
+
+    def list_deleted_decks(self) -> list[dict]:
+        out = []
+        for path in self.trash.iterdir() if self.trash.is_dir() else []:
+            match = DECK_TRASH_TOKEN.fullmatch(path.name)
+            if not match or not (path / "deck.json").is_file():
+                continue
+            try:
+                title = Deck.load(path).title
+            except (OSError, ValueError, KeyError):
+                title = match[1]
+            deleted = time.mktime(time.strptime(match[2][:15], "%Y%m%dT%H%M%S"))
+            out.append({"token": path.name, "name": match[1], "title": title, "deleted": deleted})
+        return sorted(out, key=lambda d: -d["deleted"])
+
+    def restore_deck(self, token: str) -> dict:
+        match = DECK_TRASH_TOKEN.fullmatch(token)
+        source = self.trash / token
+        if not match or not (source / "deck.json").is_file():
+            raise KeyError(token)
+        name = match[1]
+        with self._lock(name):
+            if (self.decks / name).exists():
+                raise FileExistsError(name)
+            self.decks.mkdir(parents=True, exist_ok=True)
+            os.rename(source, self.decks / name)
         return self.get_deck(name)
 
     def get_deck(self, name: str) -> dict:
