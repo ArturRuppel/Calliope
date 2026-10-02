@@ -32,8 +32,13 @@ function writeFilter(image) {
   const baseId = urlId(base);
   const source = baseId && svg.querySelector(`#${CSS.escape(baseId)}`);
   const filter = source?.localName === "filter" ? source.cloneNode(true) : node("filter", {});
-  let id, n = 1;
-  do id = `svgdeck-image-filter-${n++}`; while (svg.querySelector(`#${CSS.escape(id)}`));
+  // Rewrite our own filter in place while this image is its only user (a slider
+  // drag runs this per input event); a shared one is cloned before it changes.
+  const owned = old && svg.querySelector(`#${CSS.escape(old)}`);
+  const reuse = owned?.localName === "filter" && owned.hasAttribute("data-image-adjustment-filter") &&
+    ![...svg.querySelectorAll("image")].some(other => other !== image && ownedFilter(other) === old);
+  let id = old, n = 1;
+  if (!reuse) do id = `svgdeck-image-filter-${n++}`; while (svg.querySelector(`#${CSS.escape(id)}`));
   filter.id = id;
   filter.setAttribute("data-image-adjustment-filter", "true");
   filter.setAttribute("data-image-adjustment-version", "2");
@@ -48,9 +53,15 @@ function writeFilter(image) {
     for (const channel of ["R", "G", "B"]) transfer.append(node(`feFunc${channel}`, {type:"linear", slope, intercept}));
     filter.append(transfer);
   }
-  let defs = svg.querySelector(":scope > defs");
-  if (!defs) { defs = node("defs", {}); svg.prepend(defs); }
-  defs.append(filter);
+  if (reuse) {
+    for (const { name } of [...owned.attributes]) if (name !== "id") owned.removeAttribute(name);
+    for (const { name, value } of filter.attributes) owned.setAttribute(name, value);
+    owned.replaceChildren(...filter.childNodes);
+  } else {
+    let defs = svg.querySelector(":scope > defs");
+    if (!defs) { defs = node("defs", {}); svg.prepend(defs); }
+    defs.append(filter);
+  }
   const prefix = base && base !== "none" && !source ? `${base} ` : "";
   image.style.setProperty("filter", `${prefix}url(#${id})`);
   image.setAttribute(OWNED, id);
@@ -117,5 +128,8 @@ export function upgradeImageAdjustments(editor) {
     return !filter || filter.getAttribute("data-image-adjustment-version") !== "2";
   });
   if (!images.length) return;
-  editor.change(() => { for (const image of images) writeFilter(image); });
+  // Not an edit: no undo step. Tell the controller the text changed so the
+  // upgraded filters are saved and later undo steps start from them.
+  for (const image of images) writeFilter(image);
+  editor.hooks?.textChanged?.(editor.serialize());
 }
