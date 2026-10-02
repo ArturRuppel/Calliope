@@ -125,11 +125,11 @@ def test_selected_word_underline_survives_edit_and_reload(page,server):
       const r=document.createRange();r.setStart(n,0);r.setEnd(n,3);
       getSelection().removeAllRanges();getSelection().addRange(r);box.dispatchEvent(new Event('keyup'));}''')
     page.get_by_title('Underline (Ctrl+U)',exact=True).click()
-    page.get_by_title('Finish editing (Esc)',exact=True).click()
+    page.get_by_title('Finish editing (Ctrl+Enter)',exact=True).click()
     runs=selected(page,'e.textRuns(s)[0].map(r=>[r.text,r.look.decoration])')
     assert runs == [['one','underline'],[' two','none']]
     page.get_by_title('Or double-tap the text',exact=True).click()
-    page.get_by_title('Finish editing (Esc)',exact=True).click()
+    page.get_by_title('Finish editing (Ctrl+Enter)',exact=True).click()
     assert selected(page,'e.textRuns(s)[0].map(r=>[r.text,r.look.decoration])') == runs
     saved_slide(page,server)
     page.reload();page.wait_for_function('svgdeckEditor.editor.svg')
