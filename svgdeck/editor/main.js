@@ -400,6 +400,8 @@ async function slideRecord(id) {
 let navigationSequence = 0;
 
 function settleCurrentSlide() {
+  // A run of arrow-key nudges becomes its undo step before anything else.
+  editor.endNudge?.();
   mediaTools?.finish?.();
   editor.endTextEdit(true);
   editor.finishPath();
@@ -953,7 +955,7 @@ function selBarItems() {
       barSep(),
       barButton("", "Colour of the selected words", () => showInspector("design"), { chip: paint(base.fill) }),
       barSep(),
-      barButton("Done", "Finish editing (Esc)", () => editor.endTextEdit(true), { on: true }),
+      barButton("Done", "Finish editing (Ctrl+Enter)", () => editor.endTextEdit(true), { on: true }),
     ]];
   }
   if (!sel.length) return null;
@@ -2198,10 +2200,12 @@ document.addEventListener("keydown", (e) => {
   if (k.startsWith("arrow") && editor.selection.length && !editor.textEdit) {
     e.preventDefault();
     const d = e.shiftKey ? 10 : 1;
-    editor.nudge(k === "arrowleft" ? -d : k === "arrowright" ? d : 0, k === "arrowup" ? -d : k === "arrowdown" ? d : 0);
-    refreshPosition();
-    updateHistoryButtons();
-    placeSelBar();
+    // nudge() refuses (returns false) during a gesture, a text edit or for locked objects.
+    if (editor.nudge(k === "arrowleft" ? -d : k === "arrowright" ? d : 0, k === "arrowup" ? -d : k === "arrowdown" ? d : 0) !== false) {
+      refreshPosition();
+      updateHistoryButtons();
+      placeSelBar();
+    }
     return;
   }
   if (k === "pagedown") { e.preventDefault(); stepSlide(1); return; }
