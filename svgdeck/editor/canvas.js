@@ -1009,6 +1009,8 @@ export class SlideEditor {
     const near = a => a && Math.hypot(a.x-p.x,a.y-p.y)*this.zoom < (base.pointerType === "touch" ? 18 : 10);
     if (draft.nodes.length > 2 && near(first)) { this.finishPath(true); return; }
     if (draft.nodes.length > 1 && near(last) && performance.now()-draft.lastAt < 450) { this.finishPath(); return; }
+    // Shift keeps the new segment at a multiple of 45° from the last point.
+    if (base.shift && last) p = constrainAngle(last, p);
     this.gesture = {kind:"path-node",...base,node:this.pathNode(p),trail:[base.start]};
     draft.hover = null;
     this.drawOverlay();
@@ -1533,7 +1535,13 @@ export class SlideEditor {
     // Pencil hover (and the mouse) show what that input is about to do.
     if (!g && !e.buttons && e.pointerType !== "touch") this.setInput(this.slotFor(e.pointerType));
     if (!g) {
-      if (this.pathDraft) { this.pathDraft.hover = this.snapPoint(this.point(e)); this.drawOverlay(); }
+      if (this.pathDraft) {
+        let hover = this.snapPoint(this.point(e));
+        const last = this.pathDraft.nodes.at(-1);
+        if (e.shiftKey && last) hover = constrainAngle(last, hover);
+        this.pathDraft.hover = hover;
+        this.drawOverlay();
+      }
       return;
     }
     if (g.kind === "pinch") return this.movePinch();
@@ -1584,7 +1592,10 @@ export class SlideEditor {
         }
         if (g.freehand) break;
         if (g.extend) break;
-        const q = this.snapPoint(p), a = g.node;
+        const a = g.node;
+        let q = this.snapPoint(p);
+        // Shift turns the handle in steps of 45° about its point.
+        if (e.shiftKey) q = constrainAngle(a, q);
         a.out = {x:q.x,y:q.y};
         a.in = {x:2*a.x-q.x,y:2*a.y-q.y};
         a.type = "z";
@@ -1775,8 +1786,8 @@ export class SlideEditor {
     let dx = b.x - a.x, dy = b.y - a.y;
     if (shape === "line" || shape === "arrow") {
       if (constrain) {
-        const angle = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
-        dx = Math.cos(angle) * len; dy = Math.sin(angle) * len;
+        const q = constrainAngle({ x: 0, y: 0 }, { x: dx, y: dy });
+        dx = q.x; dy = q.y;
       }
       el.setAttribute("x1", r(a.x)); el.setAttribute("y1", r(a.y));
       el.setAttribute("x2", r(a.x + dx)); el.setAttribute("y2", r(a.y + dy));

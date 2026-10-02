@@ -163,3 +163,43 @@ def test_alt_resizes_a_turned_object_from_its_centre(page, server):
     assert got["c"] == pytest.approx([550, 450], abs=1.5)
     assert got["w"] == pytest.approx(400, abs=3) and got["h"] == pytest.approx(100, abs=0.5)
     assert got["ortho"] == pytest.approx(0, abs=1e-3) and got["angle"] == pytest.approx(30, abs=0.1)
+
+
+# --- 3. Shift angles in the Bézier tool, and lines --------------------------------------------------
+
+def test_shift_constrains_bezier_points_and_handles_to_45_degrees(page, server):
+    page.keyboard.press("b")
+    page.mouse.click(*to_screen(page, 200, 600))
+    page.keyboard.down("Shift")
+    # 8.5° off the horizontal: the point is put on it.
+    page.mouse.click(*to_screen(page, 400, 630))
+    nodes = page.evaluate("svgdeckEditor.editor.pathDraft.nodes.map(n => [n.x, n.y])")
+    assert nodes[1][1] == pytest.approx(600, abs=0.01)
+    assert nodes[1][0] == pytest.approx(200 + math.hypot(200, 30), abs=1)
+    # The preview follows the constraint too.
+    page.mouse.move(*to_screen(page, 600, 790))
+    hover = page.evaluate("svgdeckEditor.editor.pathDraft.hover")
+    last = nodes[1]
+    assert abs(hover["x"] - last[0]) == pytest.approx(abs(hover["y"] - last[1]), abs=0.5)
+    # A dragged handle turns in 45° steps about its point.
+    start = (last[0] + 200, 600)
+    page.mouse.move(*to_screen(page, *start))
+    page.mouse.down()
+    page.mouse.move(*to_screen(page, start[0] + 80, 690), steps=6)
+    page.mouse.up()
+    page.keyboard.up("Shift")
+    node = page.evaluate("svgdeckEditor.editor.pathDraft.nodes[2]")
+    assert node["y"] == pytest.approx(600, abs=0.01)
+    dx, dy = node["out"]["x"] - node["x"], node["out"]["y"] - node["y"]
+    assert dx == pytest.approx(dy, abs=0.5) and dx > 40
+    page.keyboard.press("Enter")
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('path').length") == 1
+
+
+def test_shift_constrains_the_line_tool_to_45_degrees(page, server):
+    page.keyboard.press("l")
+    page.keyboard.down("Shift")
+    drag(page, (200, 800), (400, 830))
+    page.keyboard.up("Shift")
+    line = page.evaluate("(() => { const l = svgdeckEditor.editor.svg.querySelector('line'); return ['x1','y1','x2','y2'].map(a => +l.getAttribute(a)); })()")
+    assert line[1] == pytest.approx(800, abs=1) and line[3] == pytest.approx(line[1], abs=0.01)
