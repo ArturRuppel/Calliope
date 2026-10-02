@@ -69,7 +69,8 @@ The editor is laid out for an iPad in landscape:
   it; Escape cancels and Backspace removes the last node. **Continue path**, or
   clicking an endpoint of a selected open curve with Bézier, resumes drawing
   from that endpoint. Pending paths finish when switching tools,
-  presenting/exporting, or leaving the app. They remain a single undo
+  presenting/exporting, or leaving the editor; switching to another app only
+  saves and keeps the draft (text edits too). They remain a single undo
   operation.
 - **Path → Edit points (N)** works on every path (imported ones too: lines,
   arcs and quadratic curves become cubic segments when edited), polygon and
@@ -178,7 +179,9 @@ The editor is laid out for an iPad in landscape:
   press **Assign a key or button**, then press it. Actions set the Pencil's
   or the finger's tool, set a Pencil tool only while held, or run undo, redo,
   delete, fit and slide changes. Bindings are kept per browser.
-- Edits autosave to the **working copy**. **Deck menu → Commit snapshot…**
+- Edits autosave to the **working copy**. While the service cannot be reached
+  the status reads "Not saved · retrying" and saving is retried with backoff;
+  leaving the editor waits for the save first. **Deck menu → Commit snapshot…**
   saves a named, immutable snapshot of the whole deck, including slide order
   and notes. Its history offers text diffs against the previous commit or
   working copy and full-deck restore (restore asks for a second confirmation).
