@@ -43,13 +43,85 @@
   // --- slide construction ---------------------------------------------
   // Ids are made unique across slides and relative paths resolved, since all
   // slides share one HTML document.
+  // The class that scopes a slide's <style> rules to that slide.
+  const scopeOf = (prefix) => "sd-" + prefix.replace(/-$/, "");
+
+  // Index of the first of `chars` outside quotes, parentheses and brackets.
+  function skipTo(text, from, chars) {
+    let depth = 0, quote = "";
+    for (let i = from; i < text.length; i++) {
+      const c = text[i];
+      if (quote) { if (c === "\\") i++; else if (c === quote) quote = ""; }
+      else if (c === '"' || c === "'") quote = c;
+      else if (c === "(" || c === "[") depth++;
+      else if (c === ")" || c === "]") depth = Math.max(0, depth - 1);
+      else if (!depth && chars.includes(c)) return i;
+    }
+    return -1;
+  }
+  // Index of the "}" closing the "{" at `open`.
+  function closing(text, open) {
+    let depth = 0, quote = "";
+    for (let i = open; i < text.length; i++) {
+      const c = text[i];
+      if (quote) { if (c === "\\") i++; else if (c === quote) quote = ""; }
+      else if (c === '"' || c === "'") quote = c;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) return i;
+    }
+    return text.length;
+  }
+
+  // Slide CSS shares one document with every other slide: ids and url(#id)
+  // get the slide's prefix and every selector is confined to its scope class.
+  function scopeCss(css, prefix) {
+    const scope = "." + scopeOf(prefix);
+    css = css.replace(/\/\*[\s\S]*?\*\//g, "").replace(URL_REF, (_, q, id) => `url(#${prefix}${id})`);
+    const selector = (text) => {
+      const parts = [];
+      for (let i = 0; i < text.length;) {
+        const comma = skipTo(text, i, ",");
+        parts.push(text.slice(i, comma < 0 ? text.length : comma).trim());
+        i = comma < 0 ? text.length : comma + 1;
+      }
+      return parts.filter(Boolean).map((part) => {
+        part = part.replace(/\[[^\]]*\]|"[^"]*"|'[^']*'|#(-?[_a-zA-Z -￿][\w -￿-]*)/g,
+          (m, id) => id ? `#${prefix}${id}` : m);
+        return /^(:root|svg)(?![\w-])/.test(part) ? part.replace(/^(:root|svg)/, scope) : `${scope} ${part}`;
+      }).join(",");
+    };
+    const rules = (text) => {
+      let out = "";
+      for (let i = 0; i < text.length;) {
+        const stop = skipTo(text, i, "{;");
+        if (stop < 0 || text[stop] === ";") {
+          const end = stop < 0 ? text.length : stop + 1;
+          out += text.slice(i, end); i = end; continue;
+        }
+        const end = closing(text, stop), prelude = text.slice(i, stop).trim(), body = text.slice(stop + 1, end);
+        if (!prelude.startsWith("@")) out += `${selector(prelude)}{${body}}`;
+        else if (/^@(media|supports|layer|container)\b/i.test(prelude)) out += `${prelude}{${rules(body)}}`;
+        else out += `${prelude}{${body}}`;  // @font-face, @keyframes: no selectors to scope
+        i = end + 1;
+      }
+      return out;
+    };
+    return rules(css);
+  }
+
   function rewrite(el, prefix, base) {
+    el.classList.add(scopeOf(prefix));
+    rewriteNode(el, prefix, base);
+  }
+  function rewriteNode(el, prefix, base) {
     if (el.id) el.id = prefix + el.id;
+    if (el.localName === "style") el.textContent = scopeCss(el.textContent, prefix);
     for (const attr of Array.from(el.attributes)) {
       const name = attr.localName;
       let value = attr.value;
       if (name === "href" || name === "data-video") {
         if (value.startsWith("#")) value = "#" + prefix + value.slice(1);
+        else if (el.localName === "a" && name === "href") continue;  // a hyperlink, not a file of the deck
         else if (!/^(data:|[a-z]+:\/\/|\/)/i.test(value)) value = new URL(value, base).href;
       } else if (value.includes("url(")) {
         value = value.replace(URL_REF, (_, q, id) => `url(#${prefix}${id})`);
@@ -59,26 +131,46 @@
         else el.setAttribute(attr.name, value);
       }
     }
-    for (const child of el.children) rewrite(child, prefix, base);
+    for (const child of el.children) rewriteNode(child, prefix, base);
   }
 
-  function buildSlide(source, index, defs, size, base) {
-    const doc = new DOMParser().parseFromString(source, "image/svg+xml");
+  function parseSlide(source) {
+    const doc = new DOMParser().parseFromString(String(source), "image/svg+xml");
     const svg = doc.documentElement;
-    if (svg.localName !== "svg") throw new Error(`slide ${index + 1}: not an SVG`);
-    rewrite(svg, `s${index}-`, base);
+    if (!svg || svg.localName !== "svg" || doc.getElementsByTagName("parsererror").length) {
+      throw new Error("not a valid SVG");
+    }
+    return svg;
+  }
+
+  // Root attributes the layers must inherit, since each layer is its own <svg>.
+  const INHERITED = new Set(["style", "preserveAspectRatio", "xml:space", "xml:lang", "lang", "color", "direction",
+    "unicode-bidi", "writing-mode", "text-anchor", "text-rendering", "letter-spacing", "word-spacing",
+    "white-space", "dominant-baseline", "shape-rendering", "image-rendering", "color-interpolation",
+    "color-interpolation-filters", "paint-order", "visibility", "clip-rule", "cursor", "pointer-events"]);
+  const inheritedAttribute = (name) => INHERITED.has(name) || /^(font(-[a-z-]+)?|fill(-[a-z]+)?|stroke(-[a-z]+)?|marker(-[a-z]+)?)$/.test(name);
+
+  function buildSlide(source, index, defs, size, base) {
+    const svg = parseSlide(source);
+    const prefix = `s${index}-`, scope = scopeOf(prefix);
+    rewrite(svg, prefix, base);
 
     const slide = document.createElement("div");
     slide.className = "svgdeck-slide";
     const viewBox = svg.getAttribute("viewBox") || `0 0 ${size[0]} ${size[1]}`;
     const videos = [];
     let layer = null;
+    // Definitions and top-level styles live in a scoped group of the shared
+    // <defs>, so the slide's CSS reaches them and nothing else.
+    const scoped = document.createElementNS(SVGNS, "g");
+    scoped.setAttribute("class", scope);
 
     for (const child of Array.from(svg.children)) {
       if (child.localName === "defs") {
-        for (const d of Array.from(child.children)) defs.appendChild(document.importNode(d, true));
+        for (const d of Array.from(child.children)) scoped.appendChild(document.importNode(d, true));
         continue;
       }
+      if (child.localName === "style") { scoped.appendChild(document.importNode(child, true)); continue; }
       if (["title", "desc", "metadata"].includes(child.localName)) continue;
       if (child.localName === "image" && child.hasAttribute("data-video")) {
         const video = makeVideo(child);
@@ -91,18 +183,33 @@
         layer = document.createElementNS(SVGNS, "svg");
         layer.setAttribute("viewBox", viewBox);
         layer.setAttribute("class", "svgdeck-layer");
-        for (const a of ["style", "preserveAspectRatio"]) {
-          if (svg.hasAttribute(a)) layer.setAttribute(a, svg.getAttribute(a));
+        for (const a of Array.from(svg.attributes)) {
+          if (a.name === "class") layer.classList.add(...a.value.split(/\s+/).filter(Boolean));
+          else if (inheritedAttribute(a.name)) {
+            if (a.namespaceURI) layer.setAttributeNS(a.namespaceURI, a.name, a.value);
+            else layer.setAttribute(a.name, a.value);
+          }
         }
         slide.appendChild(layer);
       }
       layer.appendChild(document.importNode(child, true));
     }
 
+    if (scoped.firstChild) defs.appendChild(scoped);
     const steps = Array.from(slide.querySelectorAll("[data-step]"));
     const maxStep = steps.reduce((m, el) => Math.max(m, parseInt(el.dataset.step, 10) || 0), 0);
     const stepVisibility = new Map(steps.map(el => [el, el.style.visibility]));
     return { el: slide, videos, steps, maxStep, stepVisibility };
+  }
+
+  function failedSlide(index) {
+    const el = document.createElement("div");
+    el.className = "svgdeck-slide svgdeck-failed";
+    const message = document.createElement("p");
+    message.className = "svgdeck-error"; message.setAttribute("role", "alert");
+    message.textContent = `Slide ${index + 1} could not be loaded`;
+    el.append(message);
+    return { el, videos: [], steps: [], maxStep: 0, stepVisibility: new Map(), failed: true };
   }
 
   function makeVideo(image) {
@@ -114,7 +221,7 @@
     video.setAttribute("playsinline", "");
     video.preload = "none";
     video.loop = image.getAttribute("data-loop") !== "false";
-    video.dataset.src = image.getAttribute("data-video");
+    video.dataset.src = image.getAttribute("data-video");  // kept: unloading removes src, loading restores it
     video.dataset.autoplay = image.getAttribute("data-autoplay") !== "false" ? "true" : "false";
     if (image.hasAttribute("data-sync")) video.dataset.sync = image.getAttribute("data-sync");
     if (image.hasAttribute("data-step")) video.dataset.step = image.getAttribute("data-step");
@@ -163,7 +270,14 @@
     root.appendChild(stage);
 
     const slides = deck.slides.map((s, i) => {
-      const slide = buildSlide(s.svg, i, defs, size, base);
+      let slide;
+      try {
+        slide = buildSlide(s.svg, i, defs, size, base);
+      } catch (error) {
+        // One broken slide must not take the whole deck down with it.
+        console.error(`svgdeck: slide ${i + 1} could not be loaded`, error);
+        slide = failedSlide(i);
+      }
       slide.id = s.id;
       stage.appendChild(slide.el);
       return slide;
@@ -231,12 +345,17 @@
     const thumbnails = deck.slides.map((s,i) => {
       const b = button("", () => { setOverview(false, i === state.index); setBlank(false); show(i,0); root.tabIndex = -1; root.focus(); }, grid);
       b.setAttribute("aria-label", `Go to slide ${i+1}`);
-      const svg = new DOMParser().parseFromString(s.svg,"image/svg+xml").documentElement;
-      rewrite(svg, `overview-${i}-`, base);
-      svg.setAttribute("viewBox",svg.getAttribute("viewBox") || `0 0 ${size[0]} ${size[1]}`);
-      svg.setAttribute("aria-hidden","true");
-      svg.style.aspectRatio = `${size[0]} / ${size[1]}`;
-      b.append(document.importNode(svg,true));
+      if (slides[i].failed) {
+        const failed = document.createElement("span"); failed.className = "svgdeck-thumb-failed";
+        failed.textContent = "Could not be loaded"; b.append(failed);
+      } else {
+        const svg = parseSlide(s.svg);
+        rewrite(svg, `overview-${i}-`, base);
+        svg.setAttribute("viewBox",svg.getAttribute("viewBox") || `0 0 ${size[0]} ${size[1]}`);
+        svg.setAttribute("aria-hidden","true");
+        svg.style.aspectRatio = `${size[0]} / ${size[1]}`;
+        b.append(document.importNode(svg,true));
+      }
       const label = document.createElement("span"); label.textContent = `Slide ${i+1}`; b.append(label);
       return b;
     });
@@ -267,11 +386,28 @@
     }
 
     function load(video) {
-      if (!video.dataset.src) return;
+      if (!video.dataset.src || video.hasAttribute("src")) return;
       video.src = video.dataset.src;
-      delete video.dataset.src;
       video.preload = "auto";
       video.load();
+    }
+    // A hidden <video> keeps its media resource alive, and iPadOS evicts them
+    // silently when there are too many: only the neighbours stay loaded.
+    function unload(video) {
+      if (!video.hasAttribute("src")) return;
+      video.pause();
+      video.removeAttribute("src");
+      video.preload = "none";
+      video.load();  // releases the resource; the poster stays
+    }
+
+    const SEEK_DRIFT = 0.1, SEEK_INTERVAL = 250;  // seconds, milliseconds
+    // How far a looping video is from `time`, wrapping at its duration.
+    function drift(video, time) {
+      const d = video.duration;
+      if (!isFinite(d) || d <= 0) return Math.abs(video.currentTime - time);
+      const diff = Math.abs(video.currentTime - time % d);
+      return Math.min(diff, d - diff);
     }
 
     function seekTo(video, time) {
@@ -293,11 +429,18 @@
         }
       }
       if (!followers.length) return;
-      let stopped = false;
+      let stopped = false, lastSeek = 0;
       const rvfc = typeof driver.requestVideoFrameCallback === "function";
       const tick = () => {
         if (stopped) return;
-        for (const f of followers) if (f.readyState >= 1) seekTo(f, driver.currentTime);
+        // Followers are hidden: a rough match is enough, and a seek per
+        // presented frame would keep every decoder busy.
+        const now = Date.now();
+        if (now - lastSeek >= SEEK_INTERVAL) {
+          for (const f of followers) {
+            if (f.readyState >= 1 && !f.seeking && drift(f, driver.currentTime) > SEEK_DRIFT) { seekTo(f, driver.currentTime); lastSeek = now; }
+          }
+        }
         if (rvfc) driver.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
       };
       tick();
@@ -324,14 +467,12 @@
         const playing = new Map();
         if (previous) {
           for (const v of previous.videos) {
-            if (v.dataset.sync && !v.paused) playing.set(v.dataset.sync, v.currentTime);
+            if (v.dataset.sync) playing.set(v.dataset.sync, v.currentTime);  // paused ones too: the overview pauses them
             v.pause();
           }
           previous.el.classList.remove("svgdeck-current");
         }
-        for (const j of [index, index + 1, index - 1]) {
-          if (slides[j]) slides[j].videos.forEach(load);
-        }
+        slides.forEach((s, j) => s.videos.forEach(Math.abs(j - index) <= 1 ? load : unload));
         slide.el.classList.add("svgdeck-current");
         for (const v of slide.videos) {
           if (v.dataset.sync && playing.has(v.dataset.sync)) seekTo(v, playing.get(v.dataset.sync));
@@ -364,16 +505,19 @@
       root.classList.toggle("svgdeck-blank", on);
       root.dispatchEvent(new CustomEvent("svgdeck:change", { detail: { ...state } }));
     }
+    // [slide, step] from a "#N" or "#N.step" hash; null for any other hash.
     function fromHash() {
       const m = /^#(\d+)(?:\.(\d+))?$/.exec(location.hash);
-      return m ? [parseInt(m[1], 10) - 1, parseInt(m[2] || "0", 10)] : [0, 0];
+      return m ? [parseInt(m[1], 10) - 1, parseInt(m[2] || "0", 10)] : null;
     }
 
     let typed = "";
     document.addEventListener("keydown", (e) => {
       if (e.target.closest("input,textarea,select,[contenteditable]")) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return;
-      if (e.key === "Escape" || e.key.toLowerCase() === "o") { e.preventDefault(); setOverview(!overviewOpen); return; }
+      // Escape only closes: clickers and leaving fullscreen send it too.
+      if (e.key === "Escape") { if (overviewOpen) { e.preventDefault(); setOverview(false); } return; }
+      if (e.key.toLowerCase() === "o") { e.preventDefault(); setOverview(!overviewOpen); return; }
       if (overviewOpen) {
         if (e.key === "Tab") {
           const buttons = [...overview.querySelectorAll("button")], index = buttons.indexOf(document.activeElement);
@@ -385,9 +529,9 @@
       if (state.blank && !["b", "B", "."].includes(e.key)) { setBlank(false); e.preventDefault(); return; }
       if (/^\d$/.test(e.key)) { typed += e.key; return; }
       switch (e.key) {
-        case "ArrowRight": case "ArrowDown": case "PageDown": case " ": case "n":
+        case "ArrowRight": case "ArrowDown": case "PageDown": case " ": case "n": case "N":
           next(); break;
-        case "ArrowLeft": case "ArrowUp": case "PageUp": case "Backspace": case "p":
+        case "ArrowLeft": case "ArrowUp": case "PageUp": case "Backspace": case "p": case "P":
           prev(); break;
         case "Enter":
           if (typed) show(parseInt(typed, 10) - 1, 0); else next();
@@ -395,7 +539,7 @@
         case "Home": show(0, 0); break;
         case "End": show(slides.length - 1, slides[slides.length - 1].maxStep); break;
         case "b": case "B": case ".": setBlank(!state.blank); break;
-        case "f": toggleFullscreen(); break;
+        case "f": case "F": toggleFullscreen(); break;
         default: typed = ""; return;
       }
       typed = "";
@@ -407,10 +551,16 @@
       else if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
     }
 
-    let touch = null;
-    root.addEventListener("pointerdown", (e) => { touch = e.target.closest(".svgdeck-controls,.svgdeck-overview") || overviewOpen ? null : [e.clientX, e.clientY]; });
+    // One finger or button drives a gesture: [x, y, pointerId]. A second
+    // finger (a pinch, a resting palm) cancels it instead of advancing.
+    let touch = null, lastTap = null, doubleAt = -Infinity;
+    const DOUBLE_MS = 350, DOUBLE_PX = 30;
+    root.addEventListener("pointerdown", (e) => {
+      if (!e.isPrimary) { touch = null; return; }
+      touch = e.target.closest(".svgdeck-controls,.svgdeck-overview") || overviewOpen ? null : [e.clientX, e.clientY, e.pointerId];
+    });
     root.addEventListener("pointerup", (e) => {
-      if (!touch) return;
+      if (!touch || !e.isPrimary || e.pointerId !== touch[2]) return;
       const dx = e.clientX - touch[0], dy = e.clientY - touch[1];
       touch = null;
       if (e.button !== 0) return;
@@ -420,13 +570,31 @@
         // Touch has no hover: a tap along the bottom edge shows or hides the controls.
         if (e.pointerType !== "mouse" && e.clientY > root.getBoundingClientRect().bottom - 80) {
           if (root.classList.contains("svgdeck-show-controls")) hideControls(); else revealControls(4000);
-        } else next();
+          return;
+        }
+        // A quick second tap in the same place is a double-click: it goes
+        // fullscreen instead of advancing, so the first tap's advance is undone.
+        const now = performance.now(), first = lastTap;
+        lastTap = null;
+        if (first && now - first.time < DOUBLE_MS && Math.abs(e.clientX - first.x) < DOUBLE_PX && Math.abs(e.clientY - first.y) < DOUBLE_PX) {
+          const [i, s] = first.from;
+          if (state.index === first.index && state.step === first.step) show(i, s);
+          doubleAt = now;
+          toggleFullscreen();
+          return;
+        }
+        const from = [state.index, state.step];
+        next();
+        lastTap = { time: now, x: e.clientX, y: e.clientY, from, index: state.index, step: state.step };
       }
     });
     root.addEventListener("pointercancel", () => { touch = null; });
-    root.addEventListener("dblclick", e => {if (!e.target.closest(".svgdeck-controls,.svgdeck-overview")) toggleFullscreen();});
+    root.addEventListener("dblclick", e => {
+      if (e.target.closest(".svgdeck-controls,.svgdeck-overview") || performance.now() - doubleAt < 1000) return;
+      toggleFullscreen();
+    });
     window.addEventListener("resize", fit);
-    window.addEventListener("hashchange", () => { const [i, s] = fromHash(); show(i, s); });
+    window.addEventListener("hashchange", () => { const target = fromHash(); if (target) show(target[0], target[1]); });
 
     fit();
     const faces = (deck.fonts || []).map((f) =>
@@ -435,13 +603,13 @@
     const ready = Promise.race([Promise.all(faces), timeout]).then(() => {
       root.classList.add("svgdeck-ready");
       revealControls(3000);  // show where the controls are, then get out of the way
-      const [i, s] = fromHash();
+      const [i, s] = fromHash() || [0, 0];
       show(i, s);
     });
 
     const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length };
     root.svgdeck = api;
-    window.SvgDeckSpeaker?.(root, deck, api, options, rewrite);
+    window.SvgDeckSpeaker?.(root, deck, api, options, rewrite, parseSlide);
     return api;
   }
 
