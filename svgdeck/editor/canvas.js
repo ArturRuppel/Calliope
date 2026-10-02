@@ -306,6 +306,8 @@ export class SlideEditor {
   /** Open an undo step unless one is open. Returns the step if this call
    *  opened it (whoever opened it may abort it), null if it joined one. */
   begin() {
+    // Another edit closes a run of nudges first, so each is undone by itself.
+    if (this.nudging && this.txDepth === 0) this.endNudge();
     if (this.tx) return null;
     this.tx = { before: this.serialize() };
     return this.tx;
@@ -325,6 +327,9 @@ export class SlideEditor {
   /** Close the open undo step without recording it; the slide stays as it is. */
   abort() {
     this.tx = null;
+    // A run of nudges loses its step with it: the next press starts afresh.
+    clearTimeout(this.nudgeTimer);
+    this.nudging = null;
   }
 
   /** Run a change as one undoable step. Changes inside it join that step. */
@@ -744,56 +749,148 @@ export class SlideEditor {
     this.change(() => this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(dx, dy)));
   }
 
+  /** Whether the selection can be changed from the keyboard or the
+   *  inspector now: something is selected, nothing locked, and no gesture,
+   *  text edit, path being drawn or crop is in progress. */
+  selectionEditable() {
+    return this.selection.length > 0 && !this.gesture && !this.textEdit && !this.pathDraft &&
+      !this.mediaTools?.active?.() && this.selection.every((el) => this.svg?.contains(el) && !this.isLocked(el));
+  }
+
+  /** Whether the element or a group around it is locked. */
+  isLocked(el) {
+    for (let node = el; node && node !== this.svg; node = node.parentElement) {
+      if (node.getAttribute?.("data-locked") === "true") return true;
+    }
+    return false;
+  }
+
   /** The selection's bounding box in slide units, {x, y, width, height}, or null. */
   selectionGeometry() {
     return this.selectionBox();
   }
 
-  /** Move and scale the selection as one piece so that its bounding box
-   *  becomes the given one; fields left out keep their value. One undo step. */
+  /** Move and scale the selection as one piece so that its slide-aligned
+   *  bounding box becomes the given one; fields left out keep their value.
+   *  One undo step.
+   *
+   *  Lines get their ends moved, so their stroke is never distorted. A single
+   *  object turned by other than quarter turns cannot be scaled along the
+   *  slide's axes without being skewed, so:
+   *  - when width and height change in proportion it is scaled uniformly
+   *    (which scales it along its own axes alike);
+   *  - otherwise it is scaled along its own axes by the amounts that give
+   *    the requested bounding box, so it stays a rectangle at its angle;
+   *  - when no such scale exists (near 45° the box's width and height cannot
+   *    change independently, or the request needs a negative size), it is
+   *    scaled along the slide's axes, which skews it but gives the box asked
+   *    for, like scaling it as part of a group.
+   *  Several objects are scaled as one piece along the slide's axes. */
   setSelectionGeometry({ x, y, width, height } = {}) {
+    if (!this.selectionEditable()) return;
     const box = this.selectionBox();
     if (!box) return;
     const nx = Number.isFinite(x) ? x : box.x, ny = Number.isFinite(y) ? y : box.y;
     const nw = Math.max(Number.isFinite(width) ? width : box.width, 0.01);
     const nh = Math.max(Number.isFinite(height) ? height : box.height, 0.01);
     const sx = box.width > 1e-9 ? nw / box.width : 1, sy = box.height > 1e-9 ? nh / box.height : 1;
-    const D = new DOMMatrix().translateSelf(nx, ny).scaleSelf(sx, sy).translateSelf(-box.x, -box.y);
-    this.change(() => this.applyDelta(this.snapshot(), D));
+    const uniform = Math.abs(sx - sy) < 1e-6 * Math.max(sx, sy);
+    const frame = this.selectionFrame();
+    let D = null;
+    if (frame && !uniform) {
+      // Own-axis sizes (u, v) for the box asked for: W = u|cos| + v|sin|,
+      // H = u|sin| + v|cos|, solved for u and v.
+      const c = Math.abs(Math.cos(frame.angle * Math.PI / 180)), s = Math.abs(Math.sin(frame.angle * Math.PI / 180));
+      const det = c * c - s * s;
+      const u = (c * nw - s * nh) / det, v = (c * nh - s * nw) / det;
+      const fb = frame.box;
+      if (Math.abs(det) > 0.2 && u > 0.01 && v > 0.01 && fb.width > 1e-9 && fb.height > 1e-9) {
+        const fx = fb.x + fb.width / 2, fy = fb.y + fb.height / 2;
+        const S = new DOMMatrix().translateSelf(fx, fy).scaleSelf(u / fb.width, v / fb.height).translateSelf(-fx, -fy);
+        D = frame.toSlide.multiply(S).multiply(frame.toFrame);
+      }
+    }
+    D ||= new DOMMatrix().translateSelf(box.x, box.y).scaleSelf(sx, sy).translateSelf(-box.x, -box.y);
+    const snaps = this.snapshot();
+    this.change(() => {
+      this.applyBoxDelta(snaps, D);
+      // Then move it so the box starts where asked (scaling in the object's
+      // frame keeps its centre, not its corner).
+      const b = this.selectionBox();
+      if (b) this.applyBoxDelta(snaps, new DOMMatrix().translateSelf(nx - b.x, ny - b.y).multiply(D));
+    });
   }
 
-  /** Move the selection by a key press. Presses within half a second of each
-   *  other join one undo step; a pointer gesture or a load ends it at once. */
+  /** applyDelta, except that lines have their ends moved (exact geometry,
+   *  the stroke keeps its width and caps). */
+  applyBoxDelta(snaps, D) {
+    for (const s of snaps) {
+      if (s.el.localName !== "line") { this.applyDelta([s], D); continue; }
+      for (const [a, v] of Object.entries(s.geometry)) s.el.setAttribute(a, v);
+      // Keep the transform as written when it is unchanged.
+      const L = localMatrix(s.el);
+      if (!["a", "b", "c", "d", "e", "f"].every((k) => near(L[k], s.T0[k], 1e-9))) setTransform(s.el, s.T0);
+      const M = s.P.multiply(s.T0), inverse = M.inverse(), r = (v) => String(+v.toFixed(3));
+      for (const i of [1, 2]) {
+        const q = inverse.transformPoint(D.transformPoint(M.transformPoint(new DOMPoint(num(s.el, `x${i}`), num(s.el, `y${i}`)))));
+        s.el.setAttribute(`x${i}`, r(q.x));
+        s.el.setAttribute(`y${i}`, r(q.y));
+      }
+    }
+  }
+
+  /** Move the selection by a key press, by exactly (dx, dy) slide pixels
+   *  (nudges never snap). Presses within half a second of each other join
+   *  one undo step; a pointer gesture, another edit, an abort or a load ends
+   *  the run. Refused while a gesture or edit is in progress, or when the
+   *  selection is empty or locked. Returns whether it moved. */
   nudge(dx, dy) {
-    if (!this.selection.length || this.textEdit) return;
+    if (!Number.isFinite(dx) || !Number.isFinite(dy)) return false;
+    // A run belongs to one selection: choosing other objects starts a new one.
+    if (this.nudging && (this.nudging.els.length !== this.selection.length ||
+        this.nudging.els.some((el, i) => el !== this.selection[i]) || this.tx !== this.nudging.tx)) this.endNudge();
+    if (!this.selectionEditable()) return false;
+    if (!this.nudging) {
+      if (this.tx) return false;  // another step (a crop, an adjustment) is open
+      this.nudging = { tx: this.begin(), els: [...this.selection], snaps: this.snapshot(), dx: 0, dy: 0 };
+    }
     clearTimeout(this.nudgeTimer);
-    if (!this.nudging) this.nudging = { tx: this.begin(), snaps: this.snapshot(), dx: 0, dy: 0 };
     const n = this.nudging;
     n.dx += dx; n.dy += dy;
     this.applyDelta(n.snaps, new DOMMatrix().translateSelf(n.dx, n.dy));
     this.drawOverlay();
     this.nudgeTimer = setTimeout(() => this.endNudge(), 500);
+    return true;
   }
 
   /** Close the undo step a run of nudges opened, if one is open. */
   endNudge() {
     clearTimeout(this.nudgeTimer);
-    if (!this.nudging) return;
+    const n = this.nudging;
+    if (!n) return;
     this.nudging = null;
-    this.commit();
+    if (this.tx === n.tx) this.commit();
   }
 
-  /** A rect's corner radius in its own units (0 when square). */
+  /** A rect's corner radius in its own units (0 when square), as drawn:
+   *  SVG never rounds more than half the shorter side. */
   radiusOf(el) {
-    return el?.localName === "rect" ? +(el.getAttribute("rx") || el.getAttribute("ry") || 0) : 0;
+    if (el?.localName !== "rect") return 0;
+    const r = parseFloat(el.getAttribute("rx") ?? el.getAttribute("ry")) || 0;
+    return Math.max(0, Math.min(r, num(el, "width") / 2, num(el, "height") / 2));
   }
 
-  /** Round the corners of the selected rects; 0 makes them square again. */
+  /** Round the corners of the given rects (the selected ones by default),
+   *  at most half each one's shorter side; 0 makes them square again. The
+   *  radius stays as set when the rect is moved, resized or copied. */
   setRadius(r, elements = this.selection.filter((el) => el.localName === "rect")) {
+    const rects = elements.filter((el) => el.localName === "rect");
+    if (!rects.length || this.gesture || this.textEdit) return;
     const v = Math.max(0, +r || 0);
     this.change(() => {
-      for (const el of elements) {
-        if (v) { el.setAttribute("rx", String(v)); el.setAttribute("ry", String(v)); }
+      for (const el of rects) {
+        const c = +Math.min(v, num(el, "width") / 2, num(el, "height") / 2).toFixed(3);
+        if (c > 0) { el.setAttribute("rx", String(c)); el.setAttribute("ry", String(c)); }
         else { el.removeAttribute("rx"); el.removeAttribute("ry"); }
       }
     });

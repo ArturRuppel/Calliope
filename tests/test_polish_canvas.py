@@ -278,3 +278,146 @@ def test_escape_cancels_a_text_edit_without_an_undo_step(page, server):
     page.keyboard.press("Control+Enter")
     assert text_contents(page) == ["Hello!"]
     assert undo_depth(page) == depth + 1
+
+
+# --- 5. the numeric geometry, nudge and radius API -----------------------------------------------------
+
+def test_set_selection_geometry_moves_a_lines_ends(page, server):
+    js(page, """e.change(() => { const l = document.createElementNS(arg, 'line');
+      for (const [k, v] of Object.entries({x1: 100, y1: 100, x2: 300, y2: 200, stroke: '#000', 'stroke-width': 8})) l.setAttribute(k, v);
+      e.svg.append(l); e.selection = [l]; }); e.select(e.selection);""", NS)
+    assert js(page, "return e.lineMode() !== null")
+    depth = undo_depth(page)
+    js(page, "e.setSelectionGeometry({x: 500, width: 400});")
+    ends = js(page, "const l = e.svg.querySelector('line'); return ['x1','y1','x2','y2'].map(a => +l.getAttribute(a)).concat([l.getAttribute('transform')]);")
+    assert ends == [500, 100, 900, 200, None]
+    assert undo_depth(page) == depth + 1
+    # A turned line keeps its transform (and so its stroke); only its ends move.
+    js(page, "e.svg.querySelector('line').setAttribute('transform', 'rotate(30 700 150)'); e.select(e.selection);")
+    box = js(page, "return e.selectionGeometry();")
+    js(page, "e.setSelectionGeometry({x: 100, y: 100, height: arg});", box["height"] * 1.5)
+    got = js(page, "const l = e.svg.querySelector('line'); return [l.getAttribute('transform'), e.selectionGeometry()];")
+    assert got[0] == "rotate(30 700 150)"
+    assert [got[1]["x"], got[1]["y"], got[1]["width"], got[1]["height"]] == pytest.approx(
+        [100, 100, box["width"], box["height"] * 1.5], abs=0.01)
+
+
+def turned_rect(page, angle):
+    add_rects(page, [[400, 400, 300, 100]])
+    page.evaluate(f"(() => {{ const e = svgdeckEditor.editor, r = {last_rect(page)}; r.id = 'turned'; e.select([r]); e.setAngle({angle}); }})()")
+
+
+def turned_state(page):
+    return page.evaluate("""(() => { const e = svgdeckEditor.editor, r = e.svg.querySelector('#turned'), b = r.getBBox();
+      const m = e.svg.getCTM().inverse().multiply(r.getCTM());
+      return {box: e.selectionGeometry(), ortho: (m.a * m.c + m.b * m.d) / Math.hypot(m.a, m.b) / Math.hypot(m.c, m.d),
+              angle: e.angleOf(r), w: b.width * Math.hypot(m.a, m.b), h: b.height * Math.hypot(m.c, m.d)}; })()""")
+
+
+def as_list(box):
+    return [box["x"], box["y"], box["width"], box["height"]]
+
+
+def test_set_selection_geometry_on_a_turned_rect(page, server):
+    turned_rect(page, 30)
+    b = turned_state(page)["box"]
+    # In proportion: scaled alike along its own axes.
+    page.evaluate("([w, h]) => svgdeckEditor.editor.setSelectionGeometry({x: 200, y: 150, width: w, height: h})", [b["width"] * 2, b["height"] * 2])
+    s = turned_state(page)
+    assert as_list(s["box"]) == pytest.approx([200, 150, b["width"] * 2, b["height"] * 2], abs=0.05)
+    assert s["ortho"] == pytest.approx(0, abs=1e-6) and s["angle"] == pytest.approx(30, abs=0.01)
+    assert [s["w"], s["h"]] == pytest.approx([600, 200], abs=0.05)
+    # Wider only: still a rectangle at 30°, along its own axes.
+    b = s["box"]
+    page.evaluate("(w) => svgdeckEditor.editor.setSelectionGeometry({width: w})", b["width"] + 60)
+    s = turned_state(page)
+    assert as_list(s["box"]) == pytest.approx([b["x"], b["y"], b["width"] + 60, b["height"]], abs=0.05)
+    assert s["ortho"] == pytest.approx(0, abs=1e-6) and s["angle"] == pytest.approx(30, abs=0.01)
+
+
+def test_set_selection_geometry_at_45_degrees_and_on_several(page, server):
+    turned_rect(page, 45)
+    b = turned_state(page)["box"]
+    page.evaluate("(w) => svgdeckEditor.editor.setSelectionGeometry({width: w})", b["width"] + 100)
+    s = turned_state(page)
+    # No own-axis scale gives this box: it is scaled along the slide's axes.
+    assert as_list(s["box"]) == pytest.approx([b["x"], b["y"], b["width"] + 100, b["height"]], abs=0.05)
+    page.evaluate("svgdeckEditor.undo()")
+    add_rects(page, [[100, 100, 100, 100], [300, 200, 100, 100]])
+    page.evaluate("""svgdeckEditor.editor.select([...svgdeckEditor.editor.svg.querySelectorAll('rect:not([data-locked])')].slice(-2))""")
+    assert as_list(page.evaluate("svgdeckEditor.editor.selectionGeometry()")) == pytest.approx([100, 100, 300, 200])
+    page.evaluate("svgdeckEditor.editor.setSelectionGeometry({x: 0, y: 0, width: 600, height: 100})")
+    rects = page.evaluate("""[...svgdeckEditor.editor.svg.querySelectorAll('rect:not([data-locked])')].slice(-2)
+      .map(r => ['x','y','width','height'].map(a => +r.getAttribute(a)))""")
+    assert rects == [[0, 0, 200, 50], [400, 50, 200, 50]]
+
+
+def test_nudges_join_one_undo_step(page, server):
+    add_rects(page, [[100, 100, 100, 100]])
+    select_last_rect(page)
+    depth = undo_depth(page)
+    assert page.evaluate("[1, 2, 3].map(() => svgdeckEditor.editor.nudge(1, 0))") == [True, True, True]
+    assert rect_xywh(page)[0] == 103
+    page.wait_for_timeout(700)
+    assert page.evaluate("svgdeckEditor.editor.nudging") is None
+    assert undo_depth(page) == depth + 1
+    page.evaluate("svgdeckEditor.undo()")
+    assert rect_xywh(page)[0] == 100
+    # Nudges are exact: a guide 3 px away does not pull them.
+    page.evaluate("svgdeckEditor.editor.select([" + last_rect(page) + "]); svgdeckEditor.editor.nudge(855, 0)")
+    page.evaluate("svgdeckEditor.editor.endNudge()")
+    assert rect_xywh(page)[0] == 955
+    # Another edit ends the run: the nudge and the edit are two steps.
+    depth = undo_depth(page)
+    page.evaluate("svgdeckEditor.editor.nudge(0, 5); svgdeckEditor.editor.setStyle('fill', '#ff0000'); svgdeckEditor.editor.nudge(0, 5)")
+    page.evaluate("svgdeckEditor.editor.endNudge()")
+    assert undo_depth(page) == depth + 3
+    assert rect_xywh(page)[1] == 110
+
+
+def test_nudge_is_refused_mid_gesture_locked_or_empty_and_ends_on_load(page, server):
+    add_rects(page, [[100, 100, 100, 100]])
+    select_last_rect(page)
+    page.evaluate("svgdeckEditor.editor.smartSnap = false")
+    page.mouse.move(*to_screen(page, 150, 150))
+    page.mouse.down()
+    page.mouse.move(*to_screen(page, 250, 150), steps=4)
+    assert page.evaluate("svgdeckEditor.editor.nudge(5, 0)") is False
+    page.mouse.up()
+    assert rect_xywh(page)[0] == pytest.approx(200, abs=2)
+    x = rect_xywh(page)[0]
+    page.evaluate("svgdeckEditor.editor.select([])")
+    assert page.evaluate("svgdeckEditor.editor.nudge(5, 0)") is False
+    page.evaluate(f"(() => {{ const e = svgdeckEditor.editor, r = {last_rect(page)}; r.setAttribute('data-locked', 'true'); e.selection = [r]; }})()")
+    assert page.evaluate("svgdeckEditor.editor.nudge(5, 0)") is False
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, r = e.svg.querySelector('rect[data-locked]:not(#background)');
+      r.removeAttribute('data-locked'); e.select([r]); })()""")
+    # A load ends the run and leaves no step open.
+    assert page.evaluate("svgdeckEditor.editor.nudge(5, 0)") is True
+    page.evaluate("svgdeckEditor.editor.load(svgdeckEditor.editor.serialize())")
+    assert page.evaluate("[svgdeckEditor.editor.nudging, svgdeckEditor.editor.tx]") == [None, None]
+    select_last_rect(page)
+    assert rect_xywh(page)[0] == pytest.approx(x + 5, abs=0.01)
+    # So does an abort.
+    assert page.evaluate("svgdeckEditor.editor.nudge(5, 0)") is True
+    page.evaluate("svgdeckEditor.editor.abort()")
+    assert page.evaluate("svgdeckEditor.editor.nudging") is None
+
+
+def test_radius_is_clamped_and_survives_resize_duplicate_and_copy(page, server):
+    add_rects(page, [[400, 400, 300, 100]])
+    select_last_rect(page)
+    page.evaluate("svgdeckEditor.editor.smartSnap = false; svgdeckEditor.editor.setRadius(500)")
+    radius = f"(() => {{ const r = {last_rect(page)}; return [r.getAttribute('rx'), r.getAttribute('ry'), svgdeckEditor.editor.radiusOf(r)]; }})()"
+    assert page.evaluate(radius) == ["50", "50", 50]
+    page.evaluate("svgdeckEditor.editor.setRadius(20)")
+    assert page.evaluate(radius) == ["20", "20", 20]
+    drag(page, (700, 450), (800, 450))
+    assert rect_xywh(page)[2] == pytest.approx(400, abs=2)
+    assert page.evaluate(radius) == ["20", "20", 20]
+    page.evaluate("svgdeckEditor.editor.duplicate()")
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('rect[rx=\"20\"][ry=\"20\"]').length") == 2
+    page.evaluate("const e = svgdeckEditor.editor; e.paste(e.copy())")
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('rect[rx=\"20\"][ry=\"20\"]').length") == 3
+    page.evaluate("svgdeckEditor.editor.setRadius(0)")
+    assert page.evaluate(radius) == [None, None, 0]
