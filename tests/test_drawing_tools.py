@@ -84,7 +84,7 @@ def test_alignment_reference_and_text_controls(page, server):
     page.get_by_title('Align left edges',exact=True).click()
     assert page.evaluate('[...svgdeckEditor.editor.selection].map(s=>s.getBBox().x)') == pytest.approx([0,0],abs=.1)
     page.keyboard.press('t'); page.mouse.click(*to_screen(page,400,400))
-    page.keyboard.type('Formatted text');page.keyboard.press('Escape')
+    page.keyboard.type('Formatted text');page.keyboard.press('Control+Enter')
     page.click('#inspector-tabs [data-tab="design"]')
     page.get_by_title('Toggle bold',exact=True).click()
     page.get_by_title('Toggle italic',exact=True).click()
