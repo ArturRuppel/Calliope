@@ -69,3 +69,46 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .speaker-status { margin:8px 0 0; font-weight:600; }
 .speaker-status[data-connected="true"] { color:#8be0a4; }
 .speaker-status[data-connected="false"] { color:#ffb86b; }
+
+/* Print mode (?print=1, SvgDeck.start(..., {print: …})): every slide is a page
+   of the deck's aspect, stacked; the page size is set to the deck size. */
+html.svgdeck-print-document, html.svgdeck-print-document body { height:auto; overflow:visible; background:#3a3f47; }
+.svgdeck.svgdeck-print { position:static; overflow:visible; touch-action:auto; user-select:text;
+  -webkit-user-select:text; cursor:auto; }
+.svgdeck-print .svgdeck-page { position:relative; width:100%; aspect-ratio:var(--svgdeck-aspect, 16 / 9);
+  overflow:hidden; box-sizing:border-box; background:var(--svgdeck-background, #000); container-type:inline-size;
+  break-after:page; break-inside:avoid; page-break-after:always; }
+.svgdeck-print .svgdeck-slide { display:block; }
+.svgdeck-print .svgdeck-error { font-size:2.9cqw; padding:0 4cqw; }
+/* Handout: the slide scaled down, its notes under it. */
+.svgdeck-handout .svgdeck-page { background:#fff; color:#111; }
+.svgdeck-handout .svgdeck-slide { inset:4% auto auto 20%; width:60%; height:60%;
+  background:var(--svgdeck-background, #000); box-shadow:0 0 0 1px #9aa0a8; }
+.svgdeck-print-notes { position:absolute; left:6%; right:6%; top:67%; bottom:3.5%; overflow:hidden;
+  font:calc(1.5cqw * var(--svgdeck-fit, 1))/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.svgdeck-print-label { margin:0 0 .4em; font-size:.75em; font-weight:600; color:#5b6470; }
+.svgdeck-print-notes-text { white-space:pre-wrap; overflow-wrap:anywhere; }
+@media screen {
+  .svgdeck-print .svgdeck-page + .svgdeck-page { margin-top:12px; }
+}
+@media print {
+  html.svgdeck-print-document, html.svgdeck-print-document body { background:none; }
+}
+
+/* The browser's own printing of the player: every slide fully built, one per
+   page, no controls. Print mode above is the exact, deck-sized layout. */
+@media print {
+  @page { size:landscape; margin:0; }
+  html, body { height:auto; overflow:visible; background:none; }
+  .svgdeck:not(.svgdeck-print) { position:static; overflow:visible; background:none !important; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-controls, .svgdeck-overview, .speaker-panel { display:none !important; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-stage { position:static; width:auto !important; height:auto !important;
+    transform:none !important; visibility:visible !important; overflow:visible; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-slide { display:block; position:relative; inset:auto; margin:0 auto;
+    width:min(100vw, calc(100vh * var(--svgdeck-ratio, 1.7778)));
+    aspect-ratio:var(--svgdeck-aspect, 16 / 9); background:var(--svgdeck-background, #000);
+    container-type:inline-size; break-after:page; break-inside:avoid; page-break-after:always; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-slide [data-step] { visibility:visible !important; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-error { font-size:2.9cqw; padding:0 4cqw; }
+  .speaker-mode .svgdeck { right:auto; bottom:auto; }
+}
