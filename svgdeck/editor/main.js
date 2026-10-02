@@ -1418,13 +1418,13 @@ async function resizeSlides(w, h) {
   if (w === w0 && h === h0) { toast(`The slides are already ${w} × ${h} pixels.`); return; }
   if (!confirm(`Change the size of all ${n} slide${n === 1 ? "" : "s"} from ${w0} × ${h0} to ${w} × ${h} pixels? ` +
     "What is on them keeps its place and size.")) return;
+  // An open text box or crop ends first, so its edit is part of what is resized.
+  settleCurrentSlide();
   await flush();
   const ids = state.deck.slides.map((s) => s.id);
   const recs = await Promise.all(ids.map((id) => slideRecord(id)));
-  const conflicted = ids.filter((id, i) => recs[i].conflict);
-  if (conflicted.length) throw new Error("a slide has a save conflict; resolve it under History and recovery first");
+  if (recs.some((rec) => rec.conflict)) throw new Error("a slide has a save conflict; resolve it under History and recovery first");
   const changed = recs.map((rec) => resizedSlide(rec.text, w, h));  // all or nothing: a bad slide stops here
-  settleCurrentSlide();
   ids.forEach((id, i) => {
     const rec = recs[i];
     if (changed[i] === rec.text) return;

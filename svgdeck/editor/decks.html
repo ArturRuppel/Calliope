@@ -80,14 +80,15 @@
     return r.json();
   }
   async function load() {
-    let decks;
-    try {
-      decks = await getJSON("/api/decks", "the decks");
-    } catch (e) {
+    // Both lists are fetched before either is shown, so a deck never shows
+    // in both (or neither) while one of them is still loading.
+    const [listed, trashed] = await Promise.allSettled([getJSON("/api/decks", "the decks"), getJSON("/api/trash", "recently deleted decks")]);
+    if (listed.status === "rejected") {
       document.getElementById("decks").textContent = "The decks could not be loaded. Reload the page to try again.";
-      status.textContent = e.message;
+      status.textContent = listed.reason.message;
       return;
     }
+    const decks = listed.value;
     document.getElementById("decks").innerHTML = decks.length ? decks.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
@@ -98,14 +99,12 @@
         <button class="danger" data-delete="${esc(d.name)}">Delete</button>
         <div class="inline"></div><div class="row-error" role="alert"></div></div>`).join("")
       : "<p>No decks yet.</p>";
-    let deleted;
-    try {
-      deleted = await getJSON("/api/trash", "recently deleted decks");
-    } catch (e) {
+    if (trashed.status === "rejected") {
       document.getElementById("deleted").innerHTML = "";
-      status.textContent = e.message;
+      status.textContent = trashed.reason.message;
       return;
     }
+    const deleted = trashed.value;
     document.getElementById("deleted").innerHTML = deleted.length ? `<h2>Recently deleted</h2>` + deleted.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · deleted ${new Date(d.deleted * 1000).toLocaleString()}</small></div>
