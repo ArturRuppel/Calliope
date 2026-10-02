@@ -1489,6 +1489,7 @@ export class SlideEditor {
       case "marquee": break;
       case "create": this.moveCreate(g, p, e.shiftKey); break;
       case "draw": {
+        this.clearLongPress();  // the stroke has begun; a hold no longer opens the menu
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
         for (const ev of events.length ? events : [e]) this.addInkPoint(g, this.point(ev), ev);
         this.drawInk(g, false);
@@ -1514,6 +1515,8 @@ export class SlideEditor {
       el.remove();
     }
     if (hits.size) {
+      // Erasing is work a long press must not undo, however slow the finger.
+      this.clearLongPress();
       this.selection = this.selection.filter((el) => !hits.has(el));
       this.drawOverlay();
     }
