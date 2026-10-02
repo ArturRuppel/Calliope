@@ -236,6 +236,12 @@ export class SlideEditor {
     this.abort();
     this.pathDraft = null;
     this.endTextEdit(false);
+    // Nor any half-finished tap, chosen point or guide.
+    this.clearLongPress();
+    this.nodeSel = null;
+    this.lastTap = null;
+    this.lastSegmentTap = null;
+    this.smartGuides = [];
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
     if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") {
       throw new Error("this slide is not valid SVG");
