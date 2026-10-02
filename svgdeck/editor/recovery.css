@@ -10,5 +10,3 @@
 .recovery-dialog button { color: var(--ink, #1e2329); background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; }
 .recovery-row button { min-width: 88px; min-height: 42px; }
 .recovery-actions { display: flex; gap: 6px; }
-.recovery-row img { width: 100%; max-height: 220px; object-fit: contain; background: white; flex-basis: 100%; }
-.recovery-row:has(img) { flex-wrap: wrap; }
