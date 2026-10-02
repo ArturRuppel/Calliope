@@ -166,7 +166,8 @@ export class SlideEditor {
     this.penUpAt = -Infinity;
     this.lastTap = null;
     this.textEdit = null;
-    this.before = null;
+    this.tx = null;      // the open undo step, { before }, or null
+    this.txDepth = 0;    // change() calls in progress; the outermost commits
     this.grid = { show: false, snap: false, size: 20 };  // slide pixels
     this.smartSnap = true;
     this.smartGuides = [];
@@ -232,7 +233,7 @@ export class SlideEditor {
     this.pointers.clear();
     this.palms.clear();
     this.touchStart = null;
-    this.before = null;
+    this.abort();
     this.pathDraft = null;
     this.endTextEdit(false);
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
@@ -289,24 +290,39 @@ export class SlideEditor {
     return '<?xml version="1.0" encoding="utf-8"?>\n' + new XMLSerializer().serializeToString(clone) + "\n";
   }
 
+  /** The slide as it was when the open undo step began, or null. Setting it
+   *  to null discards the open step, like abort(). */
+  get before() { return this.tx ? this.tx.before : null; }
+  set before(v) { if (v === null) this.abort(); else this.tx = { before: v }; }
+
+  /** Open an undo step unless one is open. Returns the step if this call
+   *  opened it (whoever opened it may abort it), null if it joined one. */
   begin() {
-    if (this.before === null) this.before = this.serialize();
+    if (this.tx) return null;
+    this.tx = { before: this.serialize() };
+    return this.tx;
   }
 
   commit() {
-    if (this.before === null) return;
-    const before = this.before;
-    this.before = null;
+    if (!this.tx || this.txDepth > 0) return;  // inside change(): the outermost one commits
+    const { before } = this.tx;
+    this.tx = null;
     const after = this.serialize();
     if (after !== before) this.hooks.commit(before, after);
     this.drawOverlay();
     this.hooks.select(this.selection);
   }
 
-  /** Run a change as one undoable step. */
+  /** Close the open undo step without recording it; the slide stays as it is. */
+  abort() {
+    this.tx = null;
+  }
+
+  /** Run a change as one undoable step. Changes inside it join that step. */
   change(fn) {
     this.begin();
-    try { fn(); } finally { this.commit(); }
+    this.txDepth++;
+    try { fn(); } finally { this.txDepth--; this.commit(); }
   }
 
   // --- view ----------------------------------------------------------------
@@ -805,8 +821,7 @@ export class SlideEditor {
       case "bezier": return this.downPath(p, base);
       case "pen": return this.downPen(p, base, e);
       case "erase":
-        this.begin();
-        this.gesture = { kind: "erase", ...base, removed: [] };
+        this.gesture = { kind: "erase", ...base, removed: [], tx: this.begin() };
         this.eraseAt(e);
         return;
       case "text": this.gesture = { kind: "text", ...base }; return;
@@ -1042,8 +1057,7 @@ export class SlideEditor {
       }
       if (hit) {
         this.nodeSel = { el, sub: hit.sub, i: hit.i };
-        this.begin();
-        this.gesture = { kind: "node", ...base, el, model, sub: hit.sub, i: hit.i, part: hit.part,
+        this.gesture = { kind: "node", ...base, tx: this.begin(), el, model, sub: hit.sub, i: hit.i, part: hit.part,
           inverse: matrix.inverse(), attr: model.kind === "path" ? "d" : "points",
           original: el.getAttribute(model.kind === "path" ? "d" : "points"), types: el.getAttribute("data-nodetypes") };
         this.lastSegmentTap = null;
@@ -1266,19 +1280,19 @@ export class SlideEditor {
   downSelect(e, p, base) {
     const handle = this.hitHandle(p, e.pointerType);
     if (handle === "end1" || handle === "end2") {
-      this.begin();
+      const tx = this.begin();
       const line = this.lineMode();
       const which = handle === "end1" ? 1 : 2;
-      this.gesture = { kind: "endpoint", ...base, line, which, inverse: toRoot(line, this.svg).inverse(),
+      this.gesture = { kind: "endpoint", ...base, tx, line, which, inverse: toRoot(line, this.svg).inverse(),
         original: [line.getAttribute(`x${which}`), line.getAttribute(`y${which}`)] };
       return;
     }
     if (handle) {
-      this.begin();
+      const tx = this.begin();
       const box = this.selectionBox();
       this.gesture = handle === "rotate"
-        ? { kind: "rotate", ...base, center: [box.x + box.width / 2, box.y + box.height / 2], snaps: this.snapshot() }
-        : { kind: "resize", ...base, handle, box, snaps: this.snapshot() };
+        ? { kind: "rotate", ...base, tx, center: [box.x + box.width / 2, box.y + box.height / 2], snaps: this.snapshot() }
+        : { kind: "resize", ...base, tx, handle, box, snaps: this.snapshot() };
       return;
     }
     let el = this.pick(e, p);
@@ -1324,9 +1338,9 @@ export class SlideEditor {
       path.setAttribute("stroke-linecap", "round");
       path.setAttribute("stroke-linejoin", "round");
     }
-    this.begin();
+    const tx = this.begin();
     this.adopt(path);
-    this.gesture = { kind: "draw", ...base, path, pressure, width: style.strokeWidth, level: null, points: [] };
+    this.gesture = { kind: "draw", ...base, tx, path, pressure, width: style.strokeWidth, level: null, points: [] };
     this.addInkPoint(this.gesture, p, e);
     this.drawInk(this.gesture, false);
   }
@@ -1392,7 +1406,7 @@ export class SlideEditor {
     g.moved = true;
     switch (g.kind) {
       case "move": {
-        if (!g.snaps) { this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
+        if (!g.snaps) { g.tx = this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
         let dx = p.x - g.start.x, dy = p.y - g.start.y;
         const horizontal = e.shiftKey && Math.abs(dx) > Math.abs(dy), vertical = e.shiftKey && !horizontal;
         if (!e.altKey) {
@@ -1528,7 +1542,7 @@ export class SlideEditor {
 
   moveCreate(g, p, square) {
     if (!g.el) {
-      this.begin();
+      g.tx = this.begin();
       g.el = this.adopt(this.newShape(g.shape));
     }
     this.shapeGeometry(g.el, g.shape, this.snapPoint(g.start), this.snapPoint(p), square);
@@ -1647,7 +1661,7 @@ export class SlideEditor {
         return;
       case "none": return;
       case "erase":
-        if (g.removed.length) this.commit(); else this.before = null;
+        if (g.removed.length) this.commit(); else if (g.tx && this.tx === g.tx) this.abort();
         return;
       case "marquee": {
         if (!g.moved) { this.tap(e, p, null); this.drawOverlay(); return; }
@@ -1747,7 +1761,9 @@ export class SlideEditor {
     if (g.kind === "draw") g.path.remove();
     if (g.kind === "erase") for (const r of g.removed.reverse()) r.parent.insertBefore(r.el, r.next);
     if (g.kind === "create" && g.el) g.el.remove();
-    this.before = null;
+    // Only the undo step this gesture opened: a crop or adjustment in
+    // progress keeps its own.
+    if (g.tx && this.tx === g.tx) this.abort();
     this.drawOverlay();
   }
 
@@ -2012,14 +2028,14 @@ export class SlideEditor {
     t.removeAttribute("data-editing");
     // Put the style back exactly as written, so looking is not an edit.
     if (te.styleAttr === null) t.removeAttribute("style"); else t.setAttribute("style", te.styleAttr);
-    if (!save) { this.before = null; this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (!save) { this.abort(); this.drawOverlay(); this.hooks.select(this.selection); return; }
     const trim = (ls) => { while (ls.length && !ls[ls.length - 1].some((r) => r.text.trim())) ls.pop(); return ls; };
     trim(lines);
     if (!lines.length) {
       t.remove();
       this.selection = this.selection.filter((el) => el !== t);
       if (isNew) {
-        this.before = null;
+        this.abort();
         this.hooks.textChanged?.(this.serialize());
         this.drawOverlay();
         this.hooks.select(this.selection);
