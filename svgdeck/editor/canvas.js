@@ -1691,6 +1691,10 @@ export class SlideEditor {
         return;
       }
       case "text": {
+        // The undo step starts before the empty text exists, so undoing
+        // the finished text removes it completely.
+        this.endTextEdit(true);
+        this.begin();
         const t = this.newText(this.snapPoint(p));
         this.select([t]);
         this.editText(t, true);
