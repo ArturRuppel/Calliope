@@ -75,7 +75,9 @@ const api = {
   async slide(id) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}`);
     if (!r.ok) throw new Error(`slide ${id}: ${r.status}`);
-    return { text: await r.text(), version: r.headers.get("ETag").replaceAll('"', "") };
+    const etag = r.headers.get("ETag");
+    if (!etag) throw new Error(`slide ${id}: the server sent no version (ETag)`);
+    return { text: await r.text(), version: etag.replaceAll('"', "") };
   },
   async putSlide(id, text, base) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}`, {
@@ -103,7 +105,13 @@ function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
                      weight: 400, size: 48, recent: [], grid: { show: false, snap: false, size: 20 },
                      penTool: "pen", penLinked: false, penSeen: false, pressure: true, bindings: { ...DEFAULT_BINDINGS } };
-  try { return { ...defaults, ...JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}") }; } catch (e) { return defaults; }
+  try {
+    const stored = JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}");
+    // Merge the objects one level deeper, so settings and bindings added
+    // later appear for browsers that stored older ones.
+    return { ...defaults, ...stored, grid: { ...defaults.grid, ...stored.grid },
+             bindings: { ...defaults.bindings, ...stored.bindings } };
+  } catch (e) { return defaults; }
 }
 function savePrefs() {
   try { localStorage.setItem("svgdeck-prefs", JSON.stringify(state.prefs)); } catch (e) { /* private mode */ }
@@ -1471,8 +1479,9 @@ function pencilSection() {
   const linked = state.prefs.penLinked;
   const toolSelect = el("select", { "aria-label": "Pencil tool", disabled: linked },
     Object.entries(TOOL_NAMES).map(([id, name]) => el("option", { value: id, selected: id === editor.tools.pen }, name)));
-  toolSelect.onchange = () => runAction(`pen:${toolSelect.value}`, "down");
-  const bindings = Object.entries(state.prefs.bindings).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  // Not runAction: device actions are ignored while a dialog is open.
+  toolSelect.onchange = () => setTool(toolSelect.value, { slot: "pen" });
+  const bindings = Object.entries(state.prefs.bindings).filter(([, action]) => action).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
   const actionSelect = el("select", { "aria-label": "Action to assign" }, actionGroups().map(([label, ids]) =>
     el("optgroup", { label }, ids.map((id) => el("option", { value: id }, actionLabel(id))))));
   const learn = el("button", { class: "btn small", onclick: () => {
@@ -1805,7 +1814,8 @@ function copySelection(cut) {
 }
 
 function clipboardData() {
-  try { return localStorage.getItem("svgdeck-clipboard") || state.clipboard; } catch (err) { return state.clipboard; }
+  if (state.clipboard) return state.clipboard;  // a copy made in this page is the freshest
+  try { return localStorage.getItem("svgdeck-clipboard"); } catch (err) { return null; }
 }
 
 function pasteClipboard() {
@@ -1871,7 +1881,11 @@ function wire() {
   $("slide-down").onclick = () => moveSlide(1);
   $("slide-del").onclick = deleteSlide;
   $("settings-close").onclick = () => $("settings-dialog").close();
-  $("settings-dialog").addEventListener("close", () => { settingsKind = null; });
+  $("settings-dialog").addEventListener("close", () => {
+    settingsKind = null;
+    // A key pressed after closing must not be bound.
+    if (controller.learning) controller.cancelLearning();
+  });
   $("settings-dialog").addEventListener("cancel", (e) => { if (controller.learning) e.preventDefault(); });
   $("exit-group").onclick = () => editor.exitGroup();
   $("inspector").addEventListener("pointerdown", () => { if (editor.textEdit) editor.textEdit.holding = true; }, true);

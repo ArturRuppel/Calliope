@@ -110,7 +110,9 @@ export class Controller {
   }
 
   unbind(input) {
-    delete this.bindings[input];
+    // A removed default stays removed: null keeps the defaults from bringing it back.
+    if (input in DEFAULT_BINDINGS) this.bindings[input] = null;
+    else delete this.bindings[input];
     this.save();
     this.onChange();
   }
