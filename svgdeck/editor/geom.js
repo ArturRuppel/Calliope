@@ -30,8 +30,9 @@ export function toRoot(el, svg) {
   return toDOM(a).inverse().multiply(toDOM(b));
 }
 
-/** Axis-aligned box of an element in slide coordinates. */
-export function rootBox(el, svg) {
+/** Axis-aligned box of an element in slide coordinates, or in a frame
+ *  (a matrix applied after the slide's, such as an un-rotation). */
+export function rootBox(el, svg, frame = null) {
   let b;
   try { b = el.getBBox(); } catch (e) { return null; }
   // SVG getBBox() ignores clipping. Selection and transforms use the visible
@@ -45,7 +46,7 @@ export function rootBox(el, svg) {
         height: b.height * Math.max(.001, 1 - top - bottom)};
     }
   }
-  const m = toRoot(el, svg);
+  const m = frame ? frame.multiply(toRoot(el, svg)) : toRoot(el, svg);
   const pts = [[b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]]
     .map(([x, y]) => m.transformPoint(new DOMPoint(x, y)));
   const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
