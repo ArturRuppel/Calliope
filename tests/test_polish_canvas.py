@@ -203,3 +203,78 @@ def test_shift_constrains_the_line_tool_to_45_degrees(page, server):
     page.keyboard.up("Shift")
     line = page.evaluate("(() => { const l = svgdeckEditor.editor.svg.querySelector('line'); return ['x1','y1','x2','y2'].map(a => +l.getAttribute(a)); })()")
     assert line[1] == pytest.approx(800, abs=1) and line[3] == pytest.approx(line[1], abs=0.01)
+
+
+# --- 4. the text tool on existing text, Escape cancels ------------------------------------------------
+
+def make_text(page, words, at=(300, 300)):
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, *at))
+    page.keyboard.type(words)
+    page.keyboard.press("Control+Enter")
+    assert page.locator(".text-edit").count() == 0
+
+
+def text_contents(page):
+    return page.evaluate("[...svgdeckEditor.editor.svg.querySelectorAll('text')].map(t => t.textContent)")
+
+
+def test_text_tool_edits_an_existing_text(page, server):
+    make_text(page, "Hello")
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 320, 290))
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("End")
+    page.keyboard.type(" again")
+    page.keyboard.press("Control+Enter")
+    assert text_contents(page) == ["Hello again"]
+    # Away from any text, the tool still adds a new one.
+    make_text(page, "Second", at=(300, 700))
+    assert text_contents(page) == ["Hello again", "Second"]
+
+
+def test_text_tool_edits_a_text_inside_a_group(page, server):
+    make_text(page, "Grouped")
+    add_rects(page, [[300, 400, 100, 100]])
+    page.evaluate("svgdeckEditor.editor.selectAll(); svgdeckEditor.editor.group(); svgdeckEditor.editor.select([])")
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 320, 290))
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("End")
+    page.keyboard.type("!")
+    page.keyboard.press("Control+Enter")
+    assert text_contents(page) == ["Grouped!"]
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelectorAll('g > text').length") == 1
+
+
+def test_escape_cancels_a_text_edit_without_an_undo_step(page, server):
+    make_text(page, "Hello")
+    depth = undo_depth(page)
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 320, 290))
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("End")
+    page.keyboard.type(" world")
+    page.keyboard.press("Escape")
+    assert page.locator(".text-edit").count() == 0
+    assert text_contents(page) == ["Hello"]
+    assert undo_depth(page) == depth
+    assert "world" not in saved_slide(page, server)
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('text').hasAttribute('data-editing')") is False
+    assert page.evaluate("getComputedStyle(svgdeckEditor.editor.svg.querySelector('text')).visibility") == "visible"
+    # A new text is removed again.
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 300, 700))
+    page.keyboard.type("Gone")
+    page.keyboard.press("Escape")
+    assert text_contents(page) == ["Hello"]
+    assert undo_depth(page) == depth
+    assert "Gone" not in saved_slide(page, server)
+    # Ctrl+Enter still keeps the edit as one undo step.
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 320, 290))
+    page.keyboard.press("End")
+    page.keyboard.type("!")
+    page.keyboard.press("Control+Enter")
+    assert text_contents(page) == ["Hello!"]
+    assert undo_depth(page) == depth + 1

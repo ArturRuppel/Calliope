@@ -972,7 +972,8 @@ export class SlideEditor {
         this.gesture = { kind: "erase", ...base, removed: [], tx: this.begin() };
         this.eraseAt(e);
         return;
-      case "text": this.gesture = { kind: "text", ...base }; return;
+      // On an existing text the text tool edits it rather than adding one on top.
+      case "text": this.gesture = { kind: "text", ...base, target: this.textAt(e, p) }; return;
       default: this.gesture = { kind: "create", shape: this.tool, ...base }; return;
     }
   }
@@ -1897,6 +1898,15 @@ export class SlideEditor {
         return;
       }
       case "text": {
+        const target = g.target;
+        if (target && this.svg.contains(target) && this.selectable(target)) {
+          this.endTextEdit(true);
+          if (target.parentNode !== this.context) this.context = target.parentNode;
+          this.select([target]);
+          this.editText(target, false);
+          this.hooks.toolDone?.(this.input);
+          return;
+        }
         // The undo step starts before the empty text exists, so undoing
         // the finished text removes it completely.
         this.endTextEdit(true);
@@ -2008,6 +2018,16 @@ export class SlideEditor {
   }
 
   // --- text ------------------------------------------------------------------------
+  /** The text under the pointer, if any: one at the current level, or one
+   *  hit directly inside a group (editing it works inside that group). */
+  textAt(e, p) {
+    const picked = this.pick(e, p);
+    if (picked?.localName === "text") return picked;
+    const hit = e.target?.closest?.("text");
+    if (hit && this.svg.contains(hit) && this.selectable(hit) && (!picked || picked.contains(hit))) return hit;
+    return null;
+  }
+
   newText(p) {
     const s = this.hooks.textStyle();
     const t = document.createElementNS(SVGNS, "text");
@@ -2084,12 +2104,15 @@ export class SlideEditor {
     }
     this.page.appendChild(box);
     const styleAttr = t.getAttribute("style");
+    // The text as it was, for Escape: typing is copied into it as it goes.
+    const original = t.cloneNode(true);
     t.setAttribute("data-editing", "true");
     t.style.visibility = "hidden";
-    this.textEdit = { t, box, isNew, base, styleAttr, pitch: this.linePitch(t), scale: 1, range: null, holding: false };
+    this.textEdit = { t, box, isNew, base, styleAttr, original, tx: this.tx, pitch: this.linePitch(t), scale: 1, range: null, holding: false };
     box.addEventListener("keydown", (e) => {
       e.stopPropagation();
-      if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) { e.preventDefault(); this.endTextEdit(true); }
+      if (e.key === "Escape" && !e.isComposing) { e.preventDefault(); this.cancelTextEdit(); }
+      else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); this.endTextEdit(true); }
     });
     box.addEventListener("paste", (e) => {
       // Text from elsewhere comes in plain, in this text's look.
@@ -2228,6 +2251,17 @@ export class SlideEditor {
     return lines;
   }
 
+  /** Leave the text edit without keeping it (Escape): the text goes back to
+   *  what it was when the edit began, a new one is removed, and no undo step
+   *  is recorded. The working copy is told, since typing was synced into it. */
+  cancelTextEdit() {
+    if (!this.textEdit) return;
+    this.endTextEdit(false);
+    this.hooks.textChanged?.(this.serialize());
+  }
+
+  /** Finish the text edit: save (an undo step) or put the text back as it
+   *  was (see cancelTextEdit; load() uses this without telling anyone). */
   endTextEdit(save) {
     const te = this.textEdit;
     if (!te) return;
@@ -2238,7 +2272,21 @@ export class SlideEditor {
     t.removeAttribute("data-editing");
     // Put the style back exactly as written, so looking is not an edit.
     if (te.styleAttr === null) t.removeAttribute("style"); else t.setAttribute("style", te.styleAttr);
-    if (!save) { this.abort(); this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (!save) {
+      if (isNew) {
+        t.remove();
+        this.selection = this.selection.filter((el) => el !== t);
+      } else if (te.materialized) {
+        for (const a of Array.from(t.attributes)) t.removeAttributeNS(a.namespaceURI, a.localName);
+        for (const a of Array.from(te.original.attributes)) t.setAttributeNS(a.namespaceURI, a.name, a.value);
+        t.replaceChildren(...te.original.childNodes);
+      }
+      // Only the undo step this edit opened (or joined from a new text).
+      if (te.tx && this.tx === te.tx) this.abort();
+      this.drawOverlay();
+      this.hooks.select(this.selection);
+      return;
+    }
     const trim = (ls) => { while (ls.length && !ls[ls.length - 1].some((r) => r.text.trim())) ls.pop(); return ls; };
     trim(lines);
     if (!lines.length) {
