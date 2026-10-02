@@ -22,6 +22,8 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--color-bg); overscroll-behavior: none; }
 body { display: grid; grid-template-rows: var(--bar-h) 1fr; height: 100dvh; -webkit-user-select: none; user-select: none; }
+/* Fields stay selectable, or iPadOS offers no Copy and Paste in them. */
+input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { border-radius: 0; }
 :focus { outline: none; }

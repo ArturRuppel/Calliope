@@ -76,6 +76,22 @@ function parseColor(value) {
   return null;
 }
 
+// Any other CSS colour (a name, a computed style) via the canvas, which
+// normalises what it understands to #rrggbb or rgba().
+function anyColor(text) {
+  const parsed = parseColor(text);
+  if (parsed || !text) return parsed;
+  const context = document.createElement("canvas").getContext("2d");
+  const seen = ["#010203", "#040506"].map((sentinel) => {
+    context.fillStyle = sentinel; context.fillStyle = text; return context.fillStyle;
+  });
+  return seen[0] === seen[1] ? parseColor(seen[0]) : null;
+}
+
+// Whether typed or pasted text names its own opacity ("#rgba", "rgba(…)", "… / 50%").
+const statesAlpha = (text) => /^#?(?:[\da-f]{4}|[\da-f]{8})$/i.test(text) || /^(?:rgba|hsla)/i.test(text) ||
+  /\//.test(text) || (text.match(/[+-]?(?:\d+\.?\d*|\.\d+)/g) || []).length === 4;
+
 function cssColor(color) {
   if (color.a >= 0.9999) return `#${hexByte(color.r)}${hexByte(color.g)}${hexByte(color.b)}`;
   return `rgba(${byte(color.r)}, ${byte(color.g)}, ${byte(color.b)}, ${cleanNumber(clamp(color.a, 0, 1), 3)})`;
@@ -91,6 +107,17 @@ function element(tag, attributes = {}, ...children) {
   return node;
 }
 
+function eyedropperIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const icon = document.createElementNS(ns, "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "m14 7 3 3M5 19l1.5-.5L16 9l-1-1-9.5 9.5zM14 6l1.6-1.6a2.1 2.1 0 0 1 3 3L17 9");
+  icon.append(path);
+  return icon;
+}
+
 function swatch(color, label, pick, selected = false, result = color) {
   const button = element("button", { type: "button", class: `swatch color-swatch${selected ? " on" : ""}`,
     title: label, "aria-label": label, style: `--swatch:${color}` });
@@ -98,8 +125,87 @@ function swatch(color, label, pick, selected = false, result = color) {
   return button;
 }
 
+const paintColor = (paint) => /^(?:none|url\(|context-)/.test(paint || "none") ? null : anyColor(paint);
+
+// The image's own pixel under a screen point, through its transform and
+// preserveAspectRatio. Image adjustments (filters) are not applied.
+async function imagePixel(image, x, y, cache) {
+  const href = image.href.baseVal;
+  if (!href) return null;
+  if (!cache.has(href)) {
+    const source = new Image();
+    source.src = new URL(href, document.baseURI).href;
+    cache.set(href, source.decode().then(() => source, () => null));
+  }
+  const source = await cache.get(href);
+  const matrix = image.getScreenCTM();
+  if (!source || !matrix) return null;
+  const point = new DOMPoint(x, y).matrixTransform(matrix.inverse());
+  const box = [image.x, image.y, image.width, image.height].map((length) => length.baseVal.value);
+  const [width, height] = [source.naturalWidth, source.naturalHeight];
+  const { align, meetOrSlice } = image.preserveAspectRatio.baseVal;
+  let u, v;
+  if (align === SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_NONE) {
+    u = (point.x - box[0]) * width / box[2];
+    v = (point.y - box[1]) * height / box[3];
+  } else {
+    const fit = meetOrSlice === SVGPreserveAspectRatio.SVG_MEETORSLICE_SLICE ? Math.max : Math.min;
+    const scale = fit(box[2] / width, box[3] / height);
+    const step = Math.max(0, align - SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMINYMIN);
+    u = (point.x - box[0] - (box[2] - width * scale) * (step % 3) / 2) / scale;
+    v = (point.y - box[1] - (box[3] - height * scale) * Math.floor(step / 3) / 2) / scale;
+  }
+  if (!(u >= 0 && v >= 0 && u < width && v < height)) return null;
+  const canvas = Object.assign(document.createElement("canvas"), { width: 1, height: 1 });
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(source, Math.floor(u), Math.floor(v), 1, 1, 0, 0, 1, 1);
+  try {
+    const [r, g, b, a] = context.getImageData(0, 0, 1, 1).data;
+    return a ? { r, g, b, a: a / 255 } : null;
+  } catch (error) { return null; }  // a cross-origin image
+}
+
+// The colour the topmost painted thing inside `area` shows at a screen point:
+// a shape's line or fill, a text's fill, an image's pixel.
+export async function sampleColor(area, x, y, cache = new Map()) {
+  for (const node of document.elementsFromPoint(x, y)) {
+    if (!area.contains(node)) continue;
+    if (node instanceof SVGImageElement) {
+      const pixel = await imagePixel(node, x, y, cache);
+      if (pixel) return pixel;
+      continue;
+    }
+    if (!(node instanceof SVGGraphicsElement) || node instanceof SVGSVGElement || node instanceof SVGGElement) continue;
+    const style = getComputedStyle(node);
+    const stroke = paintColor(style.stroke), fill = paintColor(style.fill);
+    let onStroke = false;
+    if (stroke && node instanceof SVGGeometryElement && node.getScreenCTM()) {
+      const point = new DOMPoint(x, y).matrixTransform(node.getScreenCTM().inverse());
+      try { onStroke = node.isPointInStroke(point); } catch (error) { /* not rendered */ }
+    }
+    const color = onStroke || !fill ? stroke : fill;
+    if (color) return color;
+  }
+  return null;
+}
+
+async function copyText(text, host) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (error) { /* fall back */ }
+  }
+  // Plain HTTP has no async clipboard: copy a selected field, as the menu would.
+  const buffer = element("textarea", { class: "color-copy-buffer", readonly: "", "aria-hidden": "true", tabindex: "-1" });
+  buffer.value = text;
+  host.append(buffer);
+  buffer.select(); buffer.setSelectionRange(0, text.length);
+  let copied = false;
+  try { copied = document.execCommand("copy"); } catch (error) { /* unsupported */ }
+  buffer.remove();
+  return copied;
+}
+
 export function createColorControl(value, onPick, { allowNone = false, palette = DEFAULT_PALETTE,
-  recent = [], onRecent = () => {} } = {}) {
+  recent = [], onRecent = () => {}, sampleArea = null } = {}) {
   const initial = parseColor(value) || { r: 0, g: 0, b: 0, a: 1 };
   const currentCss = value === "none" ? "none" : cssColor(initial);
   const root = element("div", { class: "color-control" });
@@ -136,6 +242,11 @@ export function createColorControl(value, onPick, { allowNone = false, palette =
     "aria-label": "Opacity" });
   const alphaNumber = element("input", { type: "number", min: "0", max: "100", step: "1", value: String(Math.round(initial.a * 100)),
     inputmode: "decimal", "aria-label": "Opacity percent" });
+  const dropper = element("button", { type: "button", class: "color-dropper", title: "Pick a colour from the slide",
+    hidden: sampleArea ? null : "" }, eyedropperIcon(), "Pick from slide");
+  const copy = element("button", { type: "button", class: "color-copy" }, "Copy colour");
+  const paste = element("button", { type: "button", class: "color-paste",
+    hidden: window.isSecureContext && navigator.clipboard?.readText ? null : "" }, "Paste colour");
   const error = element("p", { class: "color-error", role: "alert", hidden: "" }, "Enter a valid colour value.");
   const cancel = element("button", { type: "button" }, "Cancel");
   const apply = element("button", { type: "button", class: "color-apply" }, "Apply");
@@ -143,6 +254,7 @@ export function createColorControl(value, onPick, { allowNone = false, palette =
     element("form", { method: "dialog" },
       element("header", {}, element("h2", {}, "Custom colour")),
       element("div", { class: "color-preview-row" }, preview, native),
+      element("div", { class: "color-tools" }, dropper, copy, paste),
       element("label", {}, element("span", {}, "HEX"), hex),
       element("label", {}, element("span", {}, "RGB"), rgb),
       element("label", {}, element("span", {}, "HSL"), hsl),
@@ -166,10 +278,10 @@ export function createColorControl(value, onPick, { allowNone = false, palette =
   };
   const readHex = () => {
     const value = hex.value.trim();
-    const parsed = parseColor(value);
+    const parsed = parseColor(/^[\da-f]+$/i.test(value) ? `#${value}` : value);
     if (!parsed) { error.hidden = false; hex.setAttribute("aria-invalid", "true"); return; }
     hex.removeAttribute("aria-invalid");
-    draft = { ...parsed, a: /^#[\da-f]{4}(?:[\da-f]{4})?$/i.test(value) ? parsed.a : draft.a };
+    draft = { ...parsed, a: statesAlpha(value) ? parsed.a : draft.a };
     synchronize(hex);
   };
   hex.addEventListener("input", readHex);
@@ -177,16 +289,14 @@ export function createColorControl(value, onPick, { allowNone = false, palette =
     const value = hsl.value.trim();
     const parsed = parseColor(value.startsWith("hsl") ? value : `hsl(${value})`);
     if (!parsed) { error.hidden = false; hsl.setAttribute("aria-invalid", "true"); return; }
-    const explicitAlpha = /^hsla/i.test(value) || /\//.test(value) || (value.match(/[+-]?(?:\d+\.?\d*|\.\d+)/g) || []).length === 4;
-    hsl.removeAttribute("aria-invalid"); draft = { ...parsed, a: explicitAlpha ? parsed.a : draft.a }; synchronize(hsl);
+    hsl.removeAttribute("aria-invalid"); draft = { ...parsed, a: statesAlpha(value) ? parsed.a : draft.a }; synchronize(hsl);
   });
   // RGB accepts either "12, 34, 56" or a complete rgb()/rgba() expression.
   rgb.addEventListener("input", () => {
     const value = rgb.value.trim();
     const parsed = parseColor(value.startsWith("rgb") ? value : `rgb(${value})`);
     if (!parsed) { error.hidden = false; rgb.setAttribute("aria-invalid", "true"); return; }
-    const explicitAlpha = /^rgba/i.test(value) || /\//.test(value) || (value.match(/[+-]?(?:\d+\.?\d*|\.\d+)/g) || []).length === 4;
-    rgb.removeAttribute("aria-invalid"); draft = { ...parsed, a: explicitAlpha ? parsed.a : draft.a }; synchronize(rgb);
+    rgb.removeAttribute("aria-invalid"); draft = { ...parsed, a: statesAlpha(value) ? parsed.a : draft.a }; synchronize(rgb);
   });
   native.addEventListener("input", () => { const parsed = parseColor(native.value); draft = { ...parsed, a: draft.a }; synchronize(native); });
   const setAlpha = (source) => {
@@ -196,6 +306,104 @@ export function createColorControl(value, onPick, { allowNone = false, palette =
   };
   alpha.addEventListener("input", () => setAlpha(alpha));
   alphaNumber.addEventListener("input", () => setAlpha(alphaNumber));
+  // A colour pasted into any field, in any notation, fills all of them.
+  const take = (text, field) => {
+    text = String(text || "").trim();
+    const parsed = anyColor(text) || (field === hsl ? parseColor(`hsl(${text})`) : parseColor(`rgb(${text})`)) ||
+      (field !== hsl && field !== rgb && /^[\da-f]{3,8}$/i.test(text) && parseColor(`#${text}`));
+    if (!parsed) return false;
+    draft = { ...parsed, a: statesAlpha(text) ? parsed.a : draft.a };
+    synchronize();
+    return true;
+  };
+  dialog.addEventListener("paste", (event) => {
+    if (event.target === alpha || event.target === alphaNumber) return;
+    if (take(event.clipboardData?.getData("text/plain"), event.target)) event.preventDefault();
+  });
+  const flash = (button, text) => {
+    const label = button.dataset.label ||= button.textContent;
+    button.textContent = text;
+    clearTimeout(button.flash);
+    button.flash = setTimeout(() => { button.textContent = label; }, 1400);
+  };
+  copy.addEventListener("click", async () => {
+    const text = draft.a >= 0.9999 ? hex.value : cssColor(draft);
+    const copied = await copyText(text, dialog.querySelector("form"));
+    copy.focus();
+    flash(copy, copied ? "Copied" : "Copy failed");
+  });
+  paste.addEventListener("click", async () => {
+    let text = "";
+    try { text = await navigator.clipboard.readText(); } catch (error) { /* refused */ }
+    if (!take(text)) flash(paste, "No colour");
+  });
+  dropper.addEventListener("click", () => {
+    const area = typeof sampleArea === "function" ? sampleArea() : sampleArea;
+    if (area) pickFrom(area);
+  });
+
+  // Picking hides the dialog and puts a layer over the page; the next tap or
+  // click on the slide takes the colour under it (the opacity stays as set).
+  const pickFrom = (area) => {
+    const cache = new Map();
+    const hint = element("p", { class: "color-sample-hint" }, "Tap a colour on the slide");
+    const loupe = element("span", { class: "color-sample-loupe", hidden: "" });
+    const stop = element("button", { type: "button" }, "Cancel");
+    const layer = element("div", { class: "color-sample-layer", role: "dialog", "aria-label": "Pick a colour" },
+      element("div", { class: "color-sample-bar" }, hint, stop), loupe);
+    let pending = 0, found = null, down = false;
+    const look = async (event) => {
+      const ticket = ++pending;
+      const color = await sampleColor(area, event.clientX, event.clientY, cache);
+      if (ticket !== pending) return found;
+      found = color;
+      loupe.hidden = !color;
+      if (color) {
+        loupe.style.setProperty("--swatch", cssColor({ ...color, a: 1 }));
+        // Above the finger or Pencil, which would cover it.
+        loupe.style.left = `${event.clientX}px`;
+        loupe.style.top = `${event.clientY}px`;
+      }
+      return color;
+    };
+    const finish = (color) => {
+      layer.remove();
+      window.removeEventListener("keydown", keys, true);
+      if (!root.isConnected) return;
+      if (color) { draft = { r: color.r, g: color.g, b: color.b, a: draft.a }; synchronize(); }
+      dialog.showModal();
+      dropper.focus();
+    };
+    const keys = (event) => {
+      event.stopPropagation();
+      if (event.key === "Escape") { event.preventDefault(); finish(null); }
+    };
+    layer.addEventListener("pointerdown", (event) => {
+      event.stopPropagation();
+      if (event.target.closest("button")) return;
+      event.preventDefault();
+      down = true;
+      layer.setPointerCapture?.(event.pointerId);
+      look(event);
+    });
+    layer.addEventListener("pointermove", (event) => { if (down || event.pointerType === "mouse") look(event); });
+    layer.addEventListener("pointerup", async (event) => {
+      event.stopPropagation();
+      if (!down) return;
+      down = false;
+      const color = await look(event);
+      if (color) finish(color);
+      else { hint.textContent = "No colour there. Tap a shape, text or image"; loupe.hidden = true; }
+    });
+    layer.addEventListener("pointercancel", () => { down = false; loupe.hidden = true; });
+    for (const type of ["click", "contextmenu", "wheel"]) layer.addEventListener(type, (event) => event.stopPropagation());
+    stop.addEventListener("click", () => finish(null));
+    window.addEventListener("keydown", keys, true);
+    dialog.close();
+    document.body.append(layer);
+    stop.focus();
+  };
+
   custom.addEventListener("click", () => { draft = { ...initial }; synchronize(); dialog.showModal(); hex.focus(); hex.select(); });
   cancel.addEventListener("click", () => dialog.close());
   apply.addEventListener("click", () => {

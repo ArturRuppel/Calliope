@@ -350,7 +350,7 @@ def test_copy_paste_buttons_across_slides(page, server):
     page.locator("#context-menu").get_by_role("menuitem", name="Copy").click()
     page.click("#slide-add")
     page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2")
-    panel_button(page, "Paste")
+    page.locator("#panel").get_by_role("button", name="Paste", exact=True).click()
     assert "<ellipse" in saved_slide(page, server)
 
 

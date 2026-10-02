@@ -134,7 +134,12 @@ The editor is laid out for an iPad in landscape:
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
 - **Custom…** beside any colour palette opens synchronized HEX, RGB and HSL
   fields, a visual picker, and an opacity slider. Colour transparency is
-  independent of whole-object opacity.
+  independent of whole-object opacity. Paste a colour in any notation (HEX
+  with or without `#`, `rgb()`, `hsl()`, a CSS name) into any field and all
+  of them follow; **Copy colour** copies the value. **Pick from slide** hides
+  the dialog: tap or click a shape's fill or line, a text or an image pixel to
+  take its colour (the opacity stays as set; image adjustments are not
+  applied to the picked pixel). Escape or **Cancel** leaves picking.
 - **Notes** (inspector tab) saves plain-text notes with each slide as you type.
   **Speaker view** (deck menu) shows the current slide, next slide, notes and
   a timer. Choose **Open audience window** and move that window to the

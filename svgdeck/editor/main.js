@@ -1201,7 +1201,7 @@ function row(label, ...controls) {
 
 function colorControl(value, onPick, allowNone) {
   return createColorControl(value, onPick, {
-    allowNone, palette:PALETTE, recent:state.prefs.recent,
+    allowNone, palette:PALETTE, recent:state.prefs.recent, sampleArea: () => editor.svg,
     onRecent(c) {
       state.prefs.recent = [c, ...state.prefs.recent.filter(r => r !== c)].slice(0, 6);
       savePrefs();

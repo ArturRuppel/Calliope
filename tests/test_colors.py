@@ -1,5 +1,5 @@
 """Focused browser tests for the standalone rich colour control."""
-from test_editor import page, saved_slide, server, to_screen
+from test_editor import drag, page, saved_slide, server, to_screen
 
 
 def mount(page, value="#336699", allow_none=True, recent=None):
@@ -124,3 +124,95 @@ def test_custom_colour_targets_selected_rich_text_and_keeps_alpha(page, server):
     assert tinted == ["rgba(12, 34, 56, 0.25)"]
     assert all(fill != "rgba(12, 34, 56, 0.25)" for text, fill in runs if text != "tinted")
     assert "rgba(12, 34, 56, 0.25)" in saved_slide(page, server)
+
+
+def paste_text(field, text):
+    return field.evaluate("""(node, text) => {
+      const data = new DataTransfer(); data.setData('text/plain', text);
+      return node.dispatchEvent(new ClipboardEvent('paste', {clipboardData: data, bubbles: true, cancelable: true}));
+    }""", text)
+
+
+def test_pasting_any_notation_fills_every_field(page):
+    mount(page, "#33669980")
+    dialog = open_editor(page)
+    hex_field, rgb, hsl = (dialog.get_by_label(name, exact=True) for name in ("HEX", "RGB", "HSL"))
+    assert paste_text(hex_field, "rgb(255, 0, 0)") is False
+    assert hex_field.input_value() == "#FF0000"
+    assert dialog.get_by_label("Opacity percent").input_value() == "50", "a colour without alpha keeps the opacity"
+    paste_text(rgb, " hsl(120, 100%, 50%) ")
+    assert rgb.input_value() == "0, 255, 0"
+    paste_text(hsl, "rebeccapurple")
+    assert hex_field.input_value() == "#663399"
+    paste_text(hsl, "0, 100%, 25%")
+    assert hex_field.input_value() == "#800000"
+    paste_text(hex_field, "0000ff40")
+    assert rgb.input_value() == "0, 0, 255"
+    assert dialog.get_by_label("Opacity percent").input_value() == "25"
+    # Anything else is pasted as text, for the field to judge.
+    assert paste_text(hex_field, "not a colour") is True
+
+
+def test_copy_puts_the_value_on_the_clipboard(page):
+    page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+    mount(page, "#336699")
+    dialog = open_editor(page)
+    dialog.get_by_role("button", name="Copy colour", exact=True).click()
+    assert page.evaluate("navigator.clipboard.readText()") == "#336699"
+    dialog.get_by_label("Opacity percent").fill("50")
+    dialog.get_by_role("button", name="Copied").click()
+    assert page.evaluate("navigator.clipboard.readText()") == "rgba(51, 102, 153, 0.5)"
+    page.evaluate("navigator.clipboard.writeText('hsl(0, 100%, 50%)')")
+    dialog.get_by_role("button", name="Paste colour", exact=True).click()
+    assert dialog.get_by_label("HEX").input_value() == "#FF0000"
+
+
+def test_colour_fields_are_selectable_in_the_editor(page):
+    page.keyboard.press("r")
+    drag(page, (200, 200), (600, 400))
+    page.locator("#panel").get_by_role("button", name="Custom…").first.click()
+    field = page.locator("#panel").get_by_role("dialog", name="Custom colour").get_by_label("HEX")
+    assert field.evaluate("node => getComputedStyle(node).userSelect") == "text"
+
+
+def test_dropper_picks_line_fill_and_image_pixel(page):
+    page.keyboard.press("r")
+    drag(page, (200, 200), (600, 400))
+    page.evaluate("""() => {
+      const rect = svgdeckEditor.editor.selection[0];
+      rect.style.fill = 'rgb(10, 200, 30)'; rect.style.stroke = '#123456'; rect.style.strokeWidth = '40';
+      const canvas = Object.assign(document.createElement('canvas'), {width: 2, height: 1});
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ff0000'; context.fillRect(0, 0, 1, 1);
+      context.fillStyle = '#0000ff'; context.fillRect(1, 0, 1, 1);
+      const image = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+      for (const [name, value] of Object.entries({x: 900, y: 200, width: 400, height: 400, href: canvas.toDataURL()}))
+        image.setAttribute(name, value);
+      svgdeckEditor.editor.svg.append(image);
+    }""")
+    panel = page.locator("#panel")
+    panel.get_by_role("button", name="Custom…").first.click()
+    dialog = panel.get_by_role("dialog", name="Custom colour")
+    dialog.get_by_label("Opacity percent").fill("40")
+    hex_field = dialog.get_by_label("HEX")
+
+    def pick(x, y):
+        dialog.get_by_role("button", name="Pick from slide").click()
+        assert not dialog.is_visible()
+        page.mouse.click(*to_screen(page, x, y))
+        dialog.wait_for(state="visible")
+        return hex_field.input_value()
+
+    assert pick(400, 300) == "#0AC81E"
+    assert pick(400, 205) == "#123456"
+    # meet: a 2:1 image fits a square box with bands above and below.
+    assert pick(1000, 400) == "#FF0000"
+    assert pick(1200, 400) == "#0000FF"
+    assert dialog.get_by_label("Opacity percent").input_value() == "40"
+
+    # Escape leaves picking without changing the colour or the selection.
+    dialog.get_by_role("button", name="Pick from slide").click()
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="visible")
+    assert hex_field.input_value() == "#0000FF"
+    assert page.evaluate("svgdeckEditor.editor.selection.length") == 1
