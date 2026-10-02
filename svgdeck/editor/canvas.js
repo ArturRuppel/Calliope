@@ -505,6 +505,20 @@ export class SlideEditor {
     return unionBox(this.selection.map((el) => rootBox(el, this.svg)));
   }
 
+  /** A single object turned by other than quarter turns is resized in its
+   *  own frame, so it stays a rectangle: {angle, box in the frame, toSlide,
+   *  toFrame}. Null when the selection is resized along the slide's axes. */
+  selectionFrame() {
+    if (this.selection.length !== 1 || this.lineMode()) return null;
+    const m = toRoot(this.selection[0], this.svg);
+    let angle = Math.atan2(m.b, m.a) * 180 / Math.PI;
+    angle -= Math.round(angle / 90) * 90;  // the handle names stay nearest to the screen's
+    if (Math.abs(angle) < 1e-3) return null;
+    const toSlide = new DOMMatrix().rotateSelf(angle), toFrame = toSlide.inverse();
+    const box = rootBox(this.selection[0], this.svg, toFrame);
+    return box && { angle, box, toSlide, toFrame };
+  }
+
   /** A single straight line is edited by its two ends, not a box. */
   lineMode() {
     return this.selection.length === 1 && this.selection[0].localName === "line" ? this.selection[0] : null;
@@ -535,8 +549,10 @@ export class SlideEditor {
       const i = d[0] <= d[1] ? 0 : 1;
       return d[i] <= radius / this.zoom ? (i ? "end2" : "end1") : null;
     }
-    const box = this.selectionBox();
+    const frame = this.selectionFrame();
+    const box = frame ? frame.box : this.selectionBox();
     if (!box) return null;
+    if (frame) p = frame.toFrame.transformPoint(new DOMPoint(p.x, p.y));
     // Inside the object, handles only win right at their centre, so small
     // objects can still be dragged and double-tapped.
     const inside = p.x > box.x && p.x < box.x + box.width && p.y > box.y && p.y < box.y + box.height;
@@ -640,17 +656,20 @@ export class SlideEditor {
       }
       return;
     }
-    const box = this.selectionBox();
+    const frame = this.textEdit ? null : this.selectionFrame();
+    const box = frame ? frame.box : this.selectionBox();
     if (!box || this.textEdit) return;
-    make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px });
+    // A turned object's box and handles are drawn in its own frame.
+    const turn = frame ? { transform: `rotate(${frame.angle})` } : {};
+    make("rect", { x: box.x, y: box.y, width: box.width, height: box.height, class: "ov-box", "stroke-width": px, ...turn });
     if (!this.usesTool("select")) return;
     const pos = this.handlePositions(box);
-    make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px });
-    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px });
+    make("line", { x1: pos.n[0], y1: pos.n[1], x2: pos.rotate[0], y2: pos.rotate[1], class: "ov-box", "stroke-width": px, ...turn });
+    make("circle", { cx: pos.rotate[0], cy: pos.rotate[1], r: 8 * px, class: "ov-handle", "stroke-width": 1.5 * px, ...turn });
     for (const name of HANDLES) {
       const [hx, hy] = pos[name];
       make("rect", { x: hx - 7 * px, y: hy - 7 * px, width: 14 * px, height: 14 * px, rx: 3 * px,
-        class: "ov-handle", "stroke-width": 1.5 * px });
+        class: "ov-handle", "stroke-width": 1.5 * px, ...turn });
     }
   }
 
@@ -1324,10 +1343,10 @@ export class SlideEditor {
     }
     if (handle) {
       const tx = this.begin();
-      const box = this.selectionBox();
+      const box = this.selectionBox(), frame = this.selectionFrame();
       this.gesture = handle === "rotate"
         ? { kind: "rotate", ...base, tx, center: [box.x + box.width / 2, box.y + box.height / 2], snaps: this.snapshot() }
-        : { kind: "resize", ...base, tx, handle, box, snaps: this.snapshot() };
+        : { kind: "resize", ...base, tx, handle, box: frame ? frame.box : box, frame, snaps: this.snapshot() };
       return;
     }
     let el = this.pick(e, p);
@@ -1558,8 +1577,15 @@ export class SlideEditor {
   }
 
   moveResize(g, p, free) {
-    const { box, handle } = g;
-    p = this.snapPoint(p);
+    const { box, handle, frame } = g;
+    // The handle moves as far as the pointer, so grabbing it a little off
+    // its centre does not make the edge jump. A turned object is scaled
+    // along its own axes (in its frame); the grid only snaps upright edges.
+    const [hx, hy] = this.handlePositions(box)[handle];
+    if (frame) {
+      const d = frame.toFrame.transformPoint(new DOMPoint(p.x - g.start.x, p.y - g.start.y));
+      p = { x: hx + d.x, y: hy + d.y };
+    } else p = this.snapPoint({ x: hx + p.x - g.start.x, y: hy + p.y - g.start.y });
     const left = box.x, right = box.x + box.width, top = box.y, bottom = box.y + box.height;
     let sx = 1, sy = 1, ax = left, ay = top;
     if (handle.includes("e")) { ax = left; sx = box.width ? (p.x - left) / box.width : 1; }
@@ -1575,7 +1601,9 @@ export class SlideEditor {
     const min = 2 / Math.max(box.width, box.height, 1);
     if (Math.abs(sx) < min) sx = Math.sign(sx || 1) * min;
     if (Math.abs(sy) < min) sy = Math.sign(sy || 1) * min;
-    this.applyDelta(g.snaps, new DOMMatrix().translateSelf(ax, ay).scaleSelf(sx, sy).translateSelf(-ax, -ay));
+    let D = new DOMMatrix().translateSelf(ax, ay).scaleSelf(sx, sy).translateSelf(-ax, -ay);
+    if (frame) D = frame.toSlide.multiply(D).multiply(frame.toFrame);
+    this.applyDelta(g.snaps, D);
   }
 
   moveCreate(g, p, square) {
