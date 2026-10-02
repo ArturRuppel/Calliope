@@ -3,6 +3,7 @@
 import {
   SVGNS, localMatrix, setTransform, toRoot, rootBox, unionBox, smartSnapDelta, simplify, smoothPath, polylinePath, toHex,
   parsePath, pathFromNodes, inferNodeType, splitSegment, nearestOnSegment, nodeAt, inkOutline, fitStroke,
+  snapLines, snapCoordinate, constrainAngle,
 } from "./geom.js";
 
 const HANDLE_PX = { mouse: 12, pen: 14, touch: 24 };  // handle hit radius, screen pixels
@@ -798,13 +799,53 @@ export class SlideEditor {
     });
   }
 
+  /** The slide's own box: its edges and centre lines are snap targets. */
+  slideBox() {
+    return { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+  }
+
+  /** Boxes of the objects beside the selection that guides can snap to
+   *  (full-slide backdrops are left out: the slide itself stands for them). */
+  siblingBoxes(exclude = new Set(this.selection)) {
+    const area = this.size[0] * this.size[1];
+    return this.children().filter((el) => !exclude.has(el))
+      .map((el) => rootBox(el, this.svg)).filter((b) => b && b.width * b.height < area * .9);
+  }
+
+  /** Lines a dragged edge or point snaps to: siblings' and the slide's edges
+   *  and centres, per axis. */
+  snapTargets(exclude) {
+    return snapLines([...this.siblingBoxes(exclude), this.slideBox()]);
+  }
+
+  /** Smart guides apply: they are on, the grid does not snap, Alt is up. */
+  smartSnapping(alt = false) {
+    return this.smartSnap && !this.grid.snap && !alt;
+  }
+
+  /** Snap a point's x and/or y to the targets; returns the point and guides. */
+  smartPoint(p, targets, axes = ["x", "y"]) {
+    const q = { x: p.x, y: p.y }, guides = [], tol = 8 / this.zoom;
+    for (const axis of axes) {
+      const hit = snapCoordinate(p[axis], targets[axis], tol);
+      if (!hit) continue;
+      q[axis] = hit.at;
+      guides.push({ kind: "align", axis, at: hit.at, lo: hit.lo, hi: hit.hi });
+    }
+    return { p: q, guides };
+  }
+
+  /** Guides for snapped points, spanning the target and the given box. */
+  pointGuides(guides, box) {
+    return guides.map((g) => {
+      const [lo, hi] = g.axis === "x" ? [box.y, box.y + box.height] : [box.x, box.x + box.width];
+      return { kind: "align", axis: g.axis, at: g.at, from: Math.min(g.lo, lo), to: Math.max(g.hi, hi) };
+    });
+  }
+
   smartMove(box, dx, dy) {
     if (!this.smartSnap || this.grid.snap || !box) return { dx, dy, guides: [] };
-    const selected = new Set(this.selection);
-    const area = this.size[0] * this.size[1];
-    const boxes = this.children().filter((el) => !selected.has(el))
-      .map((el) => rootBox(el, this.svg)).filter((b) => b && b.width * b.height < area * .9);
-    return smartSnapDelta(box, dx, dy, boxes, 8 / this.zoom);
+    return smartSnapDelta(box, dx, dy, this.siblingBoxes(), 8 / this.zoom, [this.slideBox()]);
   }
 
   // --- pointer handling ---------------------------------------------------------
@@ -1575,15 +1616,10 @@ export class SlideEditor {
         this.writeModel(g.el, model);
         break;
       }
-      case "resize": this.moveResize(g, p, e.shiftKey); break;
+      case "resize": this.moveResize(g, p, { free: e.shiftKey, centre: e.altKey }); break;
       case "endpoint": {
         let q = this.snapPoint(p);
-        if (e.shiftKey) {
-          const other = this.lineEnds(g.line)[g.which === 1 ? 1 : 0];
-          const angle = Math.round(Math.atan2(p.y - other.y, p.x - other.x) / (Math.PI / 4)) * (Math.PI / 4);
-          const len = Math.hypot(p.x - other.x, p.y - other.y);
-          q = { x: other.x + Math.cos(angle) * len, y: other.y + Math.sin(angle) * len };
-        }
+        if (e.shiftKey) q = constrainAngle(this.lineEnds(g.line)[g.which === 1 ? 1 : 0], p);
         const local = g.inverse.transformPoint(new DOMPoint(q.x, q.y));
         g.line.setAttribute(`x${g.which}`, String(+local.x.toFixed(2)));
         g.line.setAttribute(`y${g.which}`, String(+local.y.toFixed(2)));
@@ -1598,7 +1634,7 @@ export class SlideEditor {
         break;
       }
       case "marquee": break;
-      case "create": this.moveCreate(g, p, e.shiftKey); break;
+      case "create": this.moveCreate(g, p, e.shiftKey, e.altKey); break;
       case "draw": {
         this.clearLongPress();  // the stroke has begun; a hold no longer opens the menu
         const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
@@ -1633,7 +1669,11 @@ export class SlideEditor {
     }
   }
 
-  moveResize(g, p, free) {
+  /** Resize with a handle. `free` (Shift) lets a corner change the
+   *  proportions; `centre` (Alt) keeps the centre in place, so the opposite
+   *  side moves symmetrically. The dragged edge snaps to the grid, or else to
+   *  the smart guides (other objects' and the slide's edges and centres). */
+  moveResize(g, p, { free = false, centre = false } = {}) {
     const { box, handle, frame } = g;
     // The handle moves as far as the pointer, so grabbing it a little off
     // its centre does not make the edge jump. A turned object is scaled
@@ -1644,16 +1684,35 @@ export class SlideEditor {
       p = { x: hx + d.x, y: hy + d.y };
     } else p = this.snapPoint({ x: hx + p.x - g.start.x, y: hy + p.y - g.start.y });
     const left = box.x, right = box.x + box.width, top = box.y, bottom = box.y + box.height;
-    let sx = 1, sy = 1, ax = left, ay = top;
-    if (handle.includes("e")) { ax = left; sx = box.width ? (p.x - left) / box.width : 1; }
-    if (handle.includes("w")) { ax = right; sx = box.width ? (right - p.x) / box.width : 1; }
-    if (handle.includes("s")) { ay = top; sy = box.height ? (p.y - top) / box.height : 1; }
-    if (handle.includes("n")) { ay = bottom; sy = box.height ? (bottom - p.y) / box.height : 1; }
-    if (handle === "n" || handle === "s") ax = left + box.width / 2;
-    if (handle === "e" || handle === "w") ay = top + box.height / 2;
-    if (handle.length === 2 && !free) {
-      const s = Math.abs(sx - 1) > Math.abs(sy - 1) ? sx : sy;
-      sx = s; sy = s;
+    const cx = left + box.width / 2, cy = top + box.height / 2;
+    const locked = handle.length === 2 && !free;
+    const scales = (p, lead = null) => {
+      let sx = 1, sy = 1, ax = left, ay = top;
+      if (handle.includes("e")) { ax = centre ? cx : left; sx = box.width ? (p.x - ax) / (right - ax) : 1; }
+      if (handle.includes("w")) { ax = centre ? cx : right; sx = box.width ? (ax - p.x) / (ax - left) : 1; }
+      if (handle.includes("s")) { ay = centre ? cy : top; sy = box.height ? (p.y - ay) / (bottom - ay) : 1; }
+      if (handle.includes("n")) { ay = centre ? cy : bottom; sy = box.height ? (ay - p.y) / (ay - top) : 1; }
+      if (handle === "n" || handle === "s") ax = cx;
+      if (handle === "e" || handle === "w") ay = cy;
+      lead ||= Math.abs(sx - 1) > Math.abs(sy - 1) ? "x" : "y";
+      if (locked) { const s = lead === "x" ? sx : sy; sx = s; sy = s; }
+      return { sx, sy, ax, ay, lead };
+    };
+    let { sx, sy, ax, ay, lead } = scales(p);
+    this.smartGuides = [];
+    if (!frame && this.smartSnapping()) {
+      // The dragged edge snaps; a corner keeping its proportions snaps by
+      // the edge that leads the scale.
+      g.targets ||= this.snapTargets();
+      const axes = locked ? [lead] : [/[ew]/.test(handle) && "x", /[ns]/.test(handle) && "y"].filter(Boolean);
+      const snapped = this.smartPoint(p, g.targets, axes);
+      if (snapped.guides.length) {
+        ({ sx, sy, ax, ay } = scales(snapped.p, lead));
+        const after = { x: ax + (left - ax) * sx, y: ay + (top - ay) * sy, width: box.width * Math.abs(sx), height: box.height * Math.abs(sy) };
+        if (sx < 0) after.x -= after.width;
+        if (sy < 0) after.y -= after.height;
+        this.smartGuides = this.pointGuides(snapped.guides, after);
+      }
     }
     const min = 2 / Math.max(box.width, box.height, 1);
     if (Math.abs(sx) < min) sx = Math.sign(sx || 1) * min;
@@ -1663,12 +1722,25 @@ export class SlideEditor {
     this.applyDelta(g.snaps, D);
   }
 
-  moveCreate(g, p, square) {
+  moveCreate(g, p, square, alt = false) {
     if (!g.el) {
+      // Everything already there is a target, the selection too.
+      if (this.smartSnapping()) g.targets = this.snapTargets(new Set());
       g.tx = this.begin();
       g.el = this.adopt(this.newShape(g.shape));
     }
-    this.shapeGeometry(g.el, g.shape, this.snapPoint(g.start), this.snapPoint(p), square);
+    const a = this.snapPoint(g.start);
+    let b = this.snapPoint(p);
+    this.smartGuides = [];
+    // The dragged corner (or line end) snaps to the smart guides, unless the
+    // shape is held square or circular, which would move it off the guide.
+    if (g.targets && this.smartSnapping(alt) && !square && g.shape !== "circle") {
+      const snapped = this.smartPoint(b, g.targets);
+      b = snapped.p;
+      const box = { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), width: Math.abs(b.x - a.x), height: Math.abs(b.y - a.y) };
+      this.smartGuides = this.pointGuides(snapped.guides, box);
+    }
+    this.shapeGeometry(g.el, g.shape, a, b, square);
     if (g.shape === "arrow" && !g.arrowed) { g.arrowed = true; this.refreshArrows(g.el); }
   }
 
