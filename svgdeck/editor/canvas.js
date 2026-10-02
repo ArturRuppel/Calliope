@@ -770,7 +770,7 @@ export class SlideEditor {
     // touch entries survived a missing release from a native iPad prompt.
     if (e.pointerType === "touch" && e.isPrimary) {
       for (const [id, pointer] of [...this.pointers]) {
-        if (pointer.type === "touch") this.onCancel({ pointerId: id, pointerType: "touch" });
+        if (pointer.type === "touch") this.onCancel({ pointerId: id, pointerType: "touch", clientX: pointer.x, clientY: pointer.y });
       }
     }
     if (e.pointerType === "pen") this.rejectTouches();
@@ -1057,7 +1057,7 @@ export class SlideEditor {
     const model = el && this.nodeModel(el);
     if (model) {
       const { targets, map, matrix } = this.nodeTargets(el, model);
-      const radius = e.pointerType === "touch" ? 22 : 12;
+      const radius = { touch: 22, pen: 14 }[e.pointerType] || 12;
       let hit = null, score = Infinity;
       for (const t of targets) {
         const d = Math.hypot(t.p.x - p.x, t.p.y - p.y) * this.zoom;
