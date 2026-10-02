@@ -41,6 +41,12 @@
   #deleted { margin-top: 32px; padding-top: 16px; border-top: 2px solid var(--line); }
   #deleted h2 { margin: 0 0 4px; font-size: 18px; font-weight: 800; }
   #deleted .deck strong { color: var(--muted); }
+  .deck { flex-wrap: wrap; }
+  .deck .row-error:empty, .deck .inline:empty { display: none; }
+  .deck .row-error { flex-basis: 100%; color: #b3261e; font-size: 13px; }
+  .deck .inline { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .deck .inline label { width: 100%; font-size: 13px; color: var(--muted); }
+  .deck .inline input { flex: 1; }
 </style>
 </head>
 <body>
@@ -87,7 +93,10 @@
         <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
         <a class="btn primary" href="/edit/${encodeURIComponent(d.name)}">Edit</a>
         <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a>
-        <button class="danger" data-delete="${esc(d.name)}">Delete</button></div>`).join("")
+        <button data-rename="${esc(d.name)}" title="Rename the deck's folder">Rename</button>
+        <button data-duplicate="${esc(d.name)}" title="Make a copy of the deck">Duplicate</button>
+        <button class="danger" data-delete="${esc(d.name)}">Delete</button>
+        <div class="inline"></div><div class="row-error" role="alert"></div></div>`).join("")
       : "<p>No decks yet.</p>";
     let deleted;
     try {
@@ -100,7 +109,80 @@
     document.getElementById("deleted").innerHTML = deleted.length ? `<h2>Recently deleted</h2>` + deleted.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · deleted ${new Date(d.deleted * 1000).toLocaleString()}</small></div>
-        <button data-restore="${esc(d.token)}">Restore</button></div>`).join("") : "";
+        <button data-restore="${esc(d.token)}" data-name="${esc(d.name)}">Restore</button>
+        <div class="inline"></div><div class="row-error" role="alert"></div></div>`).join("") : "";
+  }
+
+  const NAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9_.\\-]*";
+  /** A small form in a deck's row asking for a folder name; submit(name)
+   *  returns an error message, or nothing when it worked. */
+  function askName(rowEl, label, value, action, submit) {
+    const box = rowEl.querySelector(".inline"), error = rowEl.querySelector(".row-error");
+    box.innerHTML = `<label>${esc(label)}</label><input name="name" pattern="${NAME_PATTERN}" required aria-label="${esc(label)}">` +
+      `<button type="button" class="primary" data-act="ok">${esc(action)}</button><button type="button" data-act="cancel">Cancel</button>`;
+    const input = box.querySelector("input");
+    input.value = value;
+    const go = async () => {
+      const name = input.value.trim();
+      if (!name || !input.checkValidity()) { error.textContent = "Use letters, digits, '.', '_' and '-' (starting with a letter or digit)."; return; }
+      box.querySelector("[data-act=ok]").disabled = true;
+      const message = await submit(name);
+      if (message) {
+        error.textContent = message;
+        box.querySelector("[data-act=ok]").disabled = false;
+        input.focus();
+      }
+    };
+    box.querySelector("[data-act=ok]").onclick = go;
+    box.querySelector("[data-act=cancel]").onclick = () => { box.innerHTML = ""; error.textContent = ""; };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); go(); }
+      else if (e.key === "Escape") { box.innerHTML = ""; error.textContent = ""; }
+    });
+    input.focus();
+    input.select();
+  }
+
+  /** POST JSON; the error message, or "" when it worked. */
+  async function post(url, body, fallback) {
+    try {
+      const r = await fetch(url, body === undefined ? { method: "POST" }
+        : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      if (r.ok) return "";
+      return Object.assign(new String(await errorText(r, fallback)), { status: r.status });
+    } catch (err) {
+      return `${fallback}: ${err.message}`;
+    }
+  }
+
+  async function rename(rowEl, name) {
+    askName(rowEl, `New folder name for ${name}`, name, "Rename", async (to) => {
+      if (to === name) { rowEl.querySelector(".inline").innerHTML = ""; return ""; }
+      const message = await post(`/api/decks/${encodeURIComponent(name)}/rename`, { name: to }, "Could not rename the deck");
+      if (!message) await load();
+      return String(message);
+    });
+  }
+
+  async function duplicate(rowEl, name) {
+    const button = rowEl.querySelector("[data-duplicate]");
+    button.disabled = true;
+    const message = await post(`/api/decks/${encodeURIComponent(name)}/duplicate`, {}, "Could not duplicate the deck");
+    button.disabled = false;
+    if (message) rowEl.querySelector(".row-error").textContent = String(message);
+    else await load();
+  }
+
+  /** Restore a deleted deck; when its name is taken, ask for another one. */
+  async function restoreDeck(rowEl, token, name) {
+    const message = await post(`/api/trash/${encodeURIComponent(token)}/restore`, undefined, "Could not restore the deck");
+    if (!message) { status.textContent = ""; await load(); return; }
+    if (message.status !== 409) { rowEl.querySelector(".row-error").textContent = String(message); return; }
+    askName(rowEl, `A deck named ${name} exists. Restore it under another name:`, `${name}-restored`, "Restore", async (to) => {
+      const again = await post(`/api/trash/${encodeURIComponent(token)}/restore`, { name: to }, "Could not restore the deck");
+      if (!again) { status.textContent = ""; await load(); }
+      return String(again);
+    });
   }
   // Two taps instead of confirm(): a modal dialog mid-gesture loses focus on iPad.
   let armed = null;
@@ -112,6 +194,22 @@
   }
   document.addEventListener("click", async (e) => {
     const del = e.target.closest("[data-delete]"), restore = e.target.closest("[data-restore]");
+    const ren = e.target.closest("[data-rename]"), dup = e.target.closest("[data-duplicate]");
+    if (ren || dup) {
+      disarm();
+      const rowEl = (ren || dup).closest(".deck");
+      rowEl.querySelector(".row-error").textContent = "";
+      if (ren) rename(rowEl, ren.dataset.rename);
+      else await duplicate(rowEl, dup.dataset.duplicate);
+      return;
+    }
+    if (restore) {
+      disarm();
+      const rowEl = restore.closest(".deck");
+      rowEl.querySelector(".row-error").textContent = "";
+      await restoreDeck(rowEl, restore.dataset.restore, restore.dataset.name);
+      return;
+    }
     if (del && del !== armed) {
       disarm();
       armed = del;
@@ -119,12 +217,9 @@
       del.textContent = "Tap again to delete";
       return;
     }
-    if (!del) disarm();
-    if (!del && !restore) return;
+    if (!del) { disarm(); return; }
     armed = null;
-    const [url, init, fallback] = del
-      ? [`/api/decks/${encodeURIComponent(del.dataset.delete)}`, { method: "DELETE" }, "Could not delete the deck"]
-      : [`/api/trash/${encodeURIComponent(restore.dataset.restore)}/restore`, { method: "POST" }, "Could not restore the deck"];
+    const [url, init, fallback] = [`/api/decks/${encodeURIComponent(del.dataset.delete)}`, { method: "DELETE" }, "Could not delete the deck"];
     let message = "";
     try {
       const r = await fetch(url, init);
