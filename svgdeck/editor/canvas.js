@@ -313,7 +313,8 @@ export class SlideEditor {
     if (!this.tx || this.txDepth > 0) return;  // inside change(): the outermost one commits
     const { before } = this.tx;
     this.tx = null;
-    const after = this.serialize();
+    let after = this.serialize();
+    if (after !== before && this.collectDefs()) after = this.serialize();
     if (after !== before) this.hooks.commit(before, after);
     this.drawOverlay();
     this.hooks.select(this.selection);
@@ -329,6 +330,28 @@ export class SlideEditor {
     this.begin();
     this.txDepth++;
     try { fn(); } finally { this.txDepth--; this.commit(); }
+  }
+
+  /** Remove the clip paths and image filters the editor made that nothing
+   *  refers to any more (their image was deleted or cut). Returns whether
+   *  any were removed. Definitions from elsewhere are never touched. */
+  collectDefs() {
+    const owned = Array.from(this.svg.querySelectorAll('clipPath[id^="svgdeck-clip-"], filter[id^="svgdeck-image-filter-"]'))
+      .filter((d) => d.localName === "clipPath" || d.hasAttribute("data-image-adjustment-filter") || d.hasAttribute("data-image-adjustment-version"));
+    if (!owned.length) return false;
+    const used = new Set();
+    for (const el of this.svg.querySelectorAll("*")) {
+      if (owned.some((d) => d.contains(el))) continue;
+      for (const attr of Array.from(el.attributes)) {
+        const v = attr.value;
+        if (attr.localName === "href" && v.startsWith("#")) used.add(v.slice(1));
+        else if (attr.localName === "data-svgdeck-clip" || attr.localName === "data-svgdeck-image-filter") used.add(v.trim());
+        if (v.includes("url(")) for (const m of v.matchAll(/url\(\s*['"]?#([^'")\s]+)/g)) used.add(m[1]);
+      }
+    }
+    const unused = owned.filter((d) => !used.has(d.id));
+    for (const d of unused) d.remove();
+    return unused.length > 0;
   }
 
   // --- view ----------------------------------------------------------------
