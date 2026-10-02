@@ -11,6 +11,8 @@ from fontTools.ttLib import TTFont
 
 from .deck import Deck, render_page
 
+STORED_SUFFIXES = {".mp4", ".m4v", ".mov", ".webm", ".woff2", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"}
+
 
 def to_woff2(source: Path, target: Path) -> None:
     font = TTFont(source)
@@ -18,9 +20,10 @@ def to_woff2(source: Path, target: Path) -> None:
     font.save(target)
 
 
-def export(deck: Deck, out: Path, zip_path: Path | None = None) -> Path:
+def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes: bool = True) -> Path:
     """Write the deck to `out`: index.html, media/ (only what the slides use)
-    and fonts/ as woff2. Existing contents of `out` are replaced."""
+    and fonts/ as woff2. Existing contents of `out` are replaced. Speaker notes
+    are part of index.html unless `include_notes` is false."""
     out = Path(out).absolute()
     zip_path = Path(zip_path).absolute() if zip_path else None
     _validate_targets(deck, out, zip_path)
@@ -51,8 +54,10 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None) -> Path:
             to_woff2(deck.path / font["file"], fonts_dir / name)
             font_files[font["file"]] = f"fonts/{name}"
 
-        (staging / "index.html").write_text(render_page(deck, font_files))
+        (staging / "index.html").write_text(render_page(deck, font_files, include_notes=include_notes),
+                                            encoding="utf-8")
 
+        _apply_umask(staging)
         if zip_path:
             zip_path.parent.mkdir(parents=True, exist_ok=True)
             handle, name = tempfile.mkstemp(prefix=f".{zip_path.name}.tmp-", dir=zip_path.parent)
@@ -61,9 +66,10 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None) -> Path:
             with zipfile.ZipFile(staged_zip, "w", zipfile.ZIP_DEFLATED) as z:
                 for f in sorted(staging.rglob("*")):
                     if f.is_file():
-                        # Movies and woff2 are already compressed.
-                        kind = zipfile.ZIP_STORED if f.suffix in (".mp4", ".woff2", ".jpg", ".png") else zipfile.ZIP_DEFLATED
+                        # Movies, images and woff2 are already compressed.
+                        kind = zipfile.ZIP_STORED if f.suffix.lower() in STORED_SUFFIXES else zipfile.ZIP_DEFLATED
                         z.write(f, Path(out.name) / f.relative_to(staging), compress_type=kind)
+            _apply_umask(staged_zip)
 
         _replace_outputs(staging, out, staged_zip, zip_path)
         staged_zip = None
@@ -73,6 +79,15 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None) -> Path:
         if staged_zip and staged_zip.exists():
             staged_zip.unlink()
     return out
+
+
+def _apply_umask(path: Path) -> None:
+    """mkdtemp and mkstemp create private files; exports get the usual modes."""
+    umask = os.umask(0)
+    os.umask(umask)
+    for item in [path, *path.rglob("*")] if path.is_dir() else [path]:
+        if not item.is_symlink():
+            item.chmod((0o777 if item.is_dir() else 0o666) & ~umask)
 
 
 def _validate_targets(deck: Deck, out: Path, zip_path: Path | None) -> None:
