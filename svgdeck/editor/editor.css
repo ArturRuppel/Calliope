@@ -1,19 +1,21 @@
 /* svgdeck editor, in the Modernist system: flat, square, near-black ink on
-   cool grey. Teal marks what you act on; purple marks what the Pencil owns.
-   Tokens first; the older names (--ink, --line, --surface…) stay because
-   colors.css, commits.css and recovery.css read them. */
+   cool grey. Teal marks what you act on; marine marks what the Pencil owns.
+   The values come from the family sheet (harmonia/harmonia.css, vendored from
+   the Harmonia repo: edit there, copy out). The names below stay because every
+   rule here, and colors.css, commits.css, objects.css and recovery.css, read
+   them. */
 :root {
-  --color-bg: #f3f3f4; --color-surface: #eaeaec; --color-text: #1c1b22; --color-accent: #0e7c7b;
-  --color-divider: color-mix(in srgb, #1c1b22 40%, transparent);
-  --n100: #f8f8f9; --n200: #e8e8ea; --n300: #d4d4d8; --n400: #b6b6bc; --n600: #7a7a82; --n700: #5c5b63; --n800: #403f47;
-  --a100: #e3f2f1; --a600: #0a6564; --a700: #075453;
-  --pen: #6b3fa0;
-  --font: "Archivo", system-ui, -apple-system, sans-serif;
+  --color-bg: var(--hm-ground); --color-surface: var(--hm-sunk); --color-text: var(--hm-ink); --color-accent: var(--hm-home);
+  --color-divider: var(--hm-divider);
+  --n100: var(--hm-n100); --n200: var(--hm-n200); --n300: var(--hm-n300); --n400: var(--hm-n400); --n600: var(--hm-n600); --n700: var(--hm-n700); --n800: var(--hm-n800);
+  --a100: var(--hm-home-soft); --a600: var(--hm-home-hover); --a700: var(--hm-home-pressed);
+  --pen: var(--hm-counter);
+  --font: var(--hm-font);
   --shadow-sm: 0 1px 2px color-mix(in srgb, #1c1b22 14%, transparent);
   --shadow-md: 0 3px 10px color-mix(in srgb, #1c1b22 16%, transparent);
   --shadow-lg: 0 12px 32px color-mix(in srgb, #1c1b22 22%, transparent);
   --ink: var(--color-text); --muted: var(--n700); --line: var(--color-divider); --surface: var(--color-bg);
-  --ground: var(--n200); --accent: var(--color-accent); --accent-soft: var(--a100); --danger: #b3261e;
+  --ground: var(--n200); --accent: var(--color-accent); --accent-soft: var(--a100); --danger: var(--hm-danger);
   --stage: var(--n300);
   --bar-h: 56px; --bar-height: 56px; --rail-w: 72px; --strip-w: 168px; --panel-w: 264px;
   font: 14px/1.35 var(--font);
@@ -249,7 +251,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 #notes-mount .notes-panel [role=status] { font-size: 12px; color: var(--n700); }
 
 /* — dialogs — */
-.settings-dialog, .media-tools, .commits-dialog, .recovery-dialog { border: 0; padding: 0; background: var(--color-bg); color: var(--ink);
+.settings-dialog, .media-tools, .commits-dialog, .recovery-dialog { border: 2px solid var(--ink); padding: 0; background: var(--color-bg); color: var(--ink);
   box-shadow: var(--shadow-lg); border-radius: 0; }
 .settings-dialog { width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 48px); }
 .settings-dialog::backdrop, .commits-dialog::backdrop, .recovery-dialog::backdrop, .media-tools::backdrop { background: color-mix(in srgb, #1c1b22 45%, transparent); }

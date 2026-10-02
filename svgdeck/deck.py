@@ -116,6 +116,8 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
     # "</" would end the <script> element early.
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("</", "<\\/")
+    # The served presenter can reach the family fonts for its chrome; an export stays self-contained.
+    chrome_fonts = '<link rel="stylesheet" href="/editor/harmonia/harmonia-fonts.css">\n' if editor_url else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -123,7 +125,7 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="generator" content="svgdeck">
 <title>{html.escape(deck.title)}</title>
-<style>
+{chrome_fonts}<style>
 {font_faces(deck.meta.get("fonts", []), font_files)}
 {_asset("player.css")}
 </style>

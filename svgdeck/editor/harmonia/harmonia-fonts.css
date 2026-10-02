@@ -1,0 +1,12 @@
+/* The family's two faces, served by the app itself: no request leaves the machine.
+ * Vendor this file together with fonts/. An app that inlines its fonts for offline export
+ * (Mnemosyne, Pythia) keeps its own inlined copy of the same files instead.
+ * Archivo: upright is one variable file, 400 to 800; italic is 400 only. Both SIL OFL 1.1. */
+@font-face { font-family: "Archivo"; font-style: normal; font-weight: 400 800; font-display: swap;
+  src: url(fonts/archivo-variable.woff2) format("woff2"); }
+@font-face { font-family: "Archivo"; font-style: italic; font-weight: 400; font-display: swap;
+  src: url(fonts/archivo-italic.woff2) format("woff2"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 400; font-display: swap;
+  src: url(fonts/ibm-plex-mono-400.ttf) format("truetype"); }
+@font-face { font-family: "IBM Plex Mono"; font-style: normal; font-weight: 500; font-display: swap;
+  src: url(fonts/ibm-plex-mono-500.ttf) format("truetype"); }

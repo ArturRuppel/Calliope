@@ -1,12 +1,13 @@
 .recovery-dialog { width: min(620px, calc(100vw - 24px)); max-height: min(760px, calc(100vh - 24px));
-  color: var(--ink, #1e2329); background: var(--surface, #fff); border: 1px solid var(--line, #ccd1d6); border-radius: 10px; padding: 0; }
-.recovery-dialog::backdrop { background: #0009; }
-.recovery-dialog header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--line, #ccd1d6); }
+  color: var(--ink); background: var(--surface); border: 2px solid var(--ink); border-radius: 0; padding: 0; }
+.recovery-dialog::backdrop { background: color-mix(in srgb, #1c1b22 45%, transparent); }
+.recovery-dialog header { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 2px solid var(--line); }
 .recovery-dialog header button { min-width: 44px; min-height: 44px; font-size: 24px; }
 .recovery-body { padding: 8px 16px 18px; overflow: auto; }
-.recovery-body h3 { margin: 14px 0 8px; font-size: 15px; }
-.recovery-body p { color: color-mix(in srgb, var(--ink, #1e2329) 62%, transparent); }
-.recovery-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; min-height: 52px; border-top: 1px solid var(--line, #ccd1d6); }
-.recovery-dialog button { color: var(--ink, #1e2329); background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; }
-.recovery-row button { min-width: 88px; min-height: 42px; }
+.recovery-body h3 { margin: 14px 0 8px; font: 800 18px var(--font); }
+.recovery-body p { color: var(--muted); }
+.recovery-row { display: flex; align-items: center; gap: 12px; justify-content: space-between; min-height: 52px; border-top: 1px solid var(--line); }
+.recovery-dialog button { color: var(--ink); background: none; border: 2px solid var(--ink); border-radius: 0; font: 800 13px var(--font); cursor: pointer; }
+.recovery-dialog button:hover { background: var(--n200); }
+.recovery-row button { min-width: 88px; min-height: 44px; }
 .recovery-actions { display: flex; gap: 6px; }

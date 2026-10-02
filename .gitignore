@@ -3,6 +3,8 @@
 *.ttf
 *.woff
 *.woff2
+# Archivo and IBM Plex Mono are OFL and ship with the family stylesheet (Harmonia).
+!svgdeck/editor/harmonia/fonts/*
 
 __pycache__/
 .venv/

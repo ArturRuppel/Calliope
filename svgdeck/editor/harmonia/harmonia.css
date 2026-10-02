@@ -1,0 +1,204 @@
+/* Harmonia: the house Modernist system shared by Mnemosyne, Pythia, Iris, Calliope, Athena,
+ * Hephaestus and Atlas.
+ *
+ * Canonical copy: Harmonia/harmonia.css. Vendor it unchanged. App-specific styling goes in the
+ * app's own sheet, built on the --hm-* tokens.
+ *
+ * Flat, square, near-black ink on neutral grey. A 2px ink rule is structure; a 1px line at 40%
+ * ink separates rows. Each app has one home colour (data-home on <html>); the other family
+ * colour is its second voice. Light is the default; data-theme="dark" switches. An element
+ * that sets data-theme below <html> must state data-home too, or it inherits the outer theme's
+ * home colour. Data colours (plots, graph edges, colormaps) are the app's own and not defined
+ * here.
+ *
+ * Tokens sit on :root and are harmless on their own. Base rules apply inside .hm; components
+ * are .hm-* classes and carry at most one class of specificity, so an app sheet loaded after
+ * this one wins.
+ */
+
+/* — tokens — */
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --hm-ground: #f3f3f4;  --hm-raised: #ffffff;  --hm-sunk: #eaeaec;
+  --hm-n100: #f8f8f9;  --hm-n200: #e8e8ea;  --hm-n300: #d4d4d8;  --hm-n400: #b6b6bc;
+  --hm-n600: #7a7a82;  --hm-n700: #5c5b63;  --hm-n800: #403f47;
+  --hm-ink: #1c1b22;  --hm-dim: #5c5b63;  --hm-faint: #7a7a82;
+  --hm-divider: rgba(28, 27, 34, .4);     /* between rows */
+  --hm-hairline: rgba(28, 27, 34, .16);   /* table cells, tracks */
+
+  --hm-marine: #1f3f7a;  --hm-marine-hover: #183264;  --hm-marine-pressed: #12274f;
+  --hm-marine-soft: #e7ecf5;  --hm-marine-line: #c9d4e8;  --hm-marine-text: #1f3f7a;  --hm-on-marine: #ffffff;
+  --hm-teal: #0e7c7b;  --hm-teal-hover: #0a6564;  --hm-teal-pressed: #075453;
+  --hm-teal-soft: #e3f2f1;  --hm-teal-line: #c4e3e1;  --hm-teal-text: #0a6564;  --hm-on-teal: #ffffff;
+
+  --hm-danger: #b3261e;  --hm-danger-soft: #fdf3f3;  --hm-on-danger: #ffffff;
+  --hm-warn: #8a5a1f;  --hm-warn-soft: #fbeede;
+  --hm-ok: #27735f;  --hm-ok-soft: #e5efe9;
+
+  --hm-shadow: 0 12px 32px rgba(28, 27, 34, .22);   /* floating layers only */
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --hm-ground: #141418;  --hm-raised: #1e1e23;  --hm-sunk: #0f0f12;
+  --hm-n100: #19191d;  --hm-n200: #25252b;  --hm-n300: #2e2e34;  --hm-n400: #46464e;
+  --hm-n600: #86868e;  --hm-n700: #a1a1a9;  --hm-n800: #c9c9cf;
+  --hm-ink: #ececef;  --hm-dim: #a1a1a9;  --hm-faint: #86868e;
+  --hm-divider: rgba(236, 236, 239, .4);
+  --hm-hairline: rgba(236, 236, 239, .16);
+
+  --hm-marine: #4273c9;  --hm-marine-hover: #5785d6;  --hm-marine-pressed: #3561b0;
+  --hm-marine-soft: #172238;  --hm-marine-line: #26375a;  --hm-marine-text: #8fb3ee;  --hm-on-marine: #ffffff;
+  --hm-teal: #3fb3b1;  --hm-teal-hover: #58c4c2;  --hm-teal-pressed: #2f9997;
+  --hm-teal-soft: #102625;  --hm-teal-line: #1d4746;  --hm-teal-text: #3fb3b1;  --hm-on-teal: #0f0f12;
+
+  --hm-danger: #ff9b92;  --hm-danger-soft: #2e1a19;  --hm-on-danger: #0f0f12;
+  --hm-warn: #e0b15a;  --hm-warn-soft: #2a2214;
+  --hm-ok: #6cc7a8;  --hm-ok-soft: #12281f;
+
+  --hm-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+}
+:root {
+  --hm-font: "Archivo", system-ui, -apple-system, sans-serif;
+  --hm-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  --hm-s1: 4px;  --hm-s2: 8px;  --hm-s3: 12px;  --hm-s4: 16px;  --hm-s6: 24px;  --hm-s8: 32px;
+  --hm-line: 2px;        /* structural rule and control outline */
+  --hm-control: 44px;    /* control height; .hm-compact lowers it under a fine pointer */
+  --hm-bar: 56px;
+}
+/* The home colour. Marine first so that data-home="teal" on the same element wins. */
+:root, [data-home="marine"] {
+  --hm-home: var(--hm-marine);  --hm-home-hover: var(--hm-marine-hover);  --hm-home-pressed: var(--hm-marine-pressed);
+  --hm-home-soft: var(--hm-marine-soft);  --hm-home-line: var(--hm-marine-line);  --hm-home-text: var(--hm-marine-text);
+  --hm-on-home: var(--hm-on-marine);
+  --hm-counter: var(--hm-teal);  --hm-counter-soft: var(--hm-teal-soft);  --hm-counter-text: var(--hm-teal-text);
+  --hm-on-counter: var(--hm-on-teal);
+}
+[data-home="teal"] {
+  --hm-home: var(--hm-teal);  --hm-home-hover: var(--hm-teal-hover);  --hm-home-pressed: var(--hm-teal-pressed);
+  --hm-home-soft: var(--hm-teal-soft);  --hm-home-line: var(--hm-teal-line);  --hm-home-text: var(--hm-teal-text);
+  --hm-on-home: var(--hm-on-teal);
+  --hm-counter: var(--hm-marine);  --hm-counter-soft: var(--hm-marine-soft);  --hm-counter-text: var(--hm-marine-text);
+  --hm-on-counter: var(--hm-on-marine);
+}
+
+/* — base, inside .hm — */
+.hm { background: var(--hm-ground); color: var(--hm-ink); font: 400 15px/1.5 var(--hm-font); -webkit-text-size-adjust: 100%; }
+.hm *, .hm *::before, .hm *::after { box-sizing: border-box; }
+.hm :focus-visible { outline: var(--hm-line) solid var(--hm-home); outline-offset: 2px; }
+.hm ::selection { background: color-mix(in srgb, var(--hm-home) 28%, transparent); }
+.hm a { color: var(--hm-home-text); text-underline-offset: 2px; }
+.hm code, .hm kbd, .hm-mono { font-family: var(--hm-mono); font-size: .9em; }
+@media (prefers-reduced-motion: reduce) {
+  .hm *, .hm *::before, .hm *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+}
+/* Dense desktop tools (a data grid, a graph board, viewer panels). Touch keeps 44px. */
+@media (pointer: fine) {
+  .hm-compact { --hm-control: 32px; --hm-bar: 48px; font-size: 13px; }
+}
+
+/* — type — */
+.hm-word { font: 800 22px/1 var(--hm-font); letter-spacing: -.03em; white-space: nowrap; }
+.hm-title { margin: 0; font: 800 34px/1 var(--hm-font); letter-spacing: -.03em; text-wrap: balance; }
+.hm-section { margin: 0; font: 800 20px/1.15 var(--hm-font); letter-spacing: -.02em; }
+.hm-row-title { font: 600 16px/1.3 var(--hm-font); text-wrap: pretty; }
+.hm-meta { font: 400 12px/1.4 var(--hm-font); color: var(--hm-dim); }
+.hm-cap { font: 700 11px/1 var(--hm-font); letter-spacing: .08em; text-transform: uppercase; color: var(--hm-dim); }
+
+/* — top bar: on the ground, a 2px ink rule under it, the mark carries the colour — */
+.hm-bar { display: flex; align-items: center; gap: var(--hm-s2); min-width: 0; min-height: var(--hm-bar);
+  padding: 0 max(var(--hm-s4), env(safe-area-inset-right)) 0 max(var(--hm-s4), env(safe-area-inset-left));
+  background: var(--hm-ground); border-bottom: var(--hm-line) solid var(--hm-ink); }
+.hm-mark { flex: none; display: grid; place-items: center; width: 32px; height: 32px; background: var(--hm-home); color: var(--hm-on-home); }
+.hm-mark > svg, .hm-mark > img { display: block; width: 68%; height: 68%; }
+.hm-compact .hm-mark { width: 28px; height: 28px; }
+.hm-spacer { flex: 1; }
+.hm-vrule { flex: none; width: var(--hm-line); height: 28px; background: var(--hm-divider); }
+
+/* — button — */
+.hm-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; flex: none;
+  min-width: var(--hm-control); height: var(--hm-control); padding: 0 var(--hm-s4); margin: 0;
+  border: var(--hm-line) solid var(--hm-ink); border-radius: 0; background: none; color: var(--hm-ink);
+  font: 800 13px/1 var(--hm-font); text-decoration: none; white-space: nowrap; cursor: pointer;
+  -webkit-appearance: none; appearance: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.hm-btn:hover { background: var(--hm-n200); }
+.hm-btn:active { background: var(--hm-n300); }
+.hm-btn:disabled, .hm-btn[aria-disabled="true"] { opacity: .4; cursor: default; pointer-events: none; }
+.hm-btn[aria-pressed="true"], .hm-btn.on { background: var(--hm-ink); color: var(--hm-ground); }
+.hm-btn.primary { background: var(--hm-home); border-color: var(--hm-home); color: var(--hm-on-home); }
+.hm-btn.primary:hover { background: var(--hm-home-hover); border-color: var(--hm-home-hover); }
+.hm-btn.primary:active { background: var(--hm-home-pressed); border-color: var(--hm-home-pressed); }
+.hm-btn.quiet { border-color: transparent; font-weight: 600; padding: 0 var(--hm-s2); }
+.hm-btn.danger { border-color: var(--hm-danger); color: var(--hm-danger); }
+.hm-btn.danger:hover { background: var(--hm-danger-soft); }
+.hm-btn.danger.armed { background: var(--hm-danger); color: var(--hm-on-danger); }
+.hm-btn.icon { padding: 0; width: var(--hm-control); }
+.hm-btn > svg { flex: none; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; }
+.hm-compact .hm-btn { padding: 0 var(--hm-s3); }
+.hm-compact .hm-btn.quiet { padding: 0 var(--hm-s2); }
+.hm-compact .hm-btn.icon { padding: 0; }
+
+/* — segmented control: one of several, the chosen one in ink — */
+.hm-seg { display: inline-grid; grid-auto-flow: column; gap: var(--hm-line); flex: none;
+  background: var(--hm-ink); border: var(--hm-line) solid var(--hm-ink); }
+.hm-seg > * { display: flex; align-items: center; justify-content: center; gap: 6px;
+  height: calc(var(--hm-control) - 2 * var(--hm-line)); padding: 0 var(--hm-s3); margin: 0;
+  border: 0; border-radius: 0; background: var(--hm-ground); color: var(--hm-ink);
+  font: 700 13px/1 var(--hm-font); white-space: nowrap; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.hm-seg > [aria-pressed="true"], .hm-seg > [aria-selected="true"], .hm-seg > .on { background: var(--hm-ink); color: var(--hm-ground); }
+.hm-seg > :focus-visible { outline-offset: -4px; }
+
+/* — tabs: places, the current one underlined in the home colour — */
+.hm-tabs { display: flex; gap: var(--hm-s6); padding: 0 var(--hm-s4); border-bottom: 1px solid var(--hm-divider);
+  overflow-x: auto; scrollbar-width: none; }
+.hm-tabs::-webkit-scrollbar { display: none; }
+.hm-tabs > * { flex: none; display: flex; align-items: center; height: var(--hm-control); padding: 0; margin: 0;
+  border: 0; background: none; color: var(--hm-dim); font: 700 13px/1 var(--hm-font); text-decoration: none;
+  white-space: nowrap; cursor: pointer; }
+.hm-tabs > [aria-selected="true"], .hm-tabs > [aria-current], .hm-tabs > .on { color: var(--hm-ink); box-shadow: inset 0 -3px 0 var(--hm-home); }
+
+/* — chip (a filter you toggle) and tag (a state you read) — */
+.hm-chip { display: inline-flex; align-items: center; gap: 6px; flex: none; height: 34px; padding: 0 var(--hm-s3); margin: 0;
+  border: var(--hm-line) solid var(--hm-divider); border-radius: 0; background: none; color: var(--hm-ink);
+  font: 600 13px/1 var(--hm-font); white-space: nowrap; cursor: pointer; -webkit-appearance: none; appearance: none; }
+.hm-chip[aria-pressed="true"], .hm-chip.on { background: var(--hm-home); border-color: var(--hm-home); color: var(--hm-on-home); }
+.hm-compact .hm-chip { height: 26px; padding: 0 var(--hm-s2); font-size: 12px; }
+.hm-tag { display: inline-flex; align-items: center; padding: 3px 5px; border: 1.5px solid currentColor; color: var(--hm-dim);
+  font: 700 11px/1 var(--hm-font); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
+.hm-tag.ok { color: var(--hm-ok); }
+.hm-tag.warn { color: var(--hm-warn); }
+.hm-tag.danger { color: var(--hm-danger); }
+.hm-tag.home { color: var(--hm-home-text); }
+.hm-tag.provisional { border-style: dashed; }
+
+/* — field: input, select, textarea. 16px text, or iOS zooms the page on focus — */
+.hm-field { height: var(--hm-control); min-width: 0; padding: 0 var(--hm-s3); margin: 0;
+  border: var(--hm-line) solid var(--hm-divider); border-radius: 0; background: var(--hm-raised); color: var(--hm-ink);
+  font: 400 16px/1.2 var(--hm-font); -webkit-appearance: none; appearance: none; }
+.hm-field::placeholder { color: var(--hm-faint); opacity: 1; }
+.hm-field:focus { outline: none; border-color: var(--hm-ink); }
+textarea.hm-field { height: auto; padding: var(--hm-s3); line-height: 1.5; resize: vertical; }
+select.hm-field { padding-right: 34px; background-repeat: no-repeat; background-size: 6px 6px;
+  background-position: right 18px center, right 12px center;
+  background-image: linear-gradient(45deg, transparent 50%, var(--hm-ink) 50%), linear-gradient(135deg, var(--hm-ink) 50%, transparent 50%); }
+@media (pointer: fine) { .hm-compact .hm-field { font-size: 13px; padding-left: var(--hm-s2); } }
+.hm-range, .hm-check { accent-color: var(--hm-home); }
+.hm-check { width: 18px; height: 18px; margin: 0; }
+
+/* — lists and sections: rules do the organising, not boxes — */
+.hm-list { margin: 0; padding: 0; list-style: none; border-top: var(--hm-line) solid var(--hm-ink); }
+.hm-row { display: flex; flex-direction: column; gap: 6px; padding: 14px var(--hm-s4); border-top: 1px solid var(--hm-divider);
+  color: inherit; text-decoration: none; }
+.hm-list > .hm-row:first-child { border-top: 0; }
+.hm-row[aria-selected="true"], .hm-row.on { background: var(--hm-home-soft); }
+a.hm-row:active, button.hm-row:active { background: var(--hm-sunk); }
+.hm-sec { display: flex; align-items: baseline; gap: var(--hm-s2); padding: 20px var(--hm-s4) 10px; border-top: var(--hm-line) solid var(--hm-ink); }
+
+/* — floating layer: menu, popover, dialog. The only place a shadow is allowed — */
+.hm-layer { background: var(--hm-raised); color: var(--hm-ink); border: var(--hm-line) solid var(--hm-ink); box-shadow: var(--hm-shadow); }
+
+/* — meters — */
+.hm-pips { display: inline-flex; gap: 2px; }
+.hm-pips > i { width: 10px; height: 10px; border: 1.5px solid var(--hm-n400); }
+.hm-pips > i.on { background: var(--hm-home); border-color: var(--hm-home); }
+.hm-meter { height: 6px; background: var(--hm-hairline); }
+.hm-meter > i { display: block; height: 100%; background: var(--hm-home); }

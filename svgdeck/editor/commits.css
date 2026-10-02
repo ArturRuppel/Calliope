@@ -1,22 +1,25 @@
 .commits-dialog { width: min(880px, calc(100vw - 24px)); max-height: min(820px, calc(100vh - 24px));
-  color: var(--ink, #1e2329); background: var(--surface, #fff); border: 1px solid var(--line, #ccd1d6); border-radius: 10px; padding: 0; }
-.commits-dialog::backdrop { background: #0009; }
-.commits-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line, #ccd1d6); }
+  color: var(--ink); background: var(--surface); border: 2px solid var(--ink); border-radius: 0; padding: 0; }
+.commits-dialog::backdrop { background: color-mix(in srgb, #1c1b22 45%, transparent); }
+.commits-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 2px solid var(--line); }
 .commits-dialog header div { display: grid; gap: 3px; }
-.commits-dialog small { display: block; color: color-mix(in srgb, var(--ink, #1e2329) 62%, transparent); }
+.commits-dialog small { display: block; color: var(--muted); }
 .commits-dialog header button { min-width: 44px; min-height: 44px; font-size: 24px; }
 .commits-body { padding: 14px 16px 20px; overflow: auto; }
-.commits-body h3 { margin: 18px 0 8px; font-size: 15px; }
+.commits-body h3 { margin: 18px 0 8px; font: 800 18px var(--font); }
 .commit-create { display: flex; gap: 8px; }
-.commit-create input { flex: 1; min-width: 0; min-height: 44px; padding: 0 10px; color: inherit; background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; font: inherit; }
-.commits-dialog button { min-height: 42px; padding: 0 11px; color: inherit; background: var(--ground, #f3f4f5); border: 1px solid var(--line, #ccd1d6); border-radius: 6px; }
-.commits-dialog button.primary { background: var(--accent, #2868c7); color: white; border-color: transparent; }
-.commits-dialog button.danger { color: #a21d28; }
-.commit-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 64px; border-top: 1px solid var(--line, #ccd1d6); }
+.commit-create input { flex: 1; min-width: 0; min-height: 44px; padding: 0 10px; color: inherit; background: #fff; border: 2px solid var(--line); border-radius: 0; font: inherit; }
+.commits-dialog button { min-height: 44px; padding: 0 14px; color: inherit; background: none; border: 2px solid var(--ink); border-radius: 0; font: 800 13px var(--font); cursor: pointer; }
+.commits-dialog button:hover { background: var(--n200); }
+.commits-dialog button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.commits-dialog button.primary:hover { background: var(--a600); border-color: var(--a600); }
+.commits-dialog button.danger { color: var(--danger); border-color: var(--danger); }
+.commit-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-height: 64px; border-top: 1px solid var(--line); }
 .commit-row > div:first-child { min-width: 180px; }
 .commit-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
-.commit-confirm { flex-basis: 100%; text-align: right; color: #a21d28; }
-.commit-diff pre { max-height: 330px; overflow: auto; padding: 12px; white-space: pre; font: 12px/1.45 ui-monospace, monospace; color: #e7edf4; background: #182028; border-radius: 6px; }
+.commit-confirm { flex-basis: 100%; text-align: right; color: var(--danger); }
+/* A diff reads as a terminal: the family's dark ground, whatever the page theme. */
+.commit-diff pre { max-height: 330px; overflow: auto; padding: 12px; white-space: pre; font: 12px/1.45 var(--hm-mono); color: #ececef; background: #141418; border-radius: 0; }
 @media (max-width: 680px) {
   .commit-create, .commit-row { align-items: stretch; flex-direction: column; padding: 10px 0; }
   .commit-actions { display: grid; grid-template-columns: 1fr 1fr; }

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-home="teal">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -8,12 +8,13 @@
 <meta name="apple-mobile-web-app-title" content="Calliope">
 <link rel="icon" href="/editor/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/editor/apple-touch-icon.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;800&display=swap">
+<link rel="stylesheet" href="/editor/harmonia/harmonia-fonts.css">
+<link rel="stylesheet" href="/editor/harmonia/harmonia.css">
 <style>
   /* The Modernist system, as in the editor: flat, square, near-black ink on cool grey, one teal accent. */
-  :root { --ink: #1c1b22; --muted: #5c5b63; --line: color-mix(in srgb, #1c1b22 40%, transparent); --accent: #0e7c7b;
-    --accent-600: #0a6564; --n200: #e8e8ea; --bg: #f3f3f4;
-    font: 15px/1.4 "Archivo", system-ui, -apple-system, sans-serif; color: var(--ink); }
+  :root { --ink: var(--hm-ink); --muted: var(--hm-dim); --line: var(--hm-divider); --accent: var(--hm-home);
+    --accent-600: var(--hm-home-hover); --n200: var(--hm-n200); --bg: var(--hm-ground); --danger: var(--hm-danger);
+    font: 15px/1.4 var(--hm-font); color: var(--ink); }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); }
   header { display: flex; align-items: center; gap: 16px; height: 64px; padding: 0 24px; border-bottom: 2px solid var(--line); }
@@ -34,16 +35,16 @@
   form h2 { width: 100%; margin: 0 0 4px; font-size: 18px; font-weight: 800; }
   input { height: 44px; padding: 0 12px; border: 2px solid var(--line); border-radius: 0; background: #fff; font: inherit; flex: 1; min-width: 10rem; }
   input:focus { outline: none; border-color: var(--ink); }
-  .error { color: #b3261e; width: 100%; }
-  button.danger { color: #b3261e; border-color: #b3261e; }
-  button.danger.armed { background: #b3261e; color: #fff; }
+  .error { color: var(--danger); width: 100%; }
+  button.danger { color: var(--danger); border-color: var(--danger); }
+  button.danger.armed { background: var(--danger); color: #fff; }
   #deleted:empty { display: none; }
   #deleted { margin-top: 32px; padding-top: 16px; border-top: 2px solid var(--line); }
   #deleted h2 { margin: 0 0 4px; font-size: 18px; font-weight: 800; }
   #deleted .deck strong { color: var(--muted); }
   .deck { flex-wrap: wrap; }
   .deck .row-error:empty, .deck .inline:empty { display: none; }
-  .deck .row-error { flex-basis: 100%; color: #b3261e; font-size: 13px; }
+  .deck .row-error { flex-basis: 100%; color: var(--danger); font-size: 13px; }
   .deck .inline { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .deck .inline label { width: 100%; font-size: 13px; color: var(--muted); }
   .deck .inline input { flex: 1; }
