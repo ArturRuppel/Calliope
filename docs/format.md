@@ -85,7 +85,7 @@ slides' movies loaded.
 | `data-hidden="true"` | hidden through the Objects panel; paired with inline `display:none` so it remains hidden outside the editor |
 | `data-crop="L T R B"` | image/movie crop insets in percent, each between 0 and 99.9; opposing insets must leave at least 0.1% visible |
 | `data-mask="rect"` or `"ellipse"` | crop mask shape; the editor also writes a native SVG `clipPath` in object-bounding-box units |
-| `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference |
+| `data-svgdeck-clip` | the ID of the editor-owned clip definition; `clip-path` is the actual SVG reference. The editor edits a clip in place only when this names the clip that `clip-path` references; any other `clip-path` is imported and left alone (`data-crop` alone does not make it editable) |
 
 ### Image adjustments
 

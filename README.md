@@ -133,7 +133,8 @@ The editor is laid out for an iPad in landscape:
 - Cropped images and movies use their visible crop for selection bounds, resize handles, alignment and snapping. Crop mode retains access to the full source.
 - **Crop** (selection bar or Design tab) on an image or movie: drag its edge or
   corner handles; the faded original stays visible. Done/Enter accepts the
-  crop as one undo step; Cancel/Escape discards it. Advanced offers numeric
+  crop as one undo step; Cancel/Escape discards it. Two fingers still pan and
+  zoom while cropping, and tapping another object cancels the crop. Advanced offers numeric
   insets and rectangle/ellipse masks; Reset restores the full image. Source
   media and imported clip paths remain untouched.
 - **Image adjustments** in the Design tab: saturation (0% for grayscale), hue shift, brightness and contrast, with sliders and numeric values. **Reset adjustments** restores the original colours; **Opacity** controls transparency. Edits keep source images intact and carry into presentations and offline exports. Select several images to adjust them together.
@@ -178,7 +179,8 @@ The editor is laid out for an iPad in landscape:
 - Edits autosave to the **working copy**. **Deck menu → Commit snapshot…**
   saves a named, immutable snapshot of the whole deck, including slide order
   and notes. Its history offers text diffs against the previous commit or
-  working copy and full-deck restore. The first edit protects the original as
+  working copy and full-deck restore (restore asks for a second confirmation).
+  The first edit protects the original as
   a baseline; restoring also saves the working copy as a safety commit.
   Unchanged content is shared and media is never copied into commits.
   Undo/redo remains per slide. Concurrent edits stop saving or restoring
