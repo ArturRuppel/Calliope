@@ -919,7 +919,11 @@ export class SlideEditor {
     const nodes = fitStroke(g.trail, tolerance, { reach: 14 / this.zoom });
     // A Pencil tap that slid a little is still a tap.
     const extent = Math.max(...g.trail.map((q) => Math.hypot(q.x - g.trail[0].x, q.y - g.trail[0].y)));
-    if (nodes.length < 2 || extent * this.zoom < 16) { if (!g.extend) draft.nodes.push(g.node); this.drawOverlay(); this.hooks.select(this.selection); return; }
+    if (nodes.length < 2 || extent * this.zoom < 16) {
+      if (!g.extend) draft.nodes.push(g.node);
+      draft.lastAt = performance.now();  // so a second tap on it finishes the path
+      this.drawOverlay(); this.hooks.select(this.selection); return;
+    }
     const reach = (g.pointerType === "touch" ? 18 : 10) / this.zoom;
     const near = (a, b) => a && b && Math.hypot(a.x - b.x, a.y - b.y) < reach;
     const alone = !draft.nodes.length, last = draft.nodes.at(-1);
