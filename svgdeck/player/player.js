@@ -553,13 +553,14 @@
 
     // One finger or button drives a gesture: [x, y, pointerId]. A second
     // finger (a pinch, a resting palm) cancels it instead of advancing.
-    let touch = null, lastTap = null, doubleAt = -Infinity;
-    const DOUBLE_MS = 350, DOUBLE_PX = 30;
+    let touch = null, mouseTap = null, doubleAt = -Infinity, lastType = "mouse";
+    const DOUBLE_MS = 300;
     root.addEventListener("pointerdown", (e) => {
       if (!e.isPrimary) { touch = null; return; }
       touch = e.target.closest(".svgdeck-controls,.svgdeck-overview") || overviewOpen ? null : [e.clientX, e.clientY, e.pointerId];
     });
     root.addEventListener("pointerup", (e) => {
+      lastType = e.pointerType;
       if (!touch || !e.isPrimary || e.pointerId !== touch[2]) return;
       const dx = e.clientX - touch[0], dy = e.clientY - touch[1];
       touch = null;
@@ -572,25 +573,22 @@
           if (root.classList.contains("svgdeck-show-controls")) hideControls(); else revealControls(4000);
           return;
         }
-        // A quick second tap in the same place is a double-click: it goes
-        // fullscreen instead of advancing, so the first tap's advance is undone.
-        const now = performance.now(), first = lastTap;
-        lastTap = null;
-        if (first && now - first.time < DOUBLE_MS && Math.abs(e.clientX - first.x) < DOUBLE_PX && Math.abs(e.clientY - first.y) < DOUBLE_PX) {
-          const [i, s] = first.from;
-          if (state.index === first.index && state.step === first.step) show(i, s);
-          doubleAt = now;
+        if (e.pointerType !== "mouse") { next(); return; }  // touch and pen: every tap advances at once
+        // A mouse click waits briefly: a second click is a double-click, which
+        // goes fullscreen instead of advancing.
+        if (mouseTap) {
+          clearTimeout(mouseTap); mouseTap = null;
+          doubleAt = performance.now();
           toggleFullscreen();
           return;
         }
-        const from = [state.index, state.step];
-        next();
-        lastTap = { time: now, x: e.clientX, y: e.clientY, from, index: state.index, step: state.step };
+        mouseTap = setTimeout(() => { mouseTap = null; if (!overviewOpen) next(); }, DOUBLE_MS);
       }
     });
     root.addEventListener("pointercancel", () => { touch = null; });
     root.addEventListener("dblclick", e => {
-      if (e.target.closest(".svgdeck-controls,.svgdeck-overview") || performance.now() - doubleAt < 1000) return;
+      // Fullscreen by double-click is for the mouse; touch never triggers it.
+      if (e.target.closest(".svgdeck-controls,.svgdeck-overview") || performance.now() - doubleAt < 1000 || lastType !== "mouse") return;
       toggleFullscreen();
     });
     window.addEventListener("resize", fit);

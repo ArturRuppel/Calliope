@@ -122,13 +122,13 @@ def svg(body, attrs=""):
 
 @pytest.fixture
 def open_deck(tmp_path, movie):
-    """open_deck(slides, hash="", query="", raw=False) -> page showing an export of the deck."""
+    """open_deck(slides, hash="", query="", raw=False, touch=False) -> page showing an export of the deck."""
     count = 0
     with playwright.sync_playwright() as p:
         browser = p.chromium.launch()
         errors = []
 
-        def make(slides, hash="", query="", raw=False):
+        def make(slides, hash="", query="", raw=False, touch=False):
             nonlocal count
             count += 1
             root = write_deck(tmp_path / f"deck{count}", slides, {"clock.webm": movie})
@@ -138,7 +138,7 @@ def open_deck(tmp_path, movie):
                 out = root
             else:
                 out = export(Deck.load(root), tmp_path / f"out{count}")
-            page = browser.new_page(viewport={"width": 960, "height": 540})
+            page = browser.new_page(viewport={"width": 960, "height": 540}, has_touch=touch)
             page.on("pageerror", lambda e: errors.append(e))
             page.goto((out / "index.html").as_uri() + query + hash)
             page.wait_for_function("document.querySelector('.svgdeck-ready')")
@@ -326,19 +326,40 @@ def test_speaker_preview_of_a_broken_slide(open_deck):
     assert page.locator(".speaker-next").inner_text() == "Slide 2 could not be loaded"
 
 
-# bug 9: double-click
+# bug 9: double-click goes fullscreen (mouse); touch taps always advance
 def test_double_click_goes_fullscreen_without_advancing(open_deck):
     page = open_deck([("a", svg("")), ("b", svg("")), ("c", svg(""))])
     page.evaluate(FULLSCREEN_SPY)
     page.mouse.dblclick(480, 270)
-    page.wait_for_timeout(500)
-    assert pos(page) == [0, 0]
+    page.wait_for_timeout(600)
+    assert pos(page) == [0, 0]  # never advanced, not even briefly
     assert page.evaluate("window.fs") == 1
-    page.mouse.click(480, 270)  # a single click still advances
-    assert pos(page) == [1, 0]
+    page.mouse.click(480, 270)  # a single click still advances, after the double-click window
+    page.wait_for_function("svgdeck.svgdeck.state.index === 1")
     page.wait_for_timeout(500)
     page.mouse.click(480, 270)
+    page.wait_for_function("svgdeck.svgdeck.state.index === 2")
+    assert page.evaluate("window.fs") == 1
+
+
+def test_a_double_click_never_shows_the_next_slide(open_deck):
+    page = open_deck([("a", svg("")), ("b", svg(""))])
+    page.evaluate("window.changes = 0; document.getElementById('svgdeck').addEventListener('svgdeck:change', () => window.changes++)")
+    page.mouse.dblclick(480, 270)
+    page.wait_for_timeout(600)
+    assert page.evaluate("window.changes") == 0
+
+
+def test_quick_touch_taps_advance_each_time(open_deck):
+    page = open_deck([("a", svg("")), ("b", svg("")), ("c", svg("")), ("d", svg(""))], touch=True)
+    page.evaluate(FULLSCREEN_SPY)
+    page.touchscreen.tap(480, 270)
+    page.touchscreen.tap(480, 270)
     assert pos(page) == [2, 0]
+    page.touchscreen.tap(480, 270)
+    assert pos(page) == [3, 0]
+    page.wait_for_timeout(500)
+    assert page.evaluate("window.fs") == 0  # touch never goes fullscreen by double-tap
 
 
 # bug 10: touches
