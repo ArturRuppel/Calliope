@@ -25,6 +25,7 @@ Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed
 svgdeck export DECK_DIR OUT_DIR --zip talk.zip
+svgdeck export DECK_DIR OUT_DIR --no-notes   # leave the speaker notes out of the copy
 ```
 
 ## The service on sancho
@@ -207,8 +208,12 @@ The controls are a small bar of icons (previous, slide number, next,
 overview, back to editor, full screen). They show for three seconds at the
 start and then hide; a mouse move, the Tab key, or on a touch screen a tap
 along the bottom edge brings them back. The idle mouse cursor hides too.
-Press **O** or **Escape** to toggle the overview; tap a thumbnail to jump to
-that slide. Overview pauses active movies until returning to the presentation.
+Press **O** to toggle the overview (Escape only closes it, so a clicker's
+Escape cannot open it mid-talk); tap a thumbnail to jump to that slide.
+Overview pauses active movies until returning to the presentation. Only the
+current and neighbouring slides' movies stay loaded. Speaker notes are included
+in offline exports by default so speaker view works there; `--no-notes` omits
+them.
 The live service also has **Back to editor**, returning to the current slide.
 Offline exports retain the overview and navigation without an editor dependency.
 Speaker view is also available from the presentation controls in offline exports.

@@ -40,6 +40,12 @@ Each slide is a standalone SVG with `viewBox="0 0 W H"` equal to the deck
 `size`. Paths to media are relative to the slide file (`../media/x.png`), so a
 slide opens correctly on its own in a browser.
 
+A slide's `<style>` element applies to that slide only: the player scopes its
+rules and prefixes the ids and `url(#id)` references inside them. Presentation
+attributes on the root `<svg>` (font, fill, class and so on) apply to the whole
+slide. Relative `<a href>` links are left as written and are not treated as
+media.
+
 Ids only need to be unique within one slide; the player prefixes them per
 slide when it puts all slides in one page.
 
@@ -65,7 +71,8 @@ A movie is a top-level `<image>` whose `href` is a poster frame and whose
 | `data-sync` | none | sync group: moving between slides whose movies share a group keeps the playback time, so a movie continues across slides |
 
 Objects above the movie in stacking order are drawn on top of it.
-Movies are always muted.
+Movies are always muted. The player keeps only the current and the neighbouring
+slides' movies loaded.
 
 ### Editor attributes
 
