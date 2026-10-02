@@ -137,6 +137,8 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .stage[data-tool="pan"] { cursor: grab; }
 .stage[data-tool="pan"]:active { cursor: grabbing; }
 .stage[data-tool="erase"] { cursor: cell; }
+/* No slide could be opened: what still shows belongs to no slide. */
+.stage[data-unavailable] { pointer-events: none; opacity: .35; }
 .page { position: absolute; background: #fff; box-shadow: var(--shadow-md); }
 /* Objects past the slide edge stay visible (and selectable) while editing;
    the overlay fades what lies outside, since presenting clips it. */

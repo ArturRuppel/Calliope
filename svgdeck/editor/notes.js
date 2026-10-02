@@ -1,7 +1,7 @@
 // Notes are plain text, stored with the slide entry in deck.json.
 export function installNotes({state,putDeck,toast,mount=document.body}) {
   const drafts = new Map();
-  let current = null, pending = null, timer = null;
+  let current = null, queued = null, last = Promise.resolve(), timer = null;
   const panel = document.createElement('section'); panel.className = 'notes-panel'; panel.hidden = true;
   panel.setAttribute('aria-label', 'Speaker notes');
   const title = document.createElement('h2'); title.textContent = 'Speaker notes';
@@ -24,20 +24,26 @@ export function installNotes({state,putDeck,toast,mount=document.body}) {
     text.value = value;
     status.textContent = drafts.has(current) ? 'Unsaved notes' : 'Saved';
   }
-  async function flush() {
+  // putDeck queues deck writes and builds each from the latest deck, so a
+  // flush only has to queue one write that takes the drafts as they are when
+  // it runs. queued: that write while it waits; last: the latest write.
+  function flush() {
     clearTimeout(timer);
-    if (pending) { await pending; if (drafts.size) return flush(); return; }
-    if (!drafts.size) return;
-    pending = (async () => {
-      while (drafts.size) {
-        const batch = new Map(drafts);
-        const slides = state.deck.slides.map(s => batch.has(s.id) ? {...s,notes:batch.get(s.id)} : s);
-        await putDeck({...state.deck,slides});
-        for (const [id,value] of batch) if (drafts.get(id) === value) drafts.delete(id);
-      }
-      status.textContent = 'Saved';
-    })().catch(e => {status.textContent='Notes not saved'; throw e;}).finally(() => {pending=null;});
-    return pending;
+    if (queued) return queued;
+    if (!drafts.size) return last;
+    let batch = null;
+    const write = putDeck(deck => {
+      queued = null;
+      if (!drafts.size) return null;
+      batch = new Map(drafts);
+      return {...deck,slides:deck.slides.map(s => batch.has(s.id) ? {...s,notes:batch.get(s.id)} : s)};
+    }).then(() => {
+      if (batch) for (const [id,value] of batch) if (drafts.get(id) === value) drafts.delete(id);
+      if (!drafts.has(current)) status.textContent = 'Saved';
+    }, e => { if (queued === write) queued = null; status.textContent = 'Notes not saved'; throw e; });
+    queued = write;
+    last = write.catch(() => {});
+    return write;
   }
   save.onclick = () => flush().catch(e => toast(`Notes not saved: ${e.message}`));
   window.addEventListener('beforeunload', e => {if (drafts.size) { e.preventDefault(); e.returnValue=''; }});

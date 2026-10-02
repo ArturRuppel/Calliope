@@ -75,11 +75,16 @@ const api = {
   async slide(id) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}`);
     if (!r.ok) throw new Error(`slide ${id}: ${r.status}`);
-    return { text: await r.text(), version: r.headers.get("ETag").replaceAll('"', "") };
+    const etag = r.headers.get("ETag");
+    if (!etag) throw new Error(`slide ${id}: the server sent no version (ETag)`);
+    return { text: await r.text(), version: etag.replaceAll('"', "") };
   },
-  async putSlide(id, text, base) {
+  /** keepalive lets a save started while the page hides or unloads finish
+   *  (browsers allow it only for small bodies). */
+  async putSlide(id, text, base, { keepalive = false } = {}) {
     const r = await fetch(`/api/decks/${DECK}/slides/${id}`, {
       method: "PUT", body: text, headers: { "Content-Type": "image/svg+xml", ...(base ? { "If-Match": `"${base}"` } : {}) },
+      keepalive: keepalive && new Blob([text]).size < 60000,
     });
     if (!r.ok) throw Object.assign(new Error((await r.json().catch(() => ({}))).detail || r.statusText), { status: r.status });
     return (await r.json()).version;
@@ -103,7 +108,13 @@ function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
                      weight: 400, size: 48, recent: [], grid: { show: false, snap: false, size: 20 },
                      penTool: "pen", penLinked: false, penSeen: false, pressure: true, bindings: { ...DEFAULT_BINDINGS } };
-  try { return { ...defaults, ...JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}") }; } catch (e) { return defaults; }
+  try {
+    const stored = JSON.parse(localStorage.getItem("svgdeck-prefs") || "{}");
+    // Merge the objects one level deeper, so settings and bindings added
+    // later appear for browsers that stored older ones.
+    return { ...defaults, ...stored, grid: { ...defaults.grid, ...stored.grid },
+             bindings: { ...defaults.bindings, ...stored.bindings } };
+  } catch (e) { return defaults; }
 }
 function savePrefs() {
   try { localStorage.setItem("svgdeck-prefs", JSON.stringify(state.prefs)); } catch (e) { /* private mode */ }
@@ -133,10 +144,24 @@ function setStatus(text, kind = "") {
   $("status").dataset.kind = kind;
 }
 
+/** Wrap an asynchronous entry point (a click, a key, an observer): a failure
+ *  is shown and logged instead of being lost. Errors that already showed
+ *  their own message (e.reported) are only logged. */
+function guard(fn, what = "That did not work") {
+  const report = (e) => {
+    console.error(e);
+    if (!e?.reported) toast(`${what}: ${e?.message || e}`, 8000);
+  };
+  return (...args) => {
+    try { return Promise.resolve(fn(...args)).catch(report); } catch (e) { report(e); return Promise.resolve(); }
+  };
+}
+
 // --- editor --------------------------------------------------------------------------
 const editor = new SlideEditor($("stage"), {
   commit(before, after) {
     const rec = state.slides.get(state.current);
+    if (!rec) return;  // no slide is open (it could not be loaded)
     rec.undo.push(before);
     if (rec.undo.length > 150) rec.undo.shift();
     rec.redo = [];
@@ -181,12 +206,20 @@ function markDirty(id, text) {
   rec.text = text;
   rec.dirty = true;
   setStatus("Unsaved", "dirty");
-  clearTimeout(rec.timer);
-  rec.timer = setTimeout(() => save(id).catch(() => {}), 700);
+  // After a failed save, the retry timer (backing off) is already set.
+  if (!rec.saveError) {
+    clearTimeout(rec.timer);
+    rec.timer = setTimeout(() => save(id).catch(() => {}), 700);
+  }
   scheduleThumb(id);
 }
 
-async function save(id) {
+// While saving fails (offline), retries back off and the status says so;
+// one toast when it starts failing, one when it works again.
+const RETRY_FIRST = 3000, RETRY_MAX = 60000;
+let saveTrouble = false;
+
+async function save(id, { keepalive = false } = {}) {
   const rec = state.slides.get(id);
   if (!rec) return;
   if (rec.conflict) throw rec.saveError || new Error("This slide has a save conflict");
@@ -199,9 +232,14 @@ async function save(id) {
       const text = rec.text;
       setStatus("Saving…", "busy");
       try {
-        rec.version = await api.putSlide(id, text, rec.version);
+        rec.version = await api.putSlide(id, text, rec.version, { keepalive });
         rec.saveError = null;
+        rec.retryDelay = 0;
         if (rec.text === text) rec.dirty = false;
+        if (saveTrouble && ![...state.slides.values()].some((r) => r.saveError && !r.conflict)) {
+          saveTrouble = false;
+          toast("Saving works again.");
+        }
       } catch (e) {
         rec.saveError = e;
         if (e.status === 409) {
@@ -209,9 +247,14 @@ async function save(id) {
           setStatus("Conflict", "error");
           toast("This slide was changed elsewhere. Open the deck menu → History and recovery, then Keep both versions to preserve your edits.", 10000);
         } else {
-          setStatus("Not saved", "error");
-          toast(`Saving failed: ${e.message}. Retrying…`);
-          rec.timer = setTimeout(() => save(id).catch(() => {}), 3000);
+          rec.retryDelay = rec.retryDelay ? Math.min(rec.retryDelay * 2, RETRY_MAX) : RETRY_FIRST;
+          setStatus("Not saved · retrying", "error");
+          if (!saveTrouble) {
+            saveTrouble = true;
+            toast(`Saving failed: ${e.message}. Your edits are kept here and saving is retried.`, 8000);
+          }
+          clearTimeout(rec.timer);
+          rec.timer = setTimeout(() => save(id).catch(() => {}), rec.retryDelay);
         }
         throw e;
       }
@@ -228,38 +271,89 @@ function refreshStatus() {
   const recs = [...state.slides.values()];
   if (recs.some((r) => r.conflict)) setStatus("Conflict", "error");
   else if (recs.some((r) => r.saving)) setStatus("Saving…", "busy");
-  else if (recs.some((r) => r.saveError)) setStatus("Not saved", "error");
+  else if (recs.some((r) => r.saveError)) setStatus("Not saved · retrying", "error");
   else if (recs.some((r) => r.dirty)) setStatus("Unsaved", "dirty");
   else if (editor.pathDraft) setStatus("Drawing path…", "busy");
   else setStatus("Saved · working copy", "ok");
 }
 
+/** Save everything without ending what is being done: an open text box
+ *  stays open and a path being drawn stays a draft. */
+async function saveAll({ keepalive = false } = {}) {
+  editor.syncTextEdit();
+  const savingNotes = notes?.flush();
+  savingNotes?.catch(() => {});  // its failure is thrown below, after the slides
+  while (true) {
+    const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
+    if (!pending.length) break;
+    await Promise.all(pending.map(([id]) => save(id, { keepalive })));
+  }
+  await savingNotes;
+}
+
+/** Finish the current interaction and save everything: before leaving,
+ *  presenting or exporting. */
 async function flush() {
   mediaTools?.finish?.();
   editor.finishPath();
-  editor.syncTextEdit();
-  await notes?.flush();
-  while (true) {
-    const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
-    if (!pending.length) return;
-    await Promise.all(pending.map(([id]) => save(id)));
-  }
+  await saveAll();
 }
 
 window.addEventListener("beforeunload", (e) => {
   if (editor.pathDraft?.nodes.length || [...state.slides.values()].some((r) => r.dirty || r.saving)) { e.preventDefault(); e.returnValue = ""; }
 });
-document.addEventListener("visibilitychange", () => { if (document.hidden) flush().catch(() => {}); });
-
-async function putDeck(deck) {
-  try {
-    const res = await api.putDeck(deck, state.version);
-    state.deck = deck;
-    state.version = res.version;
-  } catch (e) {
-    toast(e.status === 409 ? "The deck was changed somewhere else; reload the page." : `Could not save deck changes: ${e.message}`, 8000);
-    throw e;
+// Switching apps on the iPad hides the page and may end it: save, but keep
+// the text box and the path draft for when the user comes back.
+document.addEventListener("visibilitychange", () => { if (document.hidden) saveAll({ keepalive: true }).catch(() => {}); });
+window.addEventListener("pagehide", () => { saveAll({ keepalive: true }).catch(() => {}); });
+window.addEventListener("online", () => {
+  for (const [id, rec] of state.slides) {
+    if (rec.saveError && !rec.conflict) { clearTimeout(rec.timer); save(id).catch(() => {}); }
   }
+});
+
+/** Leave the editor once everything is saved (iPad Safari does not fire
+ *  beforeunload). If saving fails, a second tap leaves anyway. */
+let leaveAnyway = false;
+async function leave(url = "/") {
+  try {
+    await flush();
+  } catch (e) {
+    if (!leaveAnyway) {
+      leaveAnyway = true;
+      setTimeout(() => { leaveAnyway = false; }, 8000);
+      toast(`Not everything is saved (${e.message}). Tap again to leave anyway.`, 8000);
+      return;
+    }
+  }
+  location.href = url;
+}
+
+// Deck writes go one at a time, each built from the deck and version the
+// previous one left, so the app's own overlapping writes never conflict.
+let deckQueue = Promise.resolve();
+function deckWrite(fn) {
+  const run = deckQueue.then(fn);
+  deckQueue = run.catch(() => {});
+  return run;
+}
+
+/** Save the deck: change is the new deck, or a function from the current
+ *  deck to the new one (or to null for nothing to save). */
+function putDeck(change) {
+  return deckWrite(async () => {
+    const deck = typeof change === "function" ? change(state.deck) : change;
+    if (!deck) return;
+    try {
+      const res = await api.putDeck(deck, state.version);
+      state.deck = deck;
+      state.version = res.version;
+    } catch (e) {
+      toast(e.status === 409 ? "The deck was changed somewhere else; reload the page." : `Could not save deck changes: ${e.message}`, 8000);
+      e.reported = true;
+      throw e;
+    }
+  });
 }
 
 async function ensureFamily(family) {
@@ -267,9 +361,12 @@ async function ensureFamily(family) {
   if (!state.faces.some((f) => f.family === family)) return;
   try {
     await notes?.flush();
-    const res = await api.useFamily(family);
-    state.deck = res.deck;
-    state.version = res.version;
+    await deckWrite(async () => {
+      if ((state.deck.fonts || []).some((f) => f.family === family)) return;
+      const res = await api.useFamily(family);
+      state.deck = res.deck;
+      state.version = res.version;
+    });
   } catch (e) { toast(`Could not add ${family} to the deck: ${e.message}`); }
 }
 
@@ -281,10 +378,20 @@ async function slideRecord(id) {
     state.slides.set(id, rec);
   }
   if (rec.loading) {
-    const { text, version } = await rec.loading;
-    rec.loading = null;
-    rec.text = text;
-    rec.version = version;
+    const loading = rec.loading;
+    let loaded;
+    try {
+      loaded = await loading;
+    } catch (e) {
+      // Forget the failed fetch, so the next attempt fetches again.
+      if (state.slides.get(id) === rec) state.slides.delete(id);
+      throw e;
+    }
+    if (rec.loading === loading) {
+      rec.loading = null;
+      rec.text = loaded.text;
+      rec.version = loaded.version;
+    }
   }
   return rec;
 }
@@ -300,16 +407,43 @@ function settleCurrentSlide() {
   editor.touchStart = null;
 }
 
+/** Show a slide. If it cannot be fetched or is not valid SVG, the current
+ *  slide stays open (so no edit can be saved under the wrong slide) and a
+ *  toast says why. Returns whether the slide is now open. */
 async function openSlide(id) {
+  // Counted first on purpose: tapping the open slide while another one is
+  // still loading means "stay here" and cancels that navigation.
   const sequence = ++navigationSequence;
-  if (state.current === id) return;
+  if (state.current === id) return true;
   if (state.current && state.current !== id) settleCurrentSlide();
-  const rec = await slideRecord(id);
-  if (sequence !== navigationSequence) return;
+  const number = state.deck.slides.findIndex((s) => s.id === id) + 1;
+  const fail = (message) => {
+    toast(`Could not open slide ${number}: ${message}`, 10000);
+    if (!state.current) {
+      // No slide is open (the old one was deleted or replaced): what still
+      // shows on the stage belongs to no slide and must not be edited.
+      editor.select([]);
+      $("stage").dataset.unavailable = "true";
+    }
+    return false;
+  };
+  let rec;
+  try {
+    rec = await slideRecord(id);
+  } catch (e) {
+    return sequence === navigationSequence ? fail(e.message) : false;
+  }
+  if (sequence !== navigationSequence) return false;
   if (state.current && state.current !== id) settleCurrentSlide();
+  try {
+    // load() throws before it replaces the slide on the stage.
+    editor.load(rec.text);
+  } catch (e) {
+    return fail(`${e.message}. It was left unchanged; History and recovery can restore an earlier version.`);
+  }
+  delete $("stage").dataset.unavailable;
   state.current = id;
   try {
-    editor.load(rec.text);
     upgradeImageAdjustments(editor);
   } catch (e) {
     toast(e.message, 8000);
@@ -320,6 +454,13 @@ async function openSlide(id) {
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   renderPanel();
   notes?.render();
+  return true;
+}
+const openSlideSafely = guard(openSlide, "Could not open the slide");
+/** The next (1) or previous (-1) slide. */
+function stepSlide(delta) {
+  const s = state.deck.slides[index() + delta];
+  if (s) openSlideSafely(s.id);
 }
 
 const index = () => state.deck.slides.findIndex((s) => s.id === state.current);
@@ -330,9 +471,12 @@ async function addSlide(text, notes = "") {
   const id = newId();
   const version = await api.putSlide(id, text, null);
   state.slides.set(id, { text, version, undo: [], redo: [] });
-  const slides = [...state.deck.slides];
-  slides.splice(index() + 1, 0, { id, ...(notes ? {notes} : {}) });
-  await putDeck({ ...state.deck, slides });
+  const after = state.current;
+  await putDeck((deck) => {
+    const slides = [...deck.slides];
+    slides.splice(slides.findIndex((s) => s.id === after) + 1, 0, { id, ...(notes ? {notes} : {}) });
+    return { ...deck, slides };
+  });
   renderStrip();
   await openSlide(id);
 }
@@ -349,11 +493,14 @@ function blankSlide() {
 
 async function moveSlide(delta) {
   await notes?.flush();
-  const i = index(), j = i + delta;
-  if (j < 0 || j >= state.deck.slides.length) return;
-  const slides = [...state.deck.slides];
-  [slides[i], slides[j]] = [slides[j], slides[i]];
-  await putDeck({ ...state.deck, slides });
+  const id = state.current;
+  await putDeck((deck) => {
+    const i = deck.slides.findIndex((s) => s.id === id), j = i + delta;
+    if (i < 0 || j < 0 || j >= deck.slides.length) return null;
+    const slides = [...deck.slides];
+    [slides[i], slides[j]] = [slides[j], slides[i]];
+    return { ...deck, slides };
+  });
   renderStrip();
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   history.replaceState(null, "", `#${index() + 1}`);
@@ -365,18 +512,18 @@ async function deleteSlide() {
   if (state.deck.slides.length < 2) { toast("A deck needs at least one slide."); return; }
   if (!confirm(`Delete slide ${index() + 1}? (It is kept in the deck's trash folder.)`)) return;
   await flush();
-  const i = index();
-  const slides = state.deck.slides.filter((s) => s.id !== state.current);
-  await putDeck({ ...state.deck, slides });
-  state.slides.delete(state.current);
+  const id = state.current, i = index();
+  await putDeck((deck) => ({ ...deck, slides: deck.slides.filter((s) => s.id !== id) }));
+  state.slides.delete(id);
   state.current = null;
   renderStrip();
+  const slides = state.deck.slides;
   await openSlide(slides[Math.min(i, slides.length - 1)].id);
 }
 
 // --- slide strip with live thumbnails ------------------------------------------------------
 const thumbObserver = new IntersectionObserver((entries) => {
-  for (const e of entries) if (e.isIntersecting) renderThumb(e.target.dataset.id);
+  for (const e of entries) if (e.isIntersecting) renderThumbSafely(e.target.dataset.id);
 }, { root: $("thumbs"), rootMargin: "300px" });
 
 function paintSlidePos() {
@@ -393,7 +540,7 @@ function renderStrip() {
     li.dataset.id = s.id;
     li.className = s.id === state.current ? "current" : "";
     li.innerHTML = `<span class="num">${i + 1}</span><div class="thumb"></div>`;
-    li.addEventListener("click", () => openSlide(s.id));
+    li.addEventListener("click", () => openSlideSafely(s.id));
     ol.appendChild(li);
     thumbObserver.observe(li);
   });
@@ -402,14 +549,16 @@ function renderStrip() {
 const thumbTimers = new Map();
 function scheduleThumb(id) {
   clearTimeout(thumbTimers.get(id));
-  thumbTimers.set(id, setTimeout(() => renderThumb(id, true), 600));
+  thumbTimers.set(id, setTimeout(() => renderThumbSafely(id, true), 600));
 }
+const renderThumbSafely = guard(renderThumb, "Could not draw a slide thumbnail");
 
 async function renderThumb(id, force = false) {
   const li = $("thumbs").querySelector(`li[data-id="${CSS.escape(id)}"]`);
   if (!li || (li.dataset.rendered && !force)) return;
   li.dataset.rendered = "1";
-  const rec = await slideRecord(id);
+  let rec;
+  try { rec = await slideRecord(id); } catch (e) { delete li.dataset.rendered; throw e; }
   const doc = new DOMParser().parseFromString(rec.text, "image/svg+xml");
   if (doc.querySelector("parsererror")) return;
   for (const el of doc.querySelectorAll("[href]")) el.setAttribute("href", hrefIn(el.getAttribute("href")));
@@ -732,8 +881,8 @@ function runAction(action, phase) {
     case "rotate-right": editor.rotateBy(90); break;
     case "flip-x": editor.flip("x"); break;
     case "flip-y": editor.flip("y"); break;
-    case "next-slide": { const s = state.deck.slides[index() + 1]; if (s) openSlide(s.id); break; }
-    case "prev-slide": { const s = state.deck.slides[index() - 1]; if (s) openSlide(s.id); break; }
+    case "next-slide": stepSlide(1); break;
+    case "prev-slide": stepSlide(-1); break;
   }
 }
 
@@ -911,9 +1060,26 @@ function selBarItems() {
     ...tail].filter(Boolean)];
 }
 
+// Like renderPanel, a nested call (from a released button) asks for one more pass.
+let selBarDrawing = false, selBarAgain = false;
+function updateSelBar() {
+  if (selBarDrawing) { selBarAgain = true; return; }
+  selBarDrawing = true;
+  try {
+    releaseFocus($("sel-bar"));
+    for (let pass = 0; pass < 3; pass++) {
+      selBarAgain = false;
+      drawSelBar();
+      if (!selBarAgain) break;
+    }
+  } finally {
+    selBarDrawing = false;
+  }
+}
+
 /** Draw the bar above the selection (below it near the top), right-aligned
  *  for objects on the right half, so it never covers what it edits. */
-function updateSelBar() {
+function drawSelBar() {
   const bar = $("sel-bar");
   const items = editor.svg ? selBarItems() : null;
   if (!items) { bar.hidden = true; alignOpen = false; return; }
@@ -974,6 +1140,14 @@ function placeSelBar() {
   bar.style.left = `${left}px`;
   bar.style.top = `${Math.max(60, top)}px`;
 }
+
+// The stage never takes focus (its pointerdown is prevented). A field or
+// button outside it gives focus up here, so a typed value is applied before
+// the gesture, and Enter or Delete afterwards act on the canvas.
+$("stage").addEventListener("pointerdown", () => {
+  const active = document.activeElement;
+  if (active && active !== document.body && !$("stage").contains(active)) active.blur();
+}, true);
 
 // Hide the bar while a finger or the Pencil is moving something.
 $("stage").addEventListener("pointerdown", () => document.body.classList.add("gesturing"));
@@ -1087,14 +1261,14 @@ function buildDocMenu() {
     item("commit-deck", "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8M2 12h6M16 12h6", "Commit snapshot…", "An immutable copy of the whole deck", () => commits?.open()),
     item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
     sep(),
-    item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", exportDeck),
-    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Notes, next slide, timer", () => present(true)),
+    item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", guard(exportDeck, "Could not export")),
+    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Notes, next slide, timer", guard(() => present(true), "Could not open speaker view")),
     sep(),
     item(null, "M4 6h16M4 12h16M4 18h16", "Deck settings", `Fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
     item("pen-status", "M4 20l1-5L16 4l4 4L9 19z", "Pencil and controller",
       pencil + (controller.pads.length ? " · controller connected" : ""), () => openSettings("pencil")),
     sep(),
-    item(null, "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z", "All decks", "", () => { location.href = "/"; }));
+    item(null, "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z", "All decks", "", () => leave("/")));
 }
 
 document.addEventListener("pointerdown", (e) => {
@@ -1136,7 +1310,7 @@ function renderSettings() {
 }
 
 async function exportDeck() {
-  try { await flush(); } catch (error) { return; }
+  try { await flush(); } catch (error) { toast(`Not exported: the deck is not saved (${error.message}).`, 8000); return; }
   toast("Preparing the export…");
   location.href = `/api/decks/${DECK}/export.zip`;
 }
@@ -1211,7 +1385,13 @@ function colorControl(value, onPick, allowNone) {
 
 function numberControl(value, { min = 0, max = 1000, step = 1, suffix = "" } = {}, onSet) {
   const input = el("input", { type: "number", value: +(+value).toFixed(2), min, max, step, inputmode: "decimal" });
-  input.addEventListener("change", () => { if (input.value !== "") onSet(+input.value); });
+  const shown = panelSelection;
+  input.addEventListener("change", () => {
+    // A value typed for objects that are no longer selected is not applied to others.
+    const sel = editor.selection;
+    if (shown.length !== sel.length || shown.some((o, i) => o !== sel[i])) return;
+    if (input.value !== "") onSet(+input.value);
+  });
   return el("span", { class: "num" }, input, suffix);
 }
 
@@ -1230,10 +1410,39 @@ function families() {
   return [...new Set(state.faces.map((f) => f.family))].sort();
 }
 
+/** Blur the focused element if it is inside one of hosts. A field that is
+ *  removed while focused fires its change event in the middle of the
+ *  removal; blurring first lets that change (an edit, a commit, a nested
+ *  re-render) happen while nothing is being replaced. */
+function releaseFocus(...hosts) {
+  const active = document.activeElement;
+  if (active && active !== document.body && hosts.some((h) => h?.contains(active))) active.blur();
+}
+
+// renderPanel can be reached again while it runs (a released field commits,
+// the commit re-selects): the nested call only asks for one more pass.
+let panelRendering = false, panelAgain = false;
 function renderPanel() {
   if (!state.deck) return;
+  if (panelRendering) { panelAgain = true; return; }
+  panelRendering = true;
+  try {
+    releaseFocus($("panel"), $("objects-mount"), document.querySelector("dialog.media-tools"));
+    for (let pass = 0; pass < 3; pass++) {
+      panelAgain = false;
+      drawPanel();
+      if (!panelAgain) break;
+    }
+  } finally {
+    panelRendering = false;
+  }
+}
+
+let panelSelection = [];  // the selection the panel's fields were drawn for
+function drawPanel() {
   objectPanels?.render();
   mediaTools?.render();
+  panelSelection = [...editor.selection];
   const panel = $("panel");
   const sel = editor.selection;
   const parts = [];
@@ -1471,8 +1680,9 @@ function pencilSection() {
   const linked = state.prefs.penLinked;
   const toolSelect = el("select", { "aria-label": "Pencil tool", disabled: linked },
     Object.entries(TOOL_NAMES).map(([id, name]) => el("option", { value: id, selected: id === editor.tools.pen }, name)));
-  toolSelect.onchange = () => runAction(`pen:${toolSelect.value}`, "down");
-  const bindings = Object.entries(state.prefs.bindings).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+  // Not runAction: device actions are ignored while a dialog is open.
+  toolSelect.onchange = () => setTool(toolSelect.value, { slot: "pen" });
+  const bindings = Object.entries(state.prefs.bindings).filter(([, action]) => action).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
   const actionSelect = el("select", { "aria-label": "Action to assign" }, actionGroups().map(([label, ids]) =>
     el("optgroup", { label }, ids.map((id) => el("option", { value: id }, actionLabel(id))))));
   const learn = el("button", { class: "btn small", onclick: () => {
@@ -1564,9 +1774,23 @@ document.addEventListener("keydown", (e) => {
   const modal = document.querySelector("dialog[open]");
   if (modal && !(modal.classList.contains("media-tools") && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z")) return;
   if (e.target.closest("input, textarea, select, [contenteditable]") || editor.textEdit) return;
+  if (!state.current) return;  // no slide open
   if (controller.keydown(e)) return;
   const mod = e.ctrlKey || e.metaKey;
   const k = e.key.toLowerCase();
+  // Escape closes an open flyout or menu before it acts on the canvas.
+  if (k === "escape" && (flyout || contextMenu || !$("doc-menu").hidden || !$("slide-menu").hidden)) {
+    e.preventDefault();
+    closeFlyout();
+    closeContextMenu(true);
+    closeMenus();
+    return;
+  }
+  // A focused button or link outside the stage keeps its own keys: Enter
+  // and Space activate it rather than editing the selection, Delete does
+  // not delete objects. (Tool letters and arrows still apply.)
+  const control = e.target.closest?.("button, a[href], summary, [role=button], [role=menuitem], [role=tab]");
+  if (control && !$("stage").contains(control) && !mod && ["enter", " ", "delete", "backspace", "escape"].includes(k)) return;
   if (editor.pathDraft && ["enter", "escape", "backspace", "delete"].includes(k)) {
     e.preventDefault();
     if (k === "enter") editor.finishPath(e.shiftKey);
@@ -1606,8 +1830,8 @@ document.addEventListener("keydown", (e) => {
     editor.moveBy(k === "arrowleft" ? -d : k === "arrowright" ? d : 0, k === "arrowup" ? -d : k === "arrowdown" ? d : 0);
     return;
   }
-  if (k === "pagedown") { e.preventDefault(); const s = state.deck.slides[index() + 1]; if (s) openSlide(s.id); return; }
-  if (k === "pageup") { e.preventDefault(); const s = state.deck.slides[index() - 1]; if (s) openSlide(s.id); return; }
+  if (k === "pagedown") { e.preventDefault(); stepSlide(1); return; }
+  if (k === "pageup") { e.preventDefault(); stepSlide(-1); return; }
   if (k === "enter" && editor.selection.length === 1) {
     const s = editor.selection[0];
     if (s.localName === "text") { e.preventDefault(); editor.editText(s, false); }
@@ -1805,7 +2029,8 @@ function copySelection(cut) {
 }
 
 function clipboardData() {
-  try { return localStorage.getItem("svgdeck-clipboard") || state.clipboard; } catch (err) { return state.clipboard; }
+  if (state.clipboard) return state.clipboard;  // a copy made in this page is the freshest
+  try { return localStorage.getItem("svgdeck-clipboard"); } catch (err) { return null; }
 }
 
 function pasteClipboard() {
@@ -1814,9 +2039,11 @@ function pasteClipboard() {
 }
 
 function undo() {
+  // While editing text, Undo ends the edit (keeping it as one undo step);
+  // the next Undo takes it back.
+  if (editor.textEdit) { editor.endTextEdit(true); return; }
   const rec = state.slides.get(state.current);
   if (!rec?.undo.length) return;
-  editor.endTextEdit(true);
   rec.redo.push(rec.text);
   const text = rec.undo.pop();
   editor.load(text, { keepView: true });
@@ -1824,6 +2051,7 @@ function undo() {
 }
 
 function redo() {
+  if (editor.textEdit) { editor.endTextEdit(true); return; }
   const rec = state.slides.get(state.current);
   if (!rec?.redo.length) return;
   rec.undo.push(rec.text);
@@ -1837,16 +2065,20 @@ async function present(speaker = false) {
   const url = `/d/${DECK}/${speaker ? "?speaker=1" : ""}#${index() + 1}`;
   const win = window.open("about:blank", "_blank");
   try { await flush(); if (win) win.location.href = url; else location.href = url; }
-  catch (e) { win?.close(); }
+  catch (e) { win?.close(); toast(`Not presenting: the deck is not saved (${e.message}).`, 8000); }
 }
 
 function wire() {
   $("undo").onclick = undo;
   $("redo").onclick = redo;
+  for (const id of ["undo", "redo"]) {
+    // Keep an open text box focused until the click, which ends the edit as one step.
+    $(id).addEventListener("pointerdown", (e) => { if (editor.textEdit) { editor.textEdit.holding = true; e.preventDefault(); } });
+  }
   $("zoom-in").onclick = () => editor.zoomBy(1.25);
   $("zoom-out").onclick = () => editor.zoomBy(0.8);
   $("zoom-fit").onclick = () => editor.fit();
-  $("present").onclick = () => present();
+  $("present").onclick = guard(() => present(), "Could not present");
   const side = (cls, button) => {
     document.body.classList.toggle(cls);
     $(button).setAttribute("aria-pressed", String(!document.body.classList.contains(cls)));
@@ -1865,13 +2097,22 @@ function wire() {
       if (e.key === "Escape") { closeMenus(); $(`${menu}-btn`).focus(); }
     });
   }
-  $("slide-add").onclick = () => addSlide(blankSlide());
-  $("slide-dup").onclick = duplicateSlide;
-  $("slide-up").onclick = () => moveSlide(-1);
-  $("slide-down").onclick = () => moveSlide(1);
-  $("slide-del").onclick = deleteSlide;
+  $("back").onclick = (e) => {
+    if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;  // a new tab or window: nothing is left
+    e.preventDefault();
+    leave($("back").getAttribute("href"));
+  };
+  $("slide-add").onclick = guard(() => addSlide(blankSlide()), "Could not add a slide");
+  $("slide-dup").onclick = guard(duplicateSlide, "Could not duplicate the slide");
+  $("slide-up").onclick = guard(() => moveSlide(-1), "Could not move the slide");
+  $("slide-down").onclick = guard(() => moveSlide(1), "Could not move the slide");
+  $("slide-del").onclick = guard(deleteSlide, "Could not delete the slide");
   $("settings-close").onclick = () => $("settings-dialog").close();
-  $("settings-dialog").addEventListener("close", () => { settingsKind = null; });
+  $("settings-dialog").addEventListener("close", () => {
+    settingsKind = null;
+    // A key pressed after closing must not be bound.
+    if (controller.learning) controller.cancelLearning();
+  });
   $("settings-dialog").addEventListener("cancel", (e) => { if (controller.learning) e.preventDefault(); });
   $("exit-group").onclick = () => editor.exitGroup();
   $("inspector").addEventListener("pointerdown", () => { if (editor.textEdit) editor.textEdit.holding = true; }, true);
@@ -1951,9 +2192,19 @@ async function main() {
   $("deck-title").textContent = state.deck.title || DECK;
   document.title = `${state.deck.title || DECK} · svgdeck`;
   renderStrip();
+  const slides = state.deck.slides;
+  if (!slides.length) {
+    setStatus("No slides", "error");
+    toast("This deck has no slides. Tap + Slide to add one.", 20000);
+    return;
+  }
   const m = /^#(\d+)$/.exec(location.hash);
-  const start = state.deck.slides[m ? Math.min(+m[1] - 1, state.deck.slides.length - 1) : 0];
-  await openSlide(start.id);
+  const start = m ? Math.max(0, Math.min(+m[1] - 1, slides.length - 1)) : 0;
+  // A slide that cannot be opened is skipped for the next one that can.
+  for (const s of [...slides.slice(start), ...slides.slice(0, start)]) {
+    if (await openSlide(s.id)) break;
+  }
+  if (!state.current) { setStatus("Error", "error"); return; }
   setStatus("Saved · working copy", "ok");
 }
 
