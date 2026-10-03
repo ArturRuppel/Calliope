@@ -8,6 +8,7 @@ import shutil
 import tempfile
 from importlib import resources
 from pathlib import Path
+from urllib.parse import quote
 
 from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, HTTPException, Request
@@ -122,6 +123,42 @@ def create_app(data: Path) -> FastAPI:
     async def healthz():
         """Cheap liveness check: does not touch the data directory."""
         return {"ok": True}
+
+    # --- offline copy --------------------------------------------------------
+    @app.get("/sw.js")
+    def service_worker():
+        """Served from the root so its scope covers the presenter as well as the editor."""
+        return FileResponse(editor_dir / "sw.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache"})
+
+    @app.get("/api/offline")
+    def offline_manifest():
+        """What a client needs to present every deck without the server: the
+        app's own files, and per deck its presenter page, media and fonts.
+        A version changes whenever the content behind the URL does."""
+        def version(path: Path) -> str:
+            stat = path.stat()
+            return f"{stat.st_size}-{stat.st_mtime_ns}"
+
+        shell = [{"url": "/", "v": version(editor_dir / "decks.html")}]
+        shell += [{"url": "/editor/" + quote(path.relative_to(editor_dir).as_posix()), "v": version(path)}
+                  for path in sorted(editor_dir.rglob("*")) if path.is_file() and path.name != "sw.js"]
+        # The presenter page inlines the player, so new player code is a new page.
+        player = [*Path(str(resources.files("svgdeck") / "player")).iterdir(), editor_dir / "movie-range.js"]
+        code = max(path.stat().st_mtime_ns for path in player)
+        decks = []
+        for summary in store.list_decks():
+            name = summary["name"]
+            root = store.deck_dir(name)
+            with store._lock(name):
+                sources = [root / "deck.json", *sorted((root / "slides").glob("*.svg"))]
+                page = f"{len(sources)}-{max(p.stat().st_mtime_ns for p in sources)}-{code}"
+                files = [{"url": f"/d/{name}/" + quote(path.relative_to(root).as_posix()),
+                          "v": version(path), "size": path.stat().st_size}
+                         for sub in ("media", "fonts") for path in sorted((root / sub).rglob("*")) if path.is_file()]
+            decks.append({"name": name, "title": summary["title"],
+                          "page": {"url": f"/d/{name}/", "v": page}, "files": files})
+        return JSONResponse({"shell": shell, "decks": decks}, headers={"Cache-Control": "no-store"})
 
     @app.get("/d/{name}")
     def deck_redirect(name: str):

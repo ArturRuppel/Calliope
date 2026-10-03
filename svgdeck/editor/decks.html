@@ -48,11 +48,15 @@
   .deck .inline { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .deck .inline label { width: 100%; font-size: 13px; color: var(--muted); }
   .deck .inline input { flex: 1; }
+  #offline { margin: 12px 0 0; color: var(--muted); font-size: 12px; cursor: pointer; }
+  /* Without the server the list is read-only: present, nothing else. */
+  .offline header .btn, .offline .deck .btn.primary, .offline .deck button, .offline #new, .offline #deleted { display: none; }
 </style>
 </head>
 <body>
 <header><h1><img class="mark" src="/editor/icon.svg" alt="">Calliope</h1><a class="btn primary" href="#new" onclick="document.querySelector('#new input').focus()">New deck</a></header>
 <main>
+  <p id="offline" role="status"></p>
   <p class="error" id="status"></p>
   <div id="decks">Loading…</div>
   <section id="deleted"></section>
@@ -64,6 +68,7 @@
     <div class="error" id="error"></div>
   </form>
 </main>
+<script src="/editor/offline.js"></script>
 <script>
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
   const status = document.getElementById("status");
@@ -78,9 +83,13 @@
   async function getJSON(url, what) {
     const r = await fetch(url);
     if (!r.ok) throw new Error(await errorText(r, `Could not load ${what}`));
+    // sw.js marks an answer that came from the offline copy.
+    if (r.headers.get("X-Calliope-Offline")) offline = true;
     return r.json();
   }
+  let offline = false;
   async function load() {
+    offline = false;
     // Both lists are fetched before either is shown, so a deck never shows
     // in both (or neither) while one of them is still loading.
     const [listed, trashed] = await Promise.allSettled([getJSON("/api/decks", "the decks"), getJSON("/api/trash", "recently deleted decks")]);
@@ -90,6 +99,7 @@
       return;
     }
     const decks = listed.value;
+    document.body.classList.toggle("offline", offline);
     document.getElementById("decks").innerHTML = decks.length ? decks.map((d) => `
       <div class="deck"><div class="info"><strong>${esc(d.title)}</strong>
         <small>${esc(d.name)} · ${d.slides} slide${d.slides === 1 ? "" : "s"} · edited ${new Date(d.modified * 1000).toLocaleString()}</small></div>
@@ -250,6 +260,7 @@
     }
   });
   load().catch((e) => { status.textContent = e.message; });
+  CalliopeOffline.attach(document.getElementById("offline"));
 </script>
 </body>
 </html>

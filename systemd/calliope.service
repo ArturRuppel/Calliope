@@ -6,12 +6,12 @@ Wants=network-online.target
 StartLimitIntervalSec=0
 
 [Service]
-# Binds the tailnet address only (like mnemosyne.service): the editor can change
-# decks, so it is reachable from the iPad/phone over Tailscale and from nowhere
-# else. If Tailscale is not online yet the address is empty, which uvicorn would
-# treat as "all interfaces", so the shell fails instead and Restart retries.
+# Binds loopback only; Tailscale Serve publishes it to the tailnet as
+# https://<machine>.<tailnet>.ts.net:8490 (set up once with
+# `tailscale serve --bg --https=8490 http://127.0.0.1:8490`). HTTPS is what lets
+# the iPad keep an offline copy: service workers need a secure context.
 # Data (decks, fonts) lives in ~/Data/svgdeck, outside the repo.
-ExecStart=/bin/sh -c 'set -e; ip=$(tailscale ip -4 | head -n 1); [ -n "$$ip" ] || { echo "tailscale has no IPv4 address yet" >&2; exit 1; }; exec %h/Projects/Calliope/.venv/bin/svgdeck serve --data %h/Data/svgdeck --host "$$ip" --port 8490'
+ExecStart=%h/Projects/Calliope/.venv/bin/svgdeck serve --data %h/Data/svgdeck --host 127.0.0.1 --port 8490
 Restart=on-failure
 RestartSec=5
 

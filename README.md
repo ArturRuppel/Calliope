@@ -40,10 +40,40 @@ svgdeck pdf DECK_DIR talk.pdf --notes       # handout: slide plus speaker notes 
 
 ## The service on sancho
 
-`systemd/calliope.service` runs `svgdeck serve` on sancho's Tailscale address,
-port 8490 (install: copy it to `~/.config/systemd/user/`, then
-`systemctl --user enable --now calliope`). Open `http://<sancho tailnet ip>:8490/`
-on the iPad; "Add to Home Screen" gives it a full-screen window.
+`systemd/calliope.service` runs `svgdeck serve` on 127.0.0.1:8490 (install:
+copy it to `~/.config/systemd/user/`, then `systemctl --user enable --now
+calliope`). Tailscale Serve publishes it to the tailnet over HTTPS; this is set
+up once and survives reboots:
+
+```sh
+tailscale serve --bg --https=8490 http://127.0.0.1:8490
+```
+
+Open `https://<machine>.<tailnet>.ts.net:8490/` on the iPad; "Add to Home
+Screen" gives it a full-screen window. HTTPS matters: without it the browser
+will not keep the offline copy (below).
+
+### The offline copy
+
+Opening the deck list copies every deck into the browser so it can be
+presented when the server cannot be reached. The copy is read-only: decks can
+be presented, not edited. The status line under the header says how current
+the copy is; tap it to sync again. A sync downloads only what changed since
+the last one (`GET /api/offline` lists every file with a version), and drops
+decks and files the server no longer has.
+
+- The deck list and presenter pages ask the server first and fall back to the
+  copy after 4 s. Deck media and fonts always come from the copy, cut into
+  ranges for movies (Safari will not play a movie otherwise).
+- Without the server the deck list hides everything but **Present**; the
+  editor and anything else that needs the server shows a "needs the server"
+  page instead.
+- A deck that cannot be copied (for example a slide file gone missing) leaves
+  the copy marked incomplete; the other decks are still copied.
+- The service worker is `svgdeck/editor/sw.js`, served as `/sw.js` so it covers
+  the presenter as well; `svgdeck/editor/offline.js` does the syncing. Opening
+  the deck list once while online, after a change, is what brings the copy up
+  to date.
 
 ## Editing
 
@@ -333,10 +363,9 @@ on video, so movie tests only run in Chromium.
 ## Persistent local service
 
 The installed `calliope.service` user unit starts under `default.target`, restarts
-on failure, and binds only the Tailscale address on port 8490. User lingering
-keeps it running across logouts and starts the user manager at boot. The unit
-refuses to start until Tailscale has an IPv4 address (an empty address would
-bind every interface) and retries every few seconds. Switchboard registers the
+on failure, and binds only 127.0.0.1:8490; Tailscale Serve is what makes it
+reachable from the tailnet, over HTTPS. User lingering keeps it running across
+logouts and starts the user manager at boot. Switchboard registers the
 unit with `GET /healthz` as the health URL (it answers without touching the data
 directory) and `client_url` for its **Open** button.
 These machine-local settings stay outside the repository; decks and licensed
