@@ -134,7 +134,7 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .stage { position: absolute; inset: 0; overflow: hidden; background: var(--stage); touch-action: none; cursor: default; }
 .stage[data-tool="pen"], .stage[data-tool="rect"], .stage[data-tool="ellipse"], .stage[data-tool="circle"],
 .stage[data-tool="polygon"], .stage[data-tool="bezier"], .stage[data-tool="nodes"],
-.stage[data-tool="line"], .stage[data-tool="arrow"] { cursor: crosshair; }
+.stage[data-tool="line"], .stage[data-tool="arrow"], .stage[data-tool="layout"] { cursor: crosshair; }
 .stage[data-tool="text"] { cursor: text; }
 .stage[data-tool="pan"] { cursor: grab; }
 .stage[data-tool="pan"]:active { cursor: grabbing; }
@@ -150,6 +150,11 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .ov-box { fill: none; stroke: var(--accent); }
 .ov-item { fill: none; stroke: var(--accent); stroke-dasharray: 4 3; opacity: .7; }
 .ov-group { fill: none; stroke: var(--n600); stroke-dasharray: 6 4; }
+/* Layout boxes are stored hidden; only the editing canvas draws them. */
+.stage [data-layout="true"] { visibility: visible !important; fill: none !important; stroke: var(--accent, #0e7c7b) !important;
+  stroke-width: 1.5px !important; stroke-dasharray: 7 5 !important; vector-effect: non-scaling-stroke; opacity: 1 !important;
+  pointer-events: stroke; }
+.ov-align-ref { fill: color-mix(in srgb, var(--pen, #6b3fa0) 5%, transparent); stroke: var(--pen, #6b3fa0); }
 .ov-marquee { fill: color-mix(in srgb, var(--accent) 6%, transparent); stroke: var(--accent); stroke-dasharray: 4 3; }
 .ov-handle { fill: #fff; stroke: var(--accent); }
 .ov-handle.ov-chosen { fill: var(--accent); }

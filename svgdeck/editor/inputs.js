@@ -8,7 +8,7 @@
 
 export const TOOL_NAMES = {
   select: "Select", pan: "Pan", pen: "Draw", erase: "Erase", bezier: "Bézier", nodes: "Edit points",
-  text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", polygon: "Polygon", line: "Line", arrow: "Arrow",
+  text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", polygon: "Polygon", line: "Line", arrow: "Arrow", layout: "Layout box",
 };
 
 const COMMANDS = {

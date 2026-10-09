@@ -57,7 +57,7 @@ export function installObjects({ editor, state, toast, settle, mount = document.
     }
     return true;
   };
-  const label = (el) => el.getAttribute("data-label") || el.id || ({
+  const label = (el) => el.getAttribute("data-label") || el.id || (el.getAttribute("data-layout") === "true" ? "Layout box" : "") || ({
     g: "Group", text: "Text", image: isMovie(el) ? "Movie" : "Image", rect: "Rectangle",
     circle: "Circle", ellipse: "Ellipse", line: "Line", path: "Path", polygon: "Polygon", polyline: "Polyline",
   }[el.localName] || el.localName);

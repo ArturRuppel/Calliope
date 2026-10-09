@@ -80,7 +80,7 @@ def test_alignment_reference_and_text_controls(page, server):
     add_rects(page,[[100,100,100,100],[400,400,200,100]])
     page.evaluate('svgdeckEditor.editor.selectAll()')
     page.locator('#sel-bar').get_by_role('button',name='Align',exact=True).click()
-    page.get_by_role('button',name='to selection',exact=True).click()  # several objects: align to the slide instead
+    page.locator('#align-row').get_by_role('button',name='Slide',exact=True).click()  # several objects: align to the slide instead
     page.get_by_title('Align left edges',exact=True).click()
     assert page.evaluate('[...svgdeckEditor.editor.selection].map(s=>s.getBBox().x)') == pytest.approx([0,0],abs=.1)
     page.keyboard.press('t'); page.mouse.click(*to_screen(page,400,400))

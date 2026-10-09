@@ -170,8 +170,10 @@ The editor is laid out for an iPad in landscape:
   lines and paths; rectangles also get **Corners**, a radius in pixels that
   stays put when the rectangle is resized.
 - **Align** in the selection bar aligns edges and centres. A single object
-  aligns to the slide; several align to their selection bounds or, switched,
-  to the slide; three or more can be spaced evenly across or down.
+  aligns to the slide; several align with **Each other** (the box around
+  them), with the one **First picked** (it stays put) or with the **Slide**.
+  The canvas outlines the chosen reference in purple while the row is open.
+  Three or more can be spaced evenly across or down.
 - Objects that reach past the slide edge stay visible and selectable in the
   editor. The part outside the slide is faded, because presenting, exports
   and thumbnails show only what is on the slide.
@@ -184,7 +186,19 @@ The editor is laid out for an iPad in landscape:
   objects' edges and centres; the dragged corner of a new shape or end of a
   new line does too (not with Shift held, and not for circles). Grid Snap
   takes precedence when enabled; hold Alt while moving or drawing to bypass
-  both, or Shift to constrain an axis.
+  both, or Shift to constrain an axis. **Axis** in the top bar does the same
+  without a keyboard: while it is on, a drag moves objects straight across
+  or straight up and down, whichever the drag is closer to.
+- **Layout boxes** (Shapes → Layout box, F) are dashed rectangles that exist
+  only for laying a slide out: the editor shows them, the presentation, the
+  PDF and any other SVG viewer do not (they are stored as
+  `<rect data-layout="true" visibility="hidden">`). They sit behind the
+  artwork and are picked by their outline, so what lies in a box stays easy
+  to select. **Split** in a box's bar replaces it by a grid of equal boxes
+  (rows, columns, gap in slide pixels). Objects snap to a box's edges and
+  centre like to any other object; **Fit to box** in the bar of an object
+  lying in a box scales it to fill the box, keeping its proportions, and
+  centres it (text is only centred). Exact sizes go in the Position fields.
 - **Objects** lists the stacking order and nested groups, with names,
   visibility, locking, drag reordering within a group, and raise/lower buttons
   for touch. **Builds** assigns when selected objects appear, lists their
@@ -227,7 +241,7 @@ The editor is laid out for an iPad in landscape:
   a timer. Choose **Open audience window** and move that window to the
   presentation screen; navigation, build steps and blanking stay synchronized
   between them.
-- Double-tap text to edit it, or a group to work inside it; with the Text
+- Double-tap text to edit it (the caret lands where you tapped) or choose **Edit** in its bar, or a group to work inside it; with the Text
   tool, a tap on an existing text edits it (also inside a group). Tap outside,
   **Done** or Ctrl/Cmd+Enter to keep the edit; Escape cancels it, putting the
   text back as it was (a new text disappears) with nothing added to undo.

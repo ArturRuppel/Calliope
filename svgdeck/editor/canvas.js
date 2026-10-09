@@ -12,6 +12,7 @@ const TAP_PX = { mouse: 5, pen: 8, touch: 14 };      // movement below this is a
 const DOUBLE_TAP_MS = 350;
 const MAX_EDIT_NODES = 600;     // more points than this are not offered for editing
 const ALL_HANDLES_UP_TO = 16;   // bigger paths show handles near the chosen point only
+export const isLayout = (el) => el?.getAttribute?.("data-layout") === "true";
 const BAKEABLE = new Set(["rect", "image", "ellipse", "circle", "line"]);
 const SKIP = new Set(["defs", "title", "desc", "metadata", "style", "script"]);
 const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
@@ -146,6 +147,19 @@ function htmlRun(run, base) {
   return span;
 }
 
+/** A collapsed range at a point on screen, or null. */
+function caretAt(x, y) {
+  if (document.caretPositionFromPoint) {
+    const pos = document.caretPositionFromPoint(x, y);
+    if (!pos) return null;
+    const range = document.createRange();
+    range.setStart(pos.offsetNode, pos.offset);
+    range.collapse(true);
+    return range;
+  }
+  return document.caretRangeFromPoint?.(x, y) || null;
+}
+
 export class SlideEditor {
   /** hooks: commit(before, after), select(selection), toast(msg),
    *  hrefIn(v), hrefOut(v), shapeStyle(), textStyle(), ensureFont(family),
@@ -186,6 +200,8 @@ export class SlideEditor {
     this.smartSnap = true;
     this.smartGuides = [];
     this.additive = false;  // taps add to the selection (touch has no Shift)
+    this.axisLock = false;  // drags move along one axis only (touch has no Shift)
+    this.alignRef = null;   // what Align lines up with, outlined while its row is open
 
     host.addEventListener("pointerdown", (e) => this.onDown(e));
     host.addEventListener("pointermove", (e) => this.onMove(e));
@@ -500,6 +516,9 @@ export class SlideEditor {
     for (const child of this.children().reverse()) {
       const b = rootBox(child, this.svg);
       if (b && p.x >= b.x - pad && p.x <= b.x + b.width + pad && p.y >= b.y - pad && p.y <= b.y + b.height + pad) {
+        // A layout box is picked by its outline only: its inside belongs to
+        // what is laid out there (and to the marquee).
+        if (isLayout(child) && p.x > b.x + pad && p.x < b.x + b.width - pad && p.y > b.y + pad && p.y < b.y + b.height - pad) continue;
         if (b.width * b.height > this.size[0] * this.size[1] * 0.9) continue;  // full-slide backdrops
         return child;
       }
@@ -614,6 +633,11 @@ export class SlideEditor {
           else make("line", { x1: box.x - cross, y1: at, x2: box.x + box.width + cross, y2: at, class: "ov-smart-guide", stroke: "#d61aff", "pointer-events": "none", "stroke-width": px });
         }
       }
+    }
+    if (this.alignRef && this.selection.length && !this.gesture) {
+      const b = this.alignBox(this.alignRef);
+      if (b) make("rect", { x: b.x, y: b.y, width: b.width, height: b.height, class: "ov-align-ref",
+        "stroke-width": 3 * px, "stroke-dasharray": `${8 * px} ${5 * px}`, "pointer-events": "none" });
     }
     if (this.pathDraft) {
       const draft = this.pathDraft;
@@ -1691,7 +1715,8 @@ export class SlideEditor {
       case "move": {
         if (!g.snaps) { g.tx = this.begin(); g.snaps = this.snapshot(); g.box0 = this.selectionBox(); }
         let dx = p.x - g.start.x, dy = p.y - g.start.y;
-        const horizontal = e.shiftKey && Math.abs(dx) > Math.abs(dy), vertical = e.shiftKey && !horizontal;
+        const locked = e.shiftKey || this.axisLock;
+        const horizontal = locked && Math.abs(dx) > Math.abs(dy), vertical = locked && !horizontal;
         if (!e.altKey) {
           if (this.grid.snap) [dx, dy] = this.snapDelta(g.box0, dx, dy);
           else {
@@ -1878,15 +1903,97 @@ export class SlideEditor {
     if (g.shape === "arrow" && !g.arrowed) { g.arrowed = true; this.refreshArrows(g.el); }
   }
 
+  // --- layout boxes ----------------------------------------------------------
+  // A layout box is a rectangle that only the editor shows. It is stored
+  // hidden (visibility="hidden"), so the player, the PDF and any other SVG
+  // viewer leave it out; the editor's stylesheet draws it dashed. Being an
+  // ordinary object, it is a target for the smart guides.
+
+  newLayoutBox() {
+    const el = document.createElementNS(SVGNS, "rect");
+    for (const [k, v] of Object.entries({ "data-layout": "true", "data-label": "Layout box", visibility: "hidden", fill: "none", stroke: "none" })) el.setAttribute(k, v);
+    return el;
+  }
+
+  /** Replace the selected layout box by rows × cols equal boxes that fill it,
+   *  gap slide pixels apart. One undo step; the new boxes are selected. */
+  splitLayout(rows, cols, gap = 0) {
+    const box = this.selection.length === 1 && isLayout(this.selection[0]) ? this.selection[0] : null;
+    rows = Math.max(1, Math.round(rows)); cols = Math.max(1, Math.round(cols)); gap = Math.max(0, gap);
+    if (!box || rows * cols < 2 || rows * cols > 400) return;
+    const x = num(box, "x"), y = num(box, "y"), w = num(box, "width"), h = num(box, "height");
+    const cw = (w - gap * (cols - 1)) / cols, ch = (h - gap * (rows - 1)) / rows;
+    if (!(cw > 0 && ch > 0)) return;
+    const r = (v) => String(+v.toFixed(2));
+    this.change(() => {
+      const cells = [];
+      for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++) {
+        const cell = box.cloneNode(false);
+        cell.removeAttribute("id");
+        cell.setAttribute("x", r(x + j * (cw + gap))); cell.setAttribute("y", r(y + i * (ch + gap)));
+        cell.setAttribute("width", r(cw)); cell.setAttribute("height", r(ch));
+        box.before(cell);
+        cells.push(cell);
+      }
+      box.remove();
+      this.selection = cells;
+    });
+  }
+
+  /** The smallest layout box around the centre of the given slide box. */
+  layoutBoxAt(b) {
+    if (!b) return null;
+    const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+    let best = null;
+    for (const el of this.children()) {
+      if (!isLayout(el) || this.selection.includes(el)) continue;
+      const f = rootBox(el, this.svg);
+      if (!f || cx < f.x || cx > f.x + f.width || cy < f.y || cy > f.y + f.height) continue;
+      if (!best || f.width * f.height < best.box.width * best.box.height) best = { el, box: f };
+    }
+    return best;
+  }
+
+  /** Whether Fit has something to do: a selected object lies in a layout box. */
+  canFitToLayout() {
+    return this.selection.some((el) => !isLayout(el) && this.layoutBoxAt(rootBox(el, this.svg)));
+  }
+
+  /** Scale each selected object, keeping its proportions, to the largest
+   *  size that fits the layout box it lies in, and centre it there. Text
+   *  keeps its size and is only centred. One undo step. */
+  fitToLayout() {
+    const all = [...this.selection];
+    this.change(() => {
+      for (const el of all) {
+        if (isLayout(el)) continue;
+        const b = rootBox(el, this.svg), hit = this.layoutBoxAt(b);
+        if (!hit || !(b.width > 0 && b.height > 0)) continue;
+        const f = hit.box, k = el.localName === "text" ? 1 : Math.min(f.width / b.width, f.height / b.height);
+        const width = b.width * k, height = b.height * k;
+        this.selection = [el];
+        this.setSelectionGeometry({ x: f.x + (f.width - width) / 2, y: f.y + (f.height - height) / 2, width, height });
+      }
+      this.selection = all;
+    });
+  }
+
   /** Put a new object into the current group, keeping the slide coordinates
    *  it was drawn in even if the group is moved or scaled. */
   adopt(el) {
-    this.context.appendChild(el);
+    if (isLayout(el)) {
+      // Behind the artwork (after the backdrop and any earlier boxes), so a
+      // box never covers what is laid out in it.
+      const first = Array.from(this.context.children).find((c) => !SKIP.has(c.localName) &&
+        c.getAttribute("data-locked") !== "true" && !isLayout(c));
+      this.context.insertBefore(el, first || null);
+    } else this.context.appendChild(el);
     if (this.context !== this.svg) setTransform(el, toRoot(this.context, this.svg).inverse());
     return el;
   }
 
   newShape(shape) {
+    if (shape === "layout") return this.newLayoutBox();
     const style = this.hooks.shapeStyle();
     const tag = { rect: "rect", ellipse: "ellipse", circle: "circle", polygon: "polygon", bezier: "path", line: "line", arrow: "line" }[shape];
     const el = document.createElementNS(SVGNS, tag);
@@ -1930,7 +2037,7 @@ export class SlideEditor {
       }).join(" "));
     } else if (shape === "circle") {
       el.setAttribute("cx", r(x + w / 2)); el.setAttribute("cy", r(y + h / 2)); el.setAttribute("r", r(w / 2));
-    } else if (shape === "rect") {
+    } else if (shape === "rect" || shape === "layout") {
       el.setAttribute("x", r(x)); el.setAttribute("y", r(y)); el.setAttribute("width", r(w)); el.setAttribute("height", r(h));
     } else {
       el.setAttribute("cx", r(x + w / 2)); el.setAttribute("cy", r(y + h / 2));
@@ -2034,7 +2141,7 @@ export class SlideEditor {
           this.endTextEdit(true);
           if (target.parentNode !== this.context) this.context = target.parentNode;
           this.select([target]);
-          this.editText(target, false);
+          this.editText(target, false, g.client);
           this.hooks.toolDone?.(this.input);
           return;
         }
@@ -2064,7 +2171,7 @@ export class SlideEditor {
     if (!last || now - last.t > DOUBLE_TAP_MS || Math.hypot(e.clientX - last.x, e.clientY - last.y) > 24) return;
     this.lastTap = null;
     if (!el) { this.exitGroup(); return; }
-    if (el.localName === "text") this.editText(el, false);
+    if (el.localName === "text") this.editText(el, false, { x: e.clientX, y: e.clientY });
     else if (el.localName === "g" || el.localName === "a") this.enterGroup(el);
   }
 
@@ -2215,8 +2322,9 @@ export class SlideEditor {
   }
 
   /** Edit a text in place. Formatting (bold words, colours, fonts) is kept,
-   *  and can be changed on selected words with formatText(). */
-  editText(t, isNew) {
+   *  and can be changed on selected words with formatText(). The caret goes
+   *  where the text was tapped (`at`, in client pixels), else to the end. */
+  editText(t, isNew, at = null) {
     this.endTextEdit(true);
     this.begin();
     const glyph = firstGlyphElement(t);
@@ -2261,9 +2369,12 @@ export class SlideEditor {
     this.positionTextEdit();
     box.focus();
     try { document.execCommand("styleWithCSS", false, true); } catch (e) { /* old engines: <b> tags, read the same */ }
-    const range = document.createRange();
-    range.selectNodeContents(box);
-    range.collapse(false);
+    let range = at ? caretAt(at.x, at.y) : null;
+    if (!range || !box.contains(range.startContainer)) {
+      range = document.createRange();
+      range.selectNodeContents(box);
+      range.collapse(false);
+    }
     getSelection().removeAllRanges();
     getSelection().addRange(range);
     this.drawOverlay();
@@ -2647,12 +2758,22 @@ export class SlideEditor {
     this.selection = saved;
   }
 
-  /** Line objects up by their edges or centres: several objects with each
-   *  other, a single one with the slide. */
-  align(how, toSlide = false) {
+  /** What Align lines objects up with: "selection" is the box around all of
+   *  them, "first" the object picked first (it stays put), "slide" the slide.
+   *  A single object always aligns with the slide. */
+  alignBox(ref = "selection") {
+    const boxes = this.selection.map((el) => rootBox(el, this.svg)).filter(Boolean);
+    if (!boxes.length) return null;
+    if (boxes.length === 1 || ref === "slide") return { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+    return ref === "first" ? boxes[0] : unionBox(boxes);
+  }
+
+  /** Line objects up by their edges or centres, with alignBox(ref). */
+  align(how, ref = "selection") {
+    if (ref === true) ref = "slide";
     const items = this.selection.map((el) => ({ el, b: rootBox(el, this.svg) })).filter((i) => i.b);
-    if (!items.length) return;
-    const r = items.length > 1 && !toSlide ? unionBox(items.map((i) => i.b)) : { x: 0, y: 0, width: this.size[0], height: this.size[1] };
+    const r = this.alignBox(ref || "selection");
+    if (!r) return;
     this.change(() => {
       for (const { el, b } of items) {
         const dx = { left: r.x - b.x, centre: r.x + r.width / 2 - b.x - b.width / 2, right: r.x + r.width - b.x - b.width }[how] ?? 0;

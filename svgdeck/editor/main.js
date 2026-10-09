@@ -1,5 +1,5 @@
 // svgdeck editor: deck state, saving, undo, slide strip, toolbar, properties.
-import { SlideEditor, firstGlyphElement, cssFamily } from "./canvas.js";
+import { SlideEditor, firstGlyphElement, cssFamily, isLayout } from "./canvas.js";
 import { prefixIds, toHex } from "./geom.js";
 import { Controller, DEFAULT_BINDINGS, TOOL_NAMES, actionGroups, actionLabel, inputLabel } from "./inputs.js";
 import { installNotes } from "./notes.js";
@@ -27,10 +27,11 @@ const TOOLS = [
   ["nodes", "Edit points (N)", "M4 18L8 5l12 5M6 3h4v4H6zM18 8h4v4h-4zM2 16h4v4H2z"],
   ["line", "Line (L)", "M5 19L19 5"],
   ["arrow", "Arrow (A)", "M5 19L19 5M11 5h8v8"],
+  ["layout", "Layout box (F)", "M4 9V6h3M10 6h4M17 6h3v3M20 11v2M20 15v3h-3M14 18h-4M7 18H4v-3M4 13v-2"],
   ["pen", "Draw (P)", "M4 20c3-1 4-5 7-8s5-6 9-8M16 4l4 4"],
   ["erase", "Erase (X)", "M15 4l5 5-10 10H6l-3-3zM9 10l5 5M10 19h10"],
 ];
-const KEYS = { c: "circle", g: "polygon", b: "bezier", n: "nodes", v: "select", h: "pan", t: "text", r: "rect", e: "ellipse", l: "line", a: "arrow", p: "pen", x: "erase" };
+const KEYS = { c: "circle", g: "polygon", b: "bezier", n: "nodes", v: "select", h: "pan", t: "text", r: "rect", f: "layout", e: "ellipse", l: "line", a: "arrow", p: "pen", x: "erase" };
 
 const api = {
   async json(method, url, body) {
@@ -584,7 +585,7 @@ const TOOL = Object.fromEntries(TOOLS.map(([id, title, path]) =>
   [id, { title, path, name: title.split(" (")[0], key: /\((\w)\)$/.exec(title)?.[1] || "" }]));
 // Families share one rail slot and open a flyout; the slot shows the member used last.
 const FAMILIES = {
-  shapes: { name: "Shapes", tools: ["rect", "ellipse", "circle", "polygon", "line", "arrow"] },
+  shapes: { name: "Shapes", tools: ["rect", "ellipse", "circle", "polygon", "line", "arrow", "layout"] },
   paths: { name: "Path", tools: ["bezier", "nodes"] },
 };
 const RAIL = ["select", "pan", "pen", "erase", null, "shapes", "paths", null, "text", "media"];
@@ -721,7 +722,9 @@ function buildViewBar() {
     toggle("snap", "Snap", "M6 15l-4-4 7-7a7.8 7.8 0 0 1 11 11l-7 7-4-4 6.4-6.4a2.1 2.1 0 0 0-3-3z", "Snap objects to the grid",
       () => setGrid({ snap: !state.prefs.grid.snap })),
     toggle("smart-guides", "Guides", "M12 2v20M2 12h20", "Snap moved objects to edges, centres and equal gaps; hold Alt to bypass",
-      () => setGuides(!editor.smartSnap)));
+      () => setGuides(!editor.smartSnap)),
+    toggle("axis-lock", "Axis", "M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4", "Move objects straight across or straight up and down only (same as holding Shift)",
+      () => { editor.axisLock = !editor.axisLock; paintViewBar(); }));
   paintViewBar();
 }
 
@@ -729,6 +732,7 @@ function paintViewBar() {
   $("grid").setAttribute("aria-pressed", String(!!state.prefs.grid.show));
   $("snap").setAttribute("aria-pressed", String(!!state.prefs.grid.snap));
   $("smart-guides").setAttribute("aria-pressed", String(!!editor.smartSnap));
+  $("axis-lock").setAttribute("aria-pressed", String(!!editor.axisLock));
   // Select shows which mode it is in.
   const select = document.querySelector('#tools [data-tool="select"]');
   if (select) {
@@ -919,6 +923,13 @@ const ALIGN = [
   ["bottom", "Align bottom edges", "M2 20h20M6 4h4v12H6zM14 8h4v8h-4z"],
 ];
 let alignOpen = false;
+// What several objects line up with; the canvas outlines it in purple.
+let alignRef = "selection";
+const ALIGN_REFS = [
+  ["selection", "Each other", "Line up within the box around the selected objects"],
+  ["first", "First picked", "Line up with the object you selected first; it stays where it is"],
+  ["slide", "Slide", "Line up with the slide"],
+];
 
 /** A bar button. With an icon and no text, the title is its name. */
 function barButton(label, title, fn, { on, id, path, chip, cls, disabled } = {}) {
@@ -937,11 +948,15 @@ function selectionKind(sel) {
   if (sel.length > 1) return `${sel.length} objects`;
   const first = sel[0];
   if (first.hasAttribute("data-video")) return "Movie";
+  if (isLayout(first)) return "Layout box";
   if (first.getAttribute("data-ink") === "pressure") return "Ink stroke";
   if (["line", "path", "polyline"].includes(first.localName) && editor.hasArrow(first, "end")) return "Arrow";
   return { text: "Text", rect: "Rectangle", ellipse: "Ellipse", circle: "Circle", line: "Line", path: "Path", polygon: "Polygon",
     polyline: "Line", image: "Image", g: "Group", use: "Clone" }[first.localName] || first.localName;
 }
+
+// What Split makes of a layout box; kept between boxes.
+const layoutGrid = { rows: 2, cols: 2, gap: 40 };
 
 function selBarItems() {
   const sel = editor.selection;
@@ -971,7 +986,10 @@ function selBarItems() {
   }, { id: "object-actions", path: "M5 12h.01M12 12h.01M19 12h.01", cls: "dots" });
   more.setAttribute("aria-haspopup", "menu");
   more.setAttribute("aria-expanded", String(!!contextMenu));
-  const tail = [barSep(), alignBtn, more];
+  const fit = editor.canFitToLayout()
+    ? [barButton("Fit to box", "Fill the layout box around it, keeping its proportions, and centre it there (text is only centred)",
+      () => editor.fitToLayout(), { id: "fit-layout" }), barSep()] : [];
+  const tail = [barSep(), ...fit, alignBtn, more];
 
   // Point editing takes over the bar while a shape shows its points.
   const model = editor.usesTool("nodes") && sel.length === 1 && editor.nodeModel(first);
@@ -1007,6 +1025,14 @@ function selBarItems() {
   if (sel.length > 1) {
     return [kind, [barButton("Group", "Group (Ctrl+G)", () => { setTool("select"); editor.group(); }, { id: "group-selection" }), ...tail]];
   }
+  if (isLayout(first)) {
+    // Rows, columns and gap are in a row of their own (drawSelBar), so the bar stays narrow.
+    const { rows, cols } = layoutGrid;
+    return [kind, [
+      barButton(`Split ${rows} × ${cols}`, "Replace this box by a grid of equal boxes that fills it",
+        () => editor.splitLayout(layoutGrid.rows, layoutGrid.cols, layoutGrid.gap), { id: "split-layout", on: true, disabled: rows * cols < 2 }),
+      ...tail]];
+  }
   const cs = getComputedStyle(lookOf(first));
   if (first.localName === "text") {
     const glyphs = firstGlyphElement(first);
@@ -1020,6 +1046,8 @@ function selBarItems() {
     const weight = parseInt(tcs.fontWeight, 10) || 400;
     const underlined = editor.lookAt(glyphs, first).decoration.includes("underline");
     return [kind, [
+      barButton("Edit", "Edit the text (double-tap)", () => editor.editText(first, false), { id: "edit-text" }),
+      barSep(),
       barButton(tcs.fontFamily.split(",")[0].replace(/['"]/g, "").trim(), "Font", () => showInspector("design")),
       barSep(),
       barButton("−", "Smaller text", () => setSize(size - 2)),
@@ -1089,24 +1117,42 @@ function updateSelBar() {
 function drawSelBar() {
   const bar = $("sel-bar");
   const items = editor.svg ? selBarItems() : null;
-  if (!items) { bar.hidden = true; alignOpen = false; return; }
+  if (!items) {
+    bar.hidden = true; alignOpen = false;
+    if (editor.alignRef) { editor.alignRef = null; editor.drawOverlay(); }
+    return;
+  }
   const [kind, buttons] = items;
   $("sel-row").replaceChildren(el("span", { class: "sel-kind" }, kind), ...buttons);
   const alignRow = $("align-row");
   const sel = editor.selection;
   alignRow.hidden = !(alignOpen && sel.length && !editor.textEdit);
+  // The canvas outlines what Align lines up with for as long as the row is open.
+  const ref = alignRow.hidden ? null : sel.length === 1 ? "slide" : alignRef;
+  if (editor.alignRef !== ref) { editor.alignRef = ref; editor.drawOverlay(); }
   if (!alignRow.hidden) {
-    const toSlide = sel.length === 1 || editor.alignToSlide;
+    const refButton = ([id, label, title]) => barButton(label, title, () => { alignRef = id; updateSelBar(); }, { on: ref === id });
     alignRow.replaceChildren(
-      ...ALIGN.map(([how, title, path]) => barButton("", title, () => editor.align(how, toSlide), { path })),
+      ...ALIGN.map(([how, title, path]) => barButton("", title, () => { editor.align(how, ref); editor.drawOverlay(); }, { path })),
       ...(sel.length > 2 ? [barSep(),
         barButton("Across", "Space evenly left to right", () => editor.distribute("x")),
         barButton("Down", "Space evenly top to bottom", () => editor.distribute("y"))] : []),
       barSep(),
-      sel.length > 1
-        ? barButton(toSlide ? "to slide" : "to selection", "Align to the slide or to the selection's bounds",
-          () => { editor.alignToSlide = !editor.alignToSlide; updateSelBar(); })
-        : el("span", { class: "note" }, "to slide"));
+      el("span", { class: "note" }, sel.length > 1 ? "with" : "with the slide"),
+      ...(sel.length > 1 ? ALIGN_REFS.map(refButton) : []));
+  }
+  const layoutRow = $("layout-row");
+  layoutRow.hidden = !(alignRow.hidden && sel.length === 1 && isLayout(sel[0]) && !editor.textEdit);
+  if (!layoutRow.hidden) {
+    const stepper = (key, label, title, step, min) => [
+      el("span", { class: "note" }, label),
+      barButton("−", `Fewer: ${title}`, () => { layoutGrid[key] = Math.max(min, layoutGrid[key] - step); updateSelBar(); }),
+      el("span", { class: "note size", id: `layout-${key}`, title }, String(layoutGrid[key])),
+      barButton("+", `More: ${title}`, () => { layoutGrid[key] += step; updateSelBar(); })];
+    layoutRow.replaceChildren(
+      ...stepper("rows", "Rows", "rows", 1, 1), barSep(),
+      ...stepper("cols", "Cols", "columns", 1, 1), barSep(),
+      ...stepper("gap", "Gap", "space between the boxes, in slide pixels", 10, 0));
   }
   bar.hidden = false;
   placeSelBar();
@@ -1701,6 +1747,14 @@ function drawPanel() {
   }
 
   const first = sel[0];
+  if (sel.every(isLayout)) {
+    // A layout box has a place and a size, and no look of its own.
+    parts.unshift(heading(sel.length > 1 ? `${sel.length} layout boxes` : "Layout box", "Shown only while editing, never in the presentation or the PDF"));
+    parts.push(positionSection());
+    parts.push(el("p", { class: "hint" }, "Objects snap to a box's edges and centre. Select an object lying in a box and choose Fit to box to fill it."));
+    panel.replaceChildren(...parts.filter(Boolean));
+    return;
+  }
   const cs = getComputedStyle(lookOf(first));
   const kinds = new Set(sel.map((e) => e.localName));
   const isMovie = sel.length === 1 && first.hasAttribute("data-video");
