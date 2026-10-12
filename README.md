@@ -249,8 +249,9 @@ The editor is laid out for an iPad in landscape:
   editing, the selection bar makes selected words bold, italic, underlined or
   sub/superscript, and the Design tab gives them another colour.
 - Choose **Pan** to drag the page without changing objects; tap an object to
-  select it, or empty space to clear selection. Shift-tap or **Several** toggles
-  objects in the selection. Drags preserve selection, even over objects. Choose **Select**
+  select it, or empty space to clear selection. Double-tap another object to add
+  it to the selection (or a selected one to take it out); Shift-tap or
+  **Several** does the same with single taps. Drags preserve selection, even over objects. Choose **Select**
   to move objects, or a drawing tool to draw. Two fingers drag to pan or pinch
   to zoom in any tool; a brief two-finger tap opens the actions menu. Touches
   while the Pencil is down are ignored as palm contact.

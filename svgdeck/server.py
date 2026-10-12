@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import importlib
 import json
+import re
 import shutil
 import tempfile
 from importlib import resources
@@ -179,7 +180,12 @@ def create_app(data: Path) -> FastAPI:
         target = (root / path).resolve()
         if not target.is_relative_to(root) or not target.is_file():
             raise HTTPException(404)
-        return FileResponse(target)
+        # Uploaded media carry a hash of their content in the name and never
+        # change. Without this a file added a moment ago counts as stale, and
+        # WebKit downloads it again for every element that shows it.
+        hashed = path.startswith(("media/", "fonts/")) and re.search(r"-[0-9a-f]{8,16}(\.poster)?\.[^./]+$", path)
+        cache = "public, max-age=31536000, immutable" if hashed else "max-age=300"
+        return FileResponse(target, headers={"Cache-Control": cache})
 
     # --- API: decks -------------------------------------------------------------
     @app.get("/api/decks")

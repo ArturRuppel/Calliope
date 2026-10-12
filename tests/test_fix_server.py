@@ -319,3 +319,18 @@ def test_list_decks_endpoint_still_lists(api):
     client, _, _, _ = api
     decks = client.get("/api/decks").json()
     assert [d["name"] for d in decks] == ["talk"] and decks[0]["slides"] == 2
+
+
+def test_uploaded_media_are_cached_for_good(tmp_path):
+    """A hashed name never changes its content. Without a lifetime a file
+    added a moment ago is stale at once and WebKit keeps downloading it."""
+    from fastapi.testclient import TestClient
+    from svgdeck.server import create_app
+    data, root, _ = make_store(tmp_path)
+    (root / "media" / "image-0edd4764.png").write_bytes(b"x")
+    (root / "media" / "clip-0edd4764.poster.jpg").write_bytes(b"x")
+    (root / "media" / "by-hand.png").write_bytes(b"x")
+    client = TestClient(create_app(data))
+    for name in ("image-0edd4764.png", "clip-0edd4764.poster.jpg"):
+        assert "immutable" in client.get(f"/d/talk/media/{name}").headers["cache-control"]
+    assert client.get("/d/talk/media/by-hand.png").headers["cache-control"] == "max-age=300"

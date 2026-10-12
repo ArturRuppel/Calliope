@@ -24,8 +24,12 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; background: var(--color-bg); overscroll-behavior: none; }
 body { display: grid; grid-template-rows: var(--bar-h) 1fr; height: 100dvh; -webkit-user-select: none; user-select: none; }
+/* The browser's own touch gestures stay out of the way: no double-tap zoom,
+   no long-press callout or loupe, no grey flash on taps. */
+html { touch-action: manipulation; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%; }
 /* Fields stay selectable, or iPadOS offers no Copy and Paste in them. */
-input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
+input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; }
 button, input, select, textarea { font: inherit; color: inherit; }
 button { border-radius: 0; }
 :focus { outline: none; }

@@ -193,6 +193,7 @@ export class SlideEditor {
     this.palms = new Set();  // touches rejected as the hand holding the Pencil
     this.penUpAt = -Infinity;
     this.lastTap = null;
+    this.panTap = null;  // the last tap with the Pan tool, for its double tap
     this.textEdit = null;
     this.tx = null;      // the open undo step, { before }, or null
     this.txDepth = 0;    // change() calls in progress; the outermost commits
@@ -272,6 +273,7 @@ export class SlideEditor {
     this.nodeSel = null;
     this.lastTap = null;
     this.lastSegmentTap = null;
+    this.panTap = null;
     this.smartGuides = [];
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
     if (doc.querySelector("parsererror") || doc.documentElement.localName !== "svg") {
@@ -1693,6 +1695,7 @@ export class SlideEditor {
       if (!g.moved && g.selectOnTap &&
           Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) < (TAP_PX[g.pointerType] || TAP_PX.mouse)) return;
       g.moved = true;
+      this.panTap = null;
       this.clearLongPress();
       this.pan.x += e.clientX - g.last.x;
       this.pan.y += e.clientY - g.last.y;
@@ -2085,6 +2088,17 @@ export class SlideEditor {
         if (!g.selectOnTap || g.moved ||
             Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) >= (TAP_PX[g.pointerType] || TAP_PX.mouse)) return;
         const el = this.pickSelection({ target: g.target }, g.start);
+        // A second tap on the same object adds it to what was selected before
+        // the first one (or takes it out again); touch has no Shift.
+        const now = performance.now(), last = this.panTap;
+        this.panTap = { t: now, x: e.clientX, y: e.clientY, el, before: [...this.selection] };
+        if (el && last?.el === el && !g.additive && now - last.t <= DOUBLE_TAP_MS &&
+            Math.hypot(e.clientX - last.x, e.clientY - last.y) <= 24) {
+          this.panTap = null;
+          const before = last.before.filter((s) => this.svg.contains(s));
+          this.select(before.includes(el) ? before.filter((s) => s !== el) : [...before, el]);
+          return;
+        }
         if (g.additive) {
           if (el) this.select(this.selection.includes(el)
             ? this.selection.filter(s => s !== el) : [...this.selection, el]);

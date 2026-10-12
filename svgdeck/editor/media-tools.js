@@ -112,8 +112,10 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     if (now && now !== original.clipId && clipUsers(now).every((user) => user === media)) {
       editor.svg.querySelector(`#${CSS.escape(now)}`)?.remove();
     }
-    for (const attribute of [...media.attributes]) media.removeAttribute(attribute.name);
-    for (const [name, value] of original.attrs) media.setAttribute(name, value);
+    // Touch only what changed: rewriting href makes WebKit load the picture again.
+    const kept = new Map(original.attrs);
+    for (const attribute of [...media.attributes]) if (!kept.has(attribute.name)) media.removeAttribute(attribute.name);
+    for (const [name, value] of kept) if (media.getAttribute(name) !== value) media.setAttribute(name, value);
     if (original.clip) {
       const current = editor.svg.querySelector(`#${CSS.escape(original.clipId)}`);
       if (current) current.replaceWith(original.clip.cloneNode(true));
@@ -247,7 +249,9 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
     const matrix = toRoot(session.media, editor.svg);
     const href = session.media.getAttribute("href") ||
       session.media.getAttributeNS("http://www.w3.org/1999/xlink", "href") || "";
-    make("image", {
+    // One picture for the whole crop: a new element on every redraw is a new
+    // download in WebKit while the file is too fresh to be cached.
+    const ghost = {
       x: session.media.getAttribute("x") || 0,
       y: session.media.getAttribute("y") || 0,
       width: session.media.getAttribute("width") || 0,
@@ -257,7 +261,14 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
       transform: `matrix(${matrix.a} ${matrix.b} ${matrix.c} ${matrix.d} ${matrix.e} ${matrix.f})`,
       opacity: .38,
       "pointer-events": "none",
-    });
+    };
+    if (!session.ghost) session.ghost = make("image", ghost);
+    else {
+      for (const [name, value] of Object.entries(ghost)) {
+        if (session.ghost.getAttribute(name) !== String(value)) session.ghost.setAttribute(name, value);
+      }
+      o.appendChild(session.ghost);
+    }
     make("path", {
       d: `M0 0H${editor.size[0]}V${editor.size[1]}H0Z M${polygon.replaceAll(" ", "L")}Z`,
       class: "ov-crop-shade",

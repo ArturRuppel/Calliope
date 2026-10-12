@@ -626,7 +626,7 @@ function buildRail() {
       b.append(el("span", {}, "Media"));
     } else {
       b.dataset.tool = id;
-      b.title = TOOL[id].title + (id === "pan" ? "; Drag to pan · Tap to select" : "");
+      b.title = TOOL[id].title + (id === "pan" ? "; Drag to pan · Tap to select · Double-tap to add" : "");
       b.innerHTML = icon(TOOL[id].path);
       b.append(el("span", {}, TOOL[id].name));
     }
@@ -2483,6 +2483,18 @@ document.addEventListener("paste", e => {
 function clipboardText(data) {
   try { return data?.getData("image/svg+xml") || data?.getData("text/plain") || ""; } catch (err) { return ""; }
 }
+
+// Safari zooms the page on a pinch or a double tap and selects text on a long
+// press whatever the viewport says. Fields and the text being edited keep theirs.
+const nativeText = (e) => {
+  const at = e.target?.nodeType === 1 ? e.target : e.target?.parentElement;  // selectstart names a text node
+  return !!at?.closest("input, textarea, select, [contenteditable]");
+};
+for (const type of ["gesturestart", "gesturechange", "gestureend"]) {
+  document.addEventListener(type, (e) => e.preventDefault(), { passive: false });
+}
+document.addEventListener("dblclick", (e) => { if (!nativeText(e)) e.preventDefault(); });
+document.addEventListener("selectstart", (e) => { if (!nativeText(e)) e.preventDefault(); });
 
 // Where keyboard paste puts objects: under the mouse when it is over the
 // slide, otherwise the middle of what is visible.

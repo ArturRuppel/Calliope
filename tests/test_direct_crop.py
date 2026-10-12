@@ -99,3 +99,21 @@ def test_clip_without_our_marker_is_never_rewritten(page, server):
     assert 'imported clip path' in page.locator('#toast').text_content()
     assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#imported').outerHTML") == \
         '<clipPath id="imported"><circle cx="50" cy="50" r="40"></circle></clipPath>'
+
+
+def test_crop_keeps_one_ghost_picture_and_never_rewrites_href(page, server):
+    """WebKit downloads a freshly added picture again for every new <image>
+    and for every write to href, so the crop must do neither."""
+    add_image(page)
+    page.evaluate("""() => { const i=svgdeckEditor.editor.svg.querySelector('#cropme'); window.hrefWrites=0;
+      new MutationObserver((records) => { window.hrefWrites += records.length; }).observe(i, {attributes:true, attributeFilter:['href']});
+      window.ghost=svgdeckEditor.editor.overlay.querySelector('image'); }""")
+    box = handle(page, "w").bounding_box()
+    page.mouse.move(box["x"] + box["width"]/2, box["y"] + box["height"]/2)
+    page.mouse.down(); page.mouse.move(box["x"] + 85, box["y"] + box["height"]/2, steps=6); page.mouse.up()
+    assert page.evaluate("svgdeckEditor.editor.overlay.querySelector('image') === window.ghost") is True
+    assert page.evaluate("svgdeckEditor.editor.overlay.querySelectorAll('image').length") == 1
+    page.keyboard.press("Escape")
+    assert page.evaluate("svgdeckEditor.editor.svg.querySelector('#cropme').hasAttribute('data-crop')") is False
+    assert page.evaluate("svgdeckEditor.editor.overlay.querySelectorAll('image').length") == 0
+    assert page.evaluate("new Promise((done) => setTimeout(() => done(window.hrefWrites)))") == 0

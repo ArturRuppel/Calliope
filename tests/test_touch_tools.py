@@ -359,3 +359,36 @@ def test_pan_real_touch_tap_selects_and_cancel_preserves_selection(page):
     touch(session, 'touchStart', [(1, x, y)])
     touch(session, 'touchCancel', [])
     assert page.evaluate('svgdeckEditor.editor.selection[0].getAttribute("x")') == '100'
+
+
+def test_pan_double_tap_adds_to_and_removes_from_the_selection(page):
+    add_rects(page, [[100, 100, 150, 150], [400, 100, 150, 150], [700, 100, 150, 150]])
+    pick_tool(page, 'pan')
+
+    def tap(sx, sy):
+        x, y = to_screen(page, sx, sy)
+        page.evaluate("""([x, y]) => {
+          const e = svgdeckEditor.editor;
+          const event = {pointerId:7, pointerType:'touch', isPrimary:true, clientX:x, clientY:y,
+            target:document.elementFromPoint(x,y), button:0, buttons:1, shiftKey:false, preventDefault(){}};
+          const capture = e.host.setPointerCapture;
+          e.host.setPointerCapture = () => {};
+          try { e.onDown(event); e.onUp({...event, buttons:0}); } finally { e.host.setPointerCapture = capture; }
+        }""", [x, y])
+
+    xs = lambda: page.evaluate('svgdeckEditor.editor.selection.map(el => el.getAttribute("x"))')
+    tap(175, 175)
+    assert xs() == ['100']
+    tap(475, 175); tap(475, 175)
+    assert xs() == ['100', '400']
+    tap(775, 175); tap(775, 175)
+    assert xs() == ['100', '400', '700']
+    # A double tap on a selected object takes it out again.
+    tap(475, 175); tap(475, 175)
+    assert xs() == ['100', '700']
+    # Two slow taps are two single taps.
+    tap(475, 175)
+    page.wait_for_timeout(450)
+    tap(475, 175)
+    assert xs() == ['400']
+    assert page.evaluate('!!svgdeckEditor.editor.gesture') is False
