@@ -108,3 +108,22 @@ def test_matte_frame_is_centred_and_covers_the_rest(tmp_path):
         assert clip(915, 305) == blank       # the mark beside the frame is covered
         assert clip(315, 105) != blank       # the one inside it shows
         browser.close()
+
+
+def test_dim_frame_leaves_its_surroundings_faintly_visible(tmp_path):
+    body = ('<rect id="out" x="700" y="300" width="50" height="50" fill="#f00"/>'
+            + FRAME.format(step=1, x=0, y=0, w=540, h=540).replace('data-camera="true"', 'data-camera="dim"'))
+    deck = write_deck(tmp_path / "deck", [("a", SLIDE.format(color="#ffffff", body=body))], {})
+    out = export(Deck.load(deck), tmp_path / "out")
+    with playwright.sync_playwright() as p:
+        browser = getattr(p, BROWSER).launch()
+        page = browser.new_page(viewport={"width": 960, "height": 540})
+        page.emulate_media(reduced_motion="reduce")
+        page.goto((out / "index.html").as_uri())
+        page.wait_for_function("document.querySelector('.svgdeck-ready')")
+        page.keyboard.press("ArrowRight")
+        assert box(page, ".svgdeck-matte") == [210, 0, 540, 540]     # centred like a matte frame
+        assert page.evaluate("getComputedStyle(document.querySelector('.svgdeck-matte')).opacity") == "0.75"
+        clip = lambda x, y: page.screenshot(clip={"x": x, "y": y, "width": 40, "height": 40})
+        assert clip(915, 305) != clip(800, 20)                       # the mark beside the frame still shows through
+        browser.close()

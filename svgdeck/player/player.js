@@ -226,7 +226,7 @@
     const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
     const left = Math.min(...xs), top = Math.min(...ys);
     return { step: parseInt(rect.getAttribute("data-step"), 10) || 0,
-      matte: rect.getAttribute("data-camera") === "matte",
+      matte: ["matte", "dim"].includes(rect.getAttribute("data-camera")) ? rect.getAttribute("data-camera") : null,
       x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
   }
 
@@ -455,12 +455,13 @@
     });
 
     // A matte frame shows nothing but itself: a box of its size whose shadow
-    // paints the rest of the slide in the deck's background.
+    // paints the rest of the slide in the deck's background. A dim frame does
+    // the same with a translucent cover, so its surroundings stay faintly there.
     for (const slide of slides) {
       for (const frame of slide.cameras) {
         if (!frame.matte) continue;
         frame.el = document.createElement("div");
-        frame.el.className = "svgdeck-matte";
+        frame.el.className = "svgdeck-matte" + (frame.matte === "dim" ? " svgdeck-matte-dim" : "");
         Object.assign(frame.el.style, { left: `${frame.x}px`, top: `${frame.y}px`, width: `${frame.width}px`,
           height: `${frame.height}px`, boxShadow: `0 0 0 ${4 * Math.max(size[0], size[1])}px ${deck.background || "#000"}` });
         slide.el.appendChild(frame.el);
