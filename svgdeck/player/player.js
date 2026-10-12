@@ -204,7 +204,29 @@
     const steps = Array.from(slide.querySelectorAll("[data-step]"));
     const maxStep = steps.reduce((m, el) => Math.max(m, parseInt(el.dataset.step, 10) || 0), 0);
     const stepVisibility = new Map(steps.map(el => [el, el.style.visibility]));
-    return { el: slide, videos, steps, maxStep, stepVisibility };
+    const cameras = Array.from(slide.querySelectorAll("rect[data-camera]")).map(cameraFrame)
+      .filter(Boolean).sort((a, b) => a.step - b.step);
+    return { el: slide, videos, steps, maxStep, stepVisibility, cameras };
+  }
+
+  // A camera frame is a hidden rectangle marked data-camera: from its step on
+  // the presentation shows that part of the slide, until the next frame.
+  // Returns its box in slide units, with the transforms above it applied.
+  function cameraFrame(rect) {
+    const num = (name) => parseFloat(rect.getAttribute(name)) || 0;
+    const w = num("width"), h = num("height");
+    if (!(w > 0 && h > 0)) return null;
+    let m = [1, 0, 0, 1, 0, 0];
+    for (let el = rect; el && !el.classList.contains("svgdeck-layer"); el = el.parentElement) {
+      m = multiply(parseTransform(el.getAttribute("transform")), m);
+    }
+    const x = num("x"), y = num("y");
+    const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]
+      .map(([px, py]) => [m[0] * px + m[2] * py + m[4], m[1] * px + m[3] * py + m[5]]);
+    const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
+    const left = Math.min(...xs), top = Math.min(...ys);
+    return { step: parseInt(rect.getAttribute("data-step"), 10) || 0,
+      x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
   }
 
   function failedSlide(index) {
@@ -214,7 +236,7 @@
     message.className = "svgdeck-error"; message.setAttribute("role", "alert");
     message.textContent = `Slide ${index + 1} could not be loaded`;
     el.append(message);
-    return { el, videos: [], steps: [], maxStep: 0, stepVisibility: new Map(), failed: true };
+    return { el, videos: [], steps: [], maxStep: 0, stepVisibility: new Map(), cameras: [], failed: true };
   }
 
   function makeVideo(image, size) {
@@ -605,6 +627,24 @@
       }
     }
 
+    // Zoom and pan the slide to the camera frame in force at this step (the
+    // last one at or before it); none shows the whole slide. The view never
+    // leaves the slide, so a frame of another shape shows more, not a margin.
+    const stillMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
+    function applyCamera(slide, step, glide) {
+      let frame = null;
+      for (const c of slide.cameras) if (c.step <= step) frame = c;
+      let k = 1, tx = 0, ty = 0;
+      if (frame) {
+        k = Math.max(1, Math.min(size[0] / frame.width, size[1] / frame.height));
+        const within = (v, total) => Math.min(0, Math.max(total * (1 - k), v));
+        tx = within(size[0] / 2 - k * (frame.x + frame.width / 2), size[0]);
+        ty = within(size[1] / 2 - k * (frame.y + frame.height / 2), size[1]);
+      }
+      slide.el.classList.toggle("svgdeck-camera-glide", !!glide && !stillMotion?.matches);
+      slide.el.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
+    }
+
     function show(index, step) {
       index = Math.max(0, Math.min(slides.length - 1, index));
       const slide = slides[index];
@@ -627,6 +667,8 @@
         }
         syncVideos(index);
       }
+      // Glide between the steps of one slide; a new slide starts in place.
+      if (slide.cameras.length) applyCamera(slide, step, index === state.index);
       state.index = index;
       state.step = step;
       counter.textContent = `${index+1} / ${slides.length}`;

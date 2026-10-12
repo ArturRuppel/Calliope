@@ -120,6 +120,24 @@ slide. Elements without `data-step` are visible from the start.
 The editor offers steps 0–999 (0 removes the attribute). Objects sharing a step
 appear together. Build previews use editor-only CSS outside the saved SVG.
 
+### Camera frames
+
+A hidden `<rect data-camera="true">` is a camera frame. From its `data-step`
+on (0 or absent: from the start of the slide) the presentation zooms and pans
+so that the frame fills the screen, and stays there until a frame with a later
+step takes over. A frame covering the whole slide zooms back out.
+
+```xml
+<rect data-layout="true" data-camera="true" data-label="Camera" data-step="1"
+      visibility="hidden" fill="none" stroke="none" x="90" y="120" width="820" height="440"/>
+```
+
+The frame keeps its own shape: the slide is scaled until the frame just fits,
+and the view never leaves the slide. Moves between steps of one slide glide
+(0.6 s, or at once with reduced motion); a new slide starts in place. Camera
+frames count as build steps. Stored as layout boxes they can be moved and
+resized in the editor. The PDF and the slide overview show the whole slide.
+
 ### Recovery files
 
 The service keeps up to 30 preceding artwork versions per slide in
