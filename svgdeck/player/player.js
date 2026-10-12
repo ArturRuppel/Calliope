@@ -226,6 +226,7 @@
     const xs = corners.map(c => c[0]), ys = corners.map(c => c[1]);
     const left = Math.min(...xs), top = Math.min(...ys);
     return { step: parseInt(rect.getAttribute("data-step"), 10) || 0,
+      matte: rect.getAttribute("data-camera") === "matte",
       x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
   }
 
@@ -453,6 +454,19 @@
       return slide;
     });
 
+    // A matte frame shows nothing but itself: a box of its size whose shadow
+    // paints the rest of the slide in the deck's background.
+    for (const slide of slides) {
+      for (const frame of slide.cameras) {
+        if (!frame.matte) continue;
+        frame.el = document.createElement("div");
+        frame.el.className = "svgdeck-matte";
+        Object.assign(frame.el.style, { left: `${frame.x}px`, top: `${frame.y}px`, width: `${frame.width}px`,
+          height: `${frame.height}px`, boxShadow: `0 0 0 ${4 * Math.max(size[0], size[1])}px ${deck.background || "#000"}` });
+        slide.el.appendChild(frame.el);
+      }
+    }
+
     const state = { index: -1, step: 0, blank: false };
     let mirrorStop = null;
     let overviewOpen = false, resumeVideos = [];
@@ -629,19 +643,22 @@
 
     // Zoom and pan the slide to the camera frame in force at this step (the
     // last one at or before it); none shows the whole slide. The view never
-    // leaves the slide, so a frame of another shape shows more, not a margin.
+    // leaves the slide, so a frame of another shape shows more, not a margin;
+    // a matte frame is centred instead, with everything around it covered.
     const stillMotion = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
     function applyCamera(slide, step, glide) {
       let frame = null;
       for (const c of slide.cameras) if (c.step <= step) frame = c;
       let k = 1, tx = 0, ty = 0;
       if (frame) {
-        k = Math.max(1, Math.min(size[0] / frame.width, size[1] / frame.height));
-        const within = (v, total) => Math.min(0, Math.max(total * (1 - k), v));
+        k = Math.min(size[0] / frame.width, size[1] / frame.height);
+        if (!frame.matte) k = Math.max(1, k);
+        const within = (v, total) => frame.matte ? v : Math.min(0, Math.max(total * (1 - k), v));
         tx = within(size[0] / 2 - k * (frame.x + frame.width / 2), size[0]);
         ty = within(size[1] / 2 - k * (frame.y + frame.height / 2), size[1]);
       }
       slide.el.classList.toggle("svgdeck-camera-glide", !!glide && !stillMotion?.matches);
+      for (const c of slide.cameras) c.el?.classList.toggle("svgdeck-matte-on", c === frame);
       slide.el.style.transform = `translate(${tx}px, ${ty}px) scale(${k})`;
     }
 

@@ -133,7 +133,9 @@ step takes over. A frame covering the whole slide zooms back out.
 ```
 
 The frame keeps its own shape: the slide is scaled until the frame just fits,
-and the view never leaves the slide. Moves between steps of one slide glide
+and the view never leaves the slide, so a frame of another shape than the
+screen shows some of what lies beside it. `data-camera="matte"` centres the
+frame instead and covers everything outside it in the deck's background. Moves between steps of one slide glide
 (0.6 s, or at once with reduced motion); a new slide starts in place. Camera
 frames count as build steps. Stored as layout boxes they can be moved and
 resized in the editor. The PDF and the slide overview show the whole slide.

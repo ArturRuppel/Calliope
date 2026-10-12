@@ -83,3 +83,28 @@ def test_camera_moves_glide_between_steps_only(tmp_path):
         assert page.evaluate(glides) is False
         assert box(page, ".svgdeck-current") == [0, 0, 1920, 1080]
         browser.close()
+
+
+def test_matte_frame_is_centred_and_covers_the_rest(tmp_path):
+    # A square frame in the left half: fitted by height, centred, and the mark right of it is covered.
+    body = ('<rect id="in" x="100" y="100" width="50" height="50" fill="#f00"/><rect id="out" x="700" y="300" width="50" height="50" fill="#f00"/>'
+            + FRAME.format(step=1, x=0, y=0, w=540, h=540).replace('data-camera="true"', 'data-camera="matte"'))
+    deck = write_deck(tmp_path / "deck", [("a", SLIDE.format(color="#ffffff", body=body))], {})
+    out = export(Deck.load(deck), tmp_path / "out")
+    with playwright.sync_playwright() as p:
+        browser = getattr(p, BROWSER).launch()
+        page = browser.new_page(viewport={"width": 960, "height": 540})
+        page.emulate_media(reduced_motion="reduce")
+        page.goto((out / "index.html").as_uri())
+        page.wait_for_function("document.querySelector('.svgdeck-ready')")
+        assert page.evaluate("getComputedStyle(document.querySelector('.svgdeck-matte')).opacity") == "0"
+        page.keyboard.press("ArrowRight")
+        # 540 slide units fill the 540 px screen height: the frame is 540 px wide, centred.
+        assert box(page, ".svgdeck-matte") == [210, 0, 540, 540]
+        assert box(page, "#s0-in") == [310, 100, 50, 50]
+        assert box(page, "#s0-out") == [910, 300, 50, 50]
+        clip = lambda x, y: page.screenshot(clip={"x": x, "y": y, "width": 40, "height": 40})
+        blank = clip(800, 20)
+        assert clip(915, 305) == blank       # the mark beside the frame is covered
+        assert clip(315, 105) != blank       # the one inside it shows
+        browser.close()
