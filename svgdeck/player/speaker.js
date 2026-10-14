@@ -22,12 +22,20 @@
       update();
       if (!applying && (speaker || linked)) send(speaker ? audience : (token ? window.opener : null), 'state', snapshot());
     });
+    // Zoom, marks and pointer follow at most once a frame.
+    let livePending = false;
+    root.addEventListener('svgdeck:live', () => {
+      if (applying || livePending || !(speaker || linked)) return;
+      livePending = true;
+      setTimeout(() => { livePending = false; send(speaker ? audience : (token ? window.opener : null), 'live', api.live); }, 16);
+    });
     window.addEventListener('message', e => {
       const expected = speaker ? audience : (token ? window.opener : null);
       if (!expected || e.source !== expected || (!opaqueOrigin && e.origin !== location.origin) || e.data?.svgdeck !== session) return;
-      if (e.data.type === 'ready' && speaker) { audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); return; }
+      if (e.data.type === 'ready' && speaker) { audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); send(audience, 'live', api.live); return; }
       // An audience window that is reused without reloading (same address) is asked to report in.
       if (e.data.type === 'hello' && !speaker) { send(window.opener, 'ready'); return; }
+      if (e.data.type === 'live') { api.setLive(e.data.value); return; }
       if (e.data.type !== 'state') return;
       const v = e.data.value;
       if (!v || !Number.isInteger(v.index) || !Number.isInteger(v.step) || typeof v.blank !== 'boolean') return;
@@ -36,6 +44,8 @@
       try { api.show(v.index, v.step); api.setBlank(v.blank); } finally { applying = false; }
       update();
     });
+    // True while this window is one of a synchronized speaker/audience pair.
+    api.paired = () => speaker ? !!audience && !audience.closed && audienceReady : linked;
     api.ready.then(() => { if (!speaker && token) send(window.opener, 'ready'); });
     if (!speaker) return;
 
@@ -59,6 +69,8 @@
     });
     button('Previous', api.prev); button('Next', api.next);
     const blank = button('Blank audience', () => api.setBlank(!api.state.blank));
+    const board = button('Board', () => api.setBoard(!api.live.board));
+    root.addEventListener('svgdeck:live', () => { board.textContent = api.live.board ? 'Back to slides' : 'Board'; });
     const status = document.createElement('p'); status.className = 'speaker-status'; status.setAttribute('role', 'status');
     refreshStatus = () => {
       const open = !!audience && !audience.closed;

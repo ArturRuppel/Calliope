@@ -56,6 +56,39 @@ def test_speaker_audience_sync_offline(player_page):
     audience.close()
 
 
+def test_zoom_marks_and_pointer_reach_the_audience(player_page):
+    page = player_page
+    page.get_by_role('button', name='Speaker view', exact=True).click()
+    page.wait_for_url('**/*speaker=1*')
+    page.wait_for_function('document.querySelector(".svgdeck-ready")')
+    with page.expect_popup() as popup:
+        page.get_by_role('button', name='Open audience window').click()
+    audience = popup.value
+    audience.wait_for_function('document.querySelector(".svgdeck-ready")')
+    page.wait_for_function('document.querySelector(".speaker-status").dataset.connected === "true"')
+    page.evaluate("""() => {
+      const pe = (type, id, x, y, pointerType) => svgdeck.dispatchEvent(new PointerEvent(type,
+        {pointerId: id, clientX: x, clientY: y, pointerType, isPrimary: true, bubbles: true, button: 0}));
+      pe('pointerdown', 7, 100, 100, 'pen'); pe('pointermove', 7, 200, 150, 'pen'); pe('pointerup', 7, 200, 150, 'pen');
+      svgdeck.svgdeck.setLive({...svgdeck.svgdeck.live, view: {k: 2, x: 100, y: 0}, pointer: [300, 300]});
+      svgdeck.dispatchEvent(new CustomEvent('svgdeck:live'));
+    }""")
+    audience.wait_for_function('svgdeck.svgdeck.live.view.k === 2 && svgdeck.svgdeck.live.pointer')
+    assert audience.evaluate('svgdeck.svgdeck.live') == page.evaluate('svgdeck.svgdeck.live')
+    assert audience.locator('.svgdeck-ink path').count() == 1
+    page.locator('.speaker-actions').get_by_role('button', name='Next', exact=True).click()
+    audience.wait_for_function('svgdeck.svgdeck.state.index === 1')
+    audience.wait_for_function('svgdeck.svgdeck.live.ink.length === 0 && svgdeck.svgdeck.live.view.k === 1')
+    page.wait_for_timeout(200)
+    assert page.evaluate('svgdeck.svgdeck.live.ink.length') == 0
+    page.locator('.speaker-actions').get_by_role('button', name='Board', exact=True).click()
+    audience.wait_for_function('svgdeck.svgdeck.live.board')
+    assert audience.locator('.svgdeck-board').is_visible() and audience.locator('.svgdeck-board-tools').count() == 0
+    page.locator('.speaker-actions').get_by_role('button', name='Back to slides', exact=True).click()
+    audience.wait_for_function('!svgdeck.svgdeck.live.board')
+    audience.close()
+
+
 def test_movie_crop_and_build_visibility_in_export(deck, tmp_path):
     from playwright.sync_api import sync_playwright
     from xml.etree import ElementTree as ET

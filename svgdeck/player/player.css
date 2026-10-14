@@ -1,6 +1,6 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .svgdeck { position: fixed; inset: 0; overflow: hidden; user-select: none; -webkit-user-select: none;
-  touch-action: none; cursor: default; }
+  -webkit-touch-callout: none; touch-action: none; cursor: default; }
 .svgdeck-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .svgdeck-stage { position: absolute; left: 50%; top: 50%; transform-origin: 50% 50%; overflow: hidden;
   visibility: hidden; }
@@ -20,6 +20,21 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .svgdeck-video { position: absolute; left: 0; top: 0; transform-origin: 0 0; object-fit: contain;
   pointer-events: none; }
 .svgdeck-blank .svgdeck-stage { visibility: hidden; }
+/* The speaker's marks and pointer, over the slide and zoomed with it. */
+.svgdeck-live { position: absolute; inset: 0; width: 100%; height: 100%; overflow: hidden; pointer-events: none; }
+.svgdeck-ink path { fill: none; stroke: #ffb300; opacity: .55; stroke-linecap: round; stroke-linejoin: round; }
+.svgdeck-board { display: none; }
+.svgdeck-board-on .svgdeck-board { display: inline; }
+.svgdeck-board-on .svgdeck-ink path { stroke: var(--svgdeck-board-ink, #fff); opacity: 1; }
+.svgdeck-board-tools { position: absolute; z-index: 10; top: max(12px, env(safe-area-inset-top)); right: 12px;
+  display: none; gap: 8px; }
+.svgdeck-board-on:not(.svgdeck-overview-open) .svgdeck-board-tools { display: flex; }
+.svgdeck-blank .svgdeck-board-tools { visibility: hidden; }
+.svgdeck-board-tools button { min-height: 44px; padding: 8px 12px; border: 2px solid rgba(236,236,239,.4); border-radius: 0;
+  background: #1e1e23; color: #ececef; font: 600 14px "Archivo", system-ui, sans-serif; cursor: pointer;
+  touch-action: manipulation; }
+.svgdeck-pointer { fill: #ff2a1f; stroke: #fff; stroke-width: 1.5; vector-effect: non-scaling-stroke;
+  filter: drop-shadow(0 0 5px #ff2a1f); }
 
 /* Controls: a small translucent pill, hidden while presenting. The chrome below uses the family's
    dark values as literals: an exported deck is one self-contained page with no shared sheet. */
@@ -109,7 +124,7 @@ html.svgdeck-print-document, html.svgdeck-print-document body { height:auto; ove
   @page { size:landscape; margin:0; }
   html, body { height:auto; overflow:visible; background:none; }
   .svgdeck:not(.svgdeck-print) { position:static; overflow:visible; background:none !important; }
-  .svgdeck:not(.svgdeck-print) .svgdeck-controls, .svgdeck-overview, .speaker-panel { display:none !important; }
+  .svgdeck:not(.svgdeck-print) .svgdeck-controls, .svgdeck-overview, .svgdeck-board-tools, .speaker-panel { display:none !important; }
   .svgdeck:not(.svgdeck-print) .svgdeck-stage { position:static; width:auto !important; height:auto !important;
     transform:none !important; visibility:visible !important; overflow:visible; }
   .svgdeck:not(.svgdeck-print) .svgdeck-slide { display:block; position:relative; inset:auto; margin:0 auto;
@@ -117,7 +132,7 @@ html.svgdeck-print-document, html.svgdeck-print-document body { height:auto; ove
     aspect-ratio:var(--svgdeck-aspect, 16 / 9); background:var(--svgdeck-background, #000);
     transform:none !important;
     container-type:inline-size; break-after:page; break-inside:avoid; page-break-after:always; }
-  .svgdeck-matte { display:none; }
+  .svgdeck-matte, .svgdeck-live { display:none; }
   .svgdeck:not(.svgdeck-print) .svgdeck-slide [data-step] { visibility:visible !important; }
   .svgdeck:not(.svgdeck-print) .svgdeck-error { font-size:2.9cqw; padding:0 4cqw; }
   .speaker-mode .svgdeck { right:auto; bottom:auto; }

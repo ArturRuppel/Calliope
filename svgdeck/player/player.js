@@ -469,6 +469,97 @@
     }
 
     const state = { index: -1, step: 0, blank: false };
+
+    // What the speaker does to a slide while showing it: a pinch zooms in, the
+    // Pencil marks, a held finger points. All in slide units, so a speaker and
+    // an audience window show the same; none of it outlasts the slide.
+    // The board is an empty page for questions: the Pencil writes on it with a
+    // thin pen, and what is written stays until wiped, through any slide.
+    const live = { view: { k: 1, x: 0, y: 0 }, pointer: null, ink: [], board: false };
+    let slideInk = live.ink, boardInk = [];  // live.ink is one of the two
+    const MAX_ZOOM = 8, INK_WIDTH = size[1] / 40, BOARD_WIDTH = size[1] / 240, POINTER_RADIUS = size[1] / 80;
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const liveLayer = document.createElementNS(SVGNS, "svg");
+    liveLayer.setAttribute("class", "svgdeck-live");
+    liveLayer.setAttribute("viewBox", `0 0 ${size[0]} ${size[1]}`);
+    liveLayer.setAttribute("aria-hidden", "true");
+    const boardPage = document.createElementNS(SVGNS, "rect");
+    boardPage.setAttribute("class", "svgdeck-board");
+    boardPage.setAttribute("width", size[0]); boardPage.setAttribute("height", size[1]);
+    boardPage.setAttribute("fill", deck.background || "#000");
+    {
+      // The pen is whichever of dark and light stands out from the page.
+      const probe = document.createElement("span");
+      probe.style.color = deck.background || "#000";
+      root.appendChild(probe);
+      const [r, g, b] = (getComputedStyle(probe).color.match(/[\d.]+/g) || [0, 0, 0]).map(Number);
+      probe.remove();
+      liveLayer.style.setProperty("--svgdeck-board-ink", 0.299 * r + 0.587 * g + 0.114 * b > 140 ? "#1c1b22" : "#fff");
+    }
+    const inkLayer = document.createElementNS(SVGNS, "g");
+    inkLayer.setAttribute("class", "svgdeck-ink");
+    const pointerDot = document.createElementNS(SVGNS, "circle");
+    pointerDot.setAttribute("class", "svgdeck-pointer");
+    liveLayer.append(boardPage, inkLayer, pointerDot);
+    stage.appendChild(liveLayer);
+    function renderInk() {
+      inkLayer.replaceChildren(...live.ink.map((stroke) => {
+        const path = document.createElementNS(SVGNS, "path");
+        let d = `M${stroke.d[0]} ${stroke.d[1]}`;
+        // A single point still draws: a zero-length line with round caps is a dot.
+        for (let i = stroke.d.length > 2 ? 2 : 0; i < stroke.d.length; i += 2) d += `L${stroke.d[i]} ${stroke.d[i + 1]}`;
+        path.setAttribute("d", d);
+        path.setAttribute("stroke-width", stroke.w);
+        return path;
+      }));
+    }
+    function renderPointer() {
+      pointerDot.style.display = live.pointer ? "" : "none";
+      if (!live.pointer) return;
+      pointerDot.setAttribute("cx", live.pointer[0]);
+      pointerDot.setAttribute("cy", live.pointer[1]);
+      pointerDot.setAttribute("r", POINTER_RADIUS / live.view.k);  // the same size on screen at any zoom
+    }
+    function renderLive() {
+      root.classList.toggle("svgdeck-board-on", live.board);
+      fit(); renderInk(); renderPointer();
+    }
+    const liveChanged = () => root.dispatchEvent(new CustomEvent("svgdeck:live"));
+    // Zoom k about the slide centre, then shift by (x, y) slide units; the slide always covers the stage.
+    function setView(k, x, y) {
+      k = clamp(k, 1, MAX_ZOOM);
+      const mx = size[0] * (k - 1) / 2, my = size[1] * (k - 1) / 2;
+      live.view = { k, x: clamp(x, -mx, mx), y: clamp(y, -my, my) };
+      fit(); renderPointer(); liveChanged();
+    }
+    function setPointer(point) { live.pointer = point; renderPointer(); liveChanged(); }
+    // Zoom, pointer and the marks on the slide go; what is on the board stays.
+    function clearLive() {
+      if (live.view.k === 1 && !live.pointer && (live.board || !live.ink.length)) return;
+      live.view = { k: 1, x: 0, y: 0 }; live.pointer = null;
+      if (!live.board) live.ink = slideInk = [];
+      renderLive(); liveChanged();
+    }
+    function setBoard(on) {
+      if (live.board === on) return;
+      live.board = on; live.ink = on ? boardInk : slideInk;
+      live.view = { k: 1, x: 0, y: 0 }; live.pointer = null;
+      renderLive(); liveChanged();
+    }
+    function boardUndo() { if (live.ink.pop()) { renderInk(); liveChanged(); } }
+    function boardWipe() { if (live.ink.length) { live.ink.length = 0; renderInk(); liveChanged(); } }
+    // The other window's zoom, marks and pointer (speaker.js); announces nothing back.
+    function setLive(v) {
+      const num = Number.isFinite;
+      if (!v || !v.view || ![v.view.k, v.view.x, v.view.y].every(num) || !Array.isArray(v.ink)) return;
+      live.view = { k: clamp(v.view.k, 1, MAX_ZOOM), x: v.view.x, y: v.view.y };
+      live.pointer = Array.isArray(v.pointer) && v.pointer.length === 2 && v.pointer.every(num) ? v.pointer : null;
+      live.board = v.board === true;
+      live.ink = v.ink.filter((stroke) => stroke && num(stroke.w) && Array.isArray(stroke.d) && stroke.d.length >= 2
+        && stroke.d.every(num)).map((stroke) => ({ w: stroke.w, d: stroke.d }));
+      if (live.board) boardInk = live.ink; else slideInk = live.ink;
+      renderLive();
+    }
     let mirrorStop = null;
     let overviewOpen = false, resumeVideos = [];
     const controls = document.createElement("nav");
@@ -482,6 +573,7 @@
       edit: "M4 20h4L19 9l-4-4L4 16zM13 7l4 4",
       fullscreen: "M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5",
       speaker: "M3 4h18v12H3zM8 21l4-5 4 5M7 8h10M7 12h6",
+      board: "M3 4h18v12H3zM12 16v4M8 20h8M7 12c2-5 4 2 6-2s3 1 4-1",
     };
     const iconSvg = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
     const button = (label, fn, parent = controls, iconName = null) => {
@@ -495,6 +587,7 @@
     button("Next", next, controls, "next");
     const overviewButton = button("Slide overview", () => setOverview(true), controls, "overview");
     overviewButton.setAttribute("aria-expanded", "false");
+    button("Board for questions", () => setBoard(!live.board), controls, "board");
     if (options.editorUrl) {
       const back = document.createElement("a"); back.innerHTML = iconSvg("edit");
       back.setAttribute("aria-label", "Back to editor"); back.title = "Back to editor";
@@ -509,6 +602,13 @@
       }, controls, "speaker");
     }
     root.append(controls);
+    // The board's own buttons, on the window the speaker draws in.
+    if (query.get("speaker") === "1" || !query.has("session")) {
+      const tools = document.createElement("div");
+      tools.className = "svgdeck-board-tools";
+      button("Undo", boardUndo, tools); button("Wipe", boardWipe, tools); button("Back to slides", () => setBoard(false), tools);
+      root.append(tools);
+    }
     let hideTimer = null;
     function revealControls(ms = 2500) {
       root.classList.add("svgdeck-show-controls");
@@ -528,7 +628,7 @@
     button("Return to presentation", () => setOverview(false), overview);
     const grid = document.createElement("div"); grid.className = "svgdeck-overview-grid"; overview.append(grid);
     const thumbnails = deck.slides.map((s,i) => {
-      const b = button("", () => { setOverview(false, i === state.index); setBlank(false); show(i,0); root.tabIndex = -1; root.focus(); }, grid);
+      const b = button("", () => { setOverview(false, i === state.index); setBlank(false); setBoard(false); show(i, slides[i].maxStep); root.tabIndex = -1; root.focus(); }, grid);
       b.setAttribute("aria-label", `Go to slide ${i+1}`);
       if (slides[i].failed) {
         const failed = document.createElement("span"); failed.className = "svgdeck-thumb-failed";
@@ -565,9 +665,10 @@
     }
 
 
+    const fitScale = () => Math.min(root.clientWidth / size[0], root.clientHeight / size[1]);
     function fit() {
-      const scale = Math.min(root.clientWidth / size[0], root.clientHeight / size[1]);
-      stage.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      const scale = fitScale(), { k, x, y } = live.view;
+      stage.style.transform = `translate(-50%, -50%) translate(${x * scale}px, ${y * scale}px) scale(${scale * k})`;
     }
 
     function load(video) {
@@ -669,6 +770,8 @@
       step = Math.max(0, Math.min(slide.maxStep, step));
       const previous = slides[state.index];
       if (index !== state.index) {
+        if (live.board) slideInk = [];
+        clearLive();
         const playing = new Map();
         if (previous) {
           for (const v of previous.videos) {
@@ -696,14 +799,15 @@
       root.dispatchEvent(new CustomEvent("svgdeck:change", { detail: { index, step } }));
     }
 
+    // With the board up, the slides under it stay where they are.
     function next() {
-      if (state.index < 0) return;
+      if (state.index < 0 || live.board) return;
       const slide = slides[state.index];
       if (state.step < slide.maxStep) show(state.index, state.step + 1);
       else if (state.index < slides.length - 1) show(state.index + 1, 0);
     }
     function prev() {
-      if (state.index < 0) return;
+      if (state.index < 0 || live.board) return;
       if (state.step > 0) show(state.index, state.step - 1);
       else if (state.index > 0) show(state.index - 1, slides[state.index - 1].maxStep);
     }
@@ -723,7 +827,10 @@
       if (e.target.closest("input,textarea,select,[contenteditable]")) return;
       if (e.altKey || e.ctrlKey || e.metaKey) return;
       // Escape only closes: clickers and leaving fullscreen send it too.
-      if (e.key === "Escape") { if (overviewOpen) { e.preventDefault(); setOverview(false); } return; }
+      if (e.key === "Escape") {
+        if (overviewOpen) { e.preventDefault(); setOverview(false); } else if (live.board) { e.preventDefault(); setBoard(false); }
+        return;
+      }
       if (e.key.toLowerCase() === "o") { e.preventDefault(); setOverview(!overviewOpen); return; }
       if (overviewOpen) {
         if (e.key === "Tab") {
@@ -746,6 +853,8 @@
         case "Home": show(0, 0); break;
         case "End": show(slides.length - 1, slides[slides.length - 1].maxStep); break;
         case "b": case "B": case ".": setBlank(!state.blank); break;
+        case "c": case "C": clearLive(); break;
+        case "w": case "W": setBoard(!live.board); break;
         case "f": case "F": toggleFullscreen(); break;
         default: typed = ""; return;
       }
@@ -753,21 +862,178 @@
       e.preventDefault();
     });
 
+    // A gamepad as a clicker (a Joy-Con, any controller), standard layout:
+    // A, RB, RT, D-pad right or down go on; B, LB, LT, D-pad left or up go
+    // back; Y blanks; X takes zoom, marks and pointer away; Start (+) shows or
+    // hides the board. Sticks are left out: a drifting one would turn slides.
+    const PAD_ACTIONS = new Map([
+      ...[0, 5, 7, 13, 15].map((i) => [i, next]), ...[1, 4, 6, 12, 14].map((i) => [i, prev]),
+      [3, () => setBlank(true)], [2, clearLive], [9, () => setBoard(!live.board)]]);
+    const padHeld = new Map();  // pad index -> Set of buttons held at the last poll
+    let padPolling = false;
+    function pollPads() {
+      const pads = [...navigator.getGamepads()].filter(Boolean);
+      for (const index of [...padHeld.keys()]) if (!pads.some((pad) => pad.index === index)) padHeld.delete(index);
+      if (!pads.length) { padPolling = false; return; }
+      // The speaker and audience windows can both see the pad, and one press
+      // must turn one slide: of a linked pair, only the focused window acts.
+      const active = !document.hidden && (document.hasFocus() || !root.svgdeck?.paired?.());
+      for (const pad of pads) {
+        const held = new Set();
+        pad.buttons.forEach((b, i) => { if (b.pressed || b.value > 0.5) held.add(i); });
+        const before = padHeld.get(pad.index) || new Set();
+        padHeld.set(pad.index, held);
+        if (!active || overviewOpen) continue;
+        for (const i of held) {
+          if (before.has(i) || !PAD_ACTIONS.has(i)) continue;
+          if (state.blank) setBlank(false); else PAD_ACTIONS.get(i)();
+        }
+      }
+      requestAnimationFrame(pollPads);
+    }
+    function startPads() {
+      if (padPolling || !navigator.getGamepads) return;
+      padPolling = true;
+      requestAnimationFrame(pollPads);
+    }
+    window.addEventListener("gamepadconnected", startPads);
+    startPads();
+
     function toggleFullscreen() {
       if (document.fullscreenElement) document.exitFullscreen();
       else if (root.requestFullscreen) root.requestFullscreen().catch(() => {});
     }
 
-    // One finger or button drives a gesture: [x, y, pointerId]. A second
-    // finger (a pinch, a resting palm) cancels it instead of advancing.
+    // One finger or button drives a gesture: [x, y, pointerId]. A tap or a
+    // swipe turns slides, as below. Beyond that: two fingers pinch to zoom and
+    // pan, one finger drags a zoomed slide, a finger held still becomes a
+    // pointer until it lifts, and the Pencil only marks (its tap wipes the marks).
     let touch = null, mouseTap = null, doubleAt = -Infinity, lastType = "mouse";
-    const DOUBLE_MS = 300;
+    const DOUBLE_MS = 300, HOLD_MS = 200, THREE_TAP_MS = 600, SLOP = 10;
+    const fingers = new Map();  // touch pointerId -> [clientX, clientY]
+    let gesture = null;         // {type: "pinch" | "pan" | "point" | "three" | "over", ...}
+    let pen = null;             // {id, start: [clientX, clientY], stroke}
+    let holdTimer = null;
+    const cancelHold = () => { clearTimeout(holdTimer); holdTimer = null; };
+    const round = (v) => Math.round(v * 10) / 10;
+    function toSlide(clientX, clientY) {
+      const r = stage.getBoundingClientRect();
+      return [round((clientX - r.left) / r.width * size[0]), round((clientY - r.top) / r.height * size[1])];
+    }
+    function pinchUpdate() {
+      const [a, b] = [...fingers.values()];
+      if (!b) return;
+      const d = Math.hypot(a[0] - b[0], a[1] - b[1]), m = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      if (!gesture.d0) { Object.assign(gesture, { d0: d || 1, m0: m, view0: live.view }); return; }
+      // The slide point under the fingers when they came down stays under them.
+      const r = root.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2, s = fitScale();
+      const { d0, m0, view0 } = gesture, k = clamp(view0.k * d / d0, 1, MAX_ZOOM);
+      const px = ((m0[0] - cx) / s - view0.x) / view0.k, py = ((m0[1] - cy) / s - view0.y) / view0.k;
+      setView(k, (m[0] - cx) / s - k * px, (m[1] - cy) / s - k * py);
+    }
     root.addEventListener("pointerdown", (e) => {
+      const chrome = e.target.closest(".svgdeck-controls,.svgdeck-overview,.svgdeck-board-tools") || overviewOpen;
+      if (e.pointerType === "pen") {
+        if (chrome) { touch = null; return; }
+        // The hand that holds the Pencil rests on the glass: drop its touches.
+        cancelHold(); fingers.clear(); gesture = null;
+        if (live.pointer) setPointer(null);
+        pen = { id: e.pointerId, start: [e.clientX, e.clientY], stroke: null };
+        touch = [e.clientX, e.clientY, e.pointerId];
+        return;
+      }
+      if (e.pointerType === "touch") {
+        if (pen) return;
+        if (e.isPrimary) { fingers.clear(); gesture = null; }  // a first finger: none from before can still be down
+        if (chrome) { touch = null; return; }
+        fingers.set(e.pointerId, [e.clientX, e.clientY]);
+        if (fingers.size > 1) {
+          touch = null; cancelHold();
+          if (live.pointer) setPointer(null);
+          if (fingers.size === 2) { gesture = { type: "pinch" }; pinchUpdate(); }
+          else if (fingers.size === 3) {
+            // Three fingers never land together: undo what the first two pinched meanwhile.
+            if (gesture?.view0) setView(gesture.view0.k, gesture.view0.x, gesture.view0.y);
+            gesture = { type: "three", at: performance.now(), from: new Map(fingers), moved: false };
+          } else if (gesture) gesture.moved = true;
+          return;
+        }
+        touch = [e.clientX, e.clientY, e.pointerId];
+        const id = e.pointerId;
+        cancelHold();
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          if (!touch || touch[2] !== id || !fingers.has(id) || state.blank) return;
+          touch = null; gesture = { type: "point" };
+          setPointer(toSlide(...fingers.get(id)));
+        }, HOLD_MS);
+        return;
+      }
       if (!e.isPrimary) { touch = null; return; }
-      touch = e.target.closest(".svgdeck-controls,.svgdeck-overview") || overviewOpen ? null : [e.clientX, e.clientY, e.pointerId];
+      touch = chrome ? null : [e.clientX, e.clientY, e.pointerId];
     });
+    root.addEventListener("pointermove", (e) => {
+      if (pen && e.pointerId === pen.id) {
+        if (!pen.stroke) {
+          if (Math.hypot(e.clientX - pen.start[0], e.clientY - pen.start[1]) < SLOP / 2 || state.blank) return;
+          touch = null;
+          // Finer when zoomed in, where the marks are finer too.
+          pen.stroke = { w: round((live.board ? BOARD_WIDTH : INK_WIDTH) / Math.sqrt(live.view.k)), d: toSlide(...pen.start) };
+          live.ink.push(pen.stroke);
+        }
+        const samples = e.getCoalescedEvents?.() || [];
+        for (const sample of samples.length ? samples : [e]) pen.stroke.d.push(...toSlide(sample.clientX, sample.clientY));
+        renderInk(); liveChanged();
+        return;
+      }
+      if (e.pointerType !== "touch" || !fingers.has(e.pointerId)) return;
+      fingers.set(e.pointerId, [e.clientX, e.clientY]);
+      if (!gesture && touch && Math.hypot(e.clientX - touch[0], e.clientY - touch[1]) > SLOP) {
+        cancelHold();
+        // Zoomed in, a drag moves the slide; a swipe turns slides again at full view.
+        if (live.view.k > 1) { gesture = { type: "pan", from: [touch[0], touch[1]], x0: live.view.x, y0: live.view.y }; touch = null; }
+      }
+      if (gesture?.type === "pinch") pinchUpdate();
+      else if (gesture?.type === "point") setPointer(toSlide(e.clientX, e.clientY));
+      else if (gesture?.type === "three") {
+        const from = gesture.from.get(e.pointerId);
+        if (from && Math.hypot(e.clientX - from[0], e.clientY - from[1]) > 2 * SLOP) gesture.moved = true;
+      } else if (gesture?.type === "pan") {
+        const s = fitScale();
+        setView(live.view.k, gesture.x0 + (e.clientX - gesture.from[0]) / s, gesture.y0 + (e.clientY - gesture.from[1]) / s);
+      }
+    });
+    // The end of a zoom, pan, pointer or Pencil gesture; true when the lift was part of one.
+    function release(e) {
+      if (pen && e.pointerId === pen.id) {
+        const drew = pen.stroke;
+        pen = null;
+        // A Pencil tap wipes the marks on a slide and never turns it; the board has its own Wipe.
+        if (!drew && e.type === "pointerup" && live.ink.length && touch && !live.board) { live.ink = []; renderInk(); liveChanged(); }
+        touch = null;
+        return true;
+      }
+      if (e.pointerType !== "touch" || !fingers.delete(e.pointerId)) return false;
+      cancelHold();
+      if (!gesture) return false;
+      if (gesture.type === "three") {
+        // A brief tap with three fingers opens the slide overview.
+        if (e.type !== "pointerup") gesture.moved = true;
+        if (fingers.size) return true;
+        const tap = !gesture.moved && performance.now() - gesture.at < THREE_TAP_MS;
+        gesture = null;
+        if (tap) setOverview(true);
+        return true;
+      }
+      if (gesture.type === "point") setPointer(null);
+      if (gesture.type === "pinch" && live.view.k < 1.05) setView(1, 0, 0);
+      // The fingers still down after a pinch do nothing more.
+      gesture = fingers.size ? { type: "over" } : null;
+      return true;
+    }
     root.addEventListener("pointerup", (e) => {
       lastType = e.pointerType;
+      if (release(e)) return;
       if (!touch || !e.isPrimary || e.pointerId !== touch[2]) return;
       const dx = e.clientX - touch[0], dy = e.clientY - touch[1];
       touch = null;
@@ -780,7 +1046,13 @@
           if (root.classList.contains("svgdeck-show-controls")) hideControls(); else revealControls(4000);
           return;
         }
-        if (e.pointerType !== "mouse") { next(); return; }  // touch and pen: every tap advances at once
+        // A finger's tap turns the slide at once: back in the left third, on
+        // elsewhere. Zoomed in, it turns nothing, so a stray tap keeps the view.
+        if (e.pointerType !== "mouse") {
+          const r = root.getBoundingClientRect();
+          if (live.view.k === 1 && !live.board) { if (e.clientX < r.left + r.width / 3) prev(); else next(); }
+          return;
+        }
         // A mouse click waits briefly: a second click is a double-click, which
         // goes fullscreen instead of advancing.
         if (mouseTap) {
@@ -792,10 +1064,10 @@
         mouseTap = setTimeout(() => { mouseTap = null; if (!overviewOpen) next(); }, DOUBLE_MS);
       }
     });
-    root.addEventListener("pointercancel", () => { touch = null; });
+    root.addEventListener("pointercancel", (e) => { release(e); touch = null; });
     root.addEventListener("dblclick", e => {
       // Fullscreen by double-click is for the mouse; touch never triggers it.
-      if (e.target.closest(".svgdeck-controls,.svgdeck-overview") || performance.now() - doubleAt < 1000 || lastType !== "mouse") return;
+      if (e.target.closest(".svgdeck-controls,.svgdeck-overview,.svgdeck-board-tools") || performance.now() - doubleAt < 1000 || lastType !== "mouse") return;
       toggleFullscreen();
     });
     window.addEventListener("resize", fit);
@@ -812,7 +1084,7 @@
       show(i, s);
     });
 
-    const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length };
+    const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length, live, setLive, clearLive, setBoard };
     root.svgdeck = api;
     window.SvgDeckSpeaker?.(root, deck, api, options, rewrite, parseSlide);
     return api;

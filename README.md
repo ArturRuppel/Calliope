@@ -322,7 +322,8 @@ overview, back to editor, full screen). They show for three seconds at the
 start and then hide; a mouse move, the Tab key, or on a touch screen a tap
 along the bottom edge brings them back. The idle mouse cursor hides too.
 Press **O** to toggle the overview (Escape only closes it, so a clicker's
-Escape cannot open it mid-talk); tap a thumbnail to jump to that slide.
+Escape cannot open it mid-talk); tap a thumbnail to jump to that slide,
+shown fully built.
 Overview pauses active movies until returning to the presentation. Only the
 current and neighbouring slides' movies stay loaded. Speaker notes are included
 in offline exports by default so speaker view works there; `--no-notes` omits
@@ -336,9 +337,31 @@ Its audience window displays only the presentation, with no speaker controls or 
 Arrows / space / page keys / click or swipe to move (`n`/`p` work too), a
 number then Enter to jump, `b` or `.` for a blank screen, `f` or a mouse
 double-click for full screen. A single mouse click advances after a short
-pause so a double-click never changes the slide; taps advance at once. The
+pause so a double-click never changes the slide; taps turn the slide at once:
+back in the left third of the screen, on elsewhere. The
 speaker window keeps its session in the address bar, so reloading it
 reconnects the audience window. The address bar shows `#slide.step`.
+
+On a touch screen, tap with three fingers to open the slide overview. Pinch to zoom into the slide (two fingers also move it,
+and so does one finger while it is zoomed in; pinch back out to the full
+slide); zoomed in, taps and swipes turn nothing. The Apple Pencil marks the
+slide like a highlighter; a Pencil tap wipes the marks and never turns the slide. A finger held still for a moment becomes a red pointer that
+follows it until it lifts. Zoom, marks and pointer show in the audience
+window too and are gone with the next slide; `c` clears them at once.
+
+**Board for questions.** `w`, the board button in the controls or **Board** in
+speaker view puts an empty page in the deck's background over the slides. The
+Pencil writes on it with a thin pen; zoom and the finger pointer work as on a
+slide. **Undo** takes the last stroke back and **Wipe** all of them. Slides do
+not turn while the board is up; Escape or **Back to slides** returns to the
+slide you left, and the drawing is still there when the board comes up again
+(until the page is reloaded).
+
+A game controller works as a clicker (a Joy-Con, any gamepad; press a button
+to connect it): A, RB, RT, D-pad right or down go on; B, LB, LT, D-pad left or
+up go back; Y blanks the screen and any of these buttons brings it back; X
+clears zoom, marks and pointer; Start (+) shows or hides the board. Sticks do nothing. With a speaker and an audience window open, the window that has
+focus takes the press.
 
 ### Printing and PDF
 
