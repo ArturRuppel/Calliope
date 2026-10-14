@@ -201,8 +201,9 @@
     }
 
     if (scoped.firstChild) defs.appendChild(scoped);
-    const steps = Array.from(slide.querySelectorAll("[data-step]"));
-    const maxStep = steps.reduce((m, el) => Math.max(m, parseInt(el.dataset.step, 10) || 0), 0);
+    // data-step="n" shows an element from click n on; data-step-out="n" hides it from click n on.
+    const steps = Array.from(slide.querySelectorAll("[data-step],[data-step-out]"));
+    const maxStep = steps.reduce((m, el) => Math.max(m, stepOf(el), stepOutOf(el) || 0), 0);
     const stepVisibility = new Map(steps.map(el => [el, el.style.visibility]));
     const cameras = Array.from(slide.querySelectorAll("rect[data-camera]")).map(cameraFrame)
       .filter(Boolean).sort((a, b) => a.step - b.step);
@@ -253,6 +254,7 @@
     video.dataset.autoplay = image.getAttribute("data-autoplay") !== "false" ? "true" : "false";
     if (image.hasAttribute("data-sync")) video.dataset.sync = image.getAttribute("data-sync");
     if (image.hasAttribute("data-step")) video.dataset.step = image.getAttribute("data-step");
+    if (image.hasAttribute("data-step-out")) video.dataset.stepOut = image.getAttribute("data-step-out");
     const poster = image.getAttribute("href") || image.getAttributeNS(XLINK, "href");
     if (poster) video.poster = poster;
     const num = (name) => parseFloat(image.getAttribute(name)) || 0;
@@ -300,6 +302,9 @@
   }
 
   const stepOf = (el) => parseInt(el.dataset.step, 10) || 0;
+  const stepOutOf = (el) => parseInt(el.dataset.stepOut, 10) || null;
+  // Whether an element with build steps is shown at `step`.
+  const shownAt = (el, step) => stepOf(el) <= step && !(stepOutOf(el) && stepOutOf(el) <= step);
 
   // Resolves once every <image> under `container` has loaded or failed, or
   // after `ms`: pages are printed only when their pictures are there.
@@ -365,13 +370,12 @@
       // state after each distinct step number.
       let states = [null];
       if (print.steps && !first.failed) {
-        states = [0, ...Array.from(new Set(first.steps.map(stepOf))).filter((n) => n > 0).sort((a, b) => a - b)];
+        states = [0, ...Array.from(new Set(first.steps.flatMap((el) => [stepOf(el), stepOutOf(el) || 0]))).filter((n) => n > 0).sort((a, b) => a - b)];
       }
       states.forEach((step, k) => {
         const slide = k === 0 ? first : build(`s${i}p${step}-`);
-        if (step !== null) {
-          for (const el of slide.steps) if (stepOf(el) > step) el.style.visibility = "hidden";
-        }
+        // The fully built slide (null) is the state after the last click.
+        for (const el of slide.steps) if (!shownAt(el, step ?? slide.maxStep)) el.style.visibility = "hidden";
         const page = document.createElement("section");
         page.className = "svgdeck-page";
         page.dataset.slide = String(i + 1);
@@ -704,29 +708,35 @@
       // Videos in the same sync group on neighbouring slides follow the
       // current one frame by frame, so switching slides shows no jump.
       if (mirrorStop) { mirrorStop(); mirrorStop = null; }
-      const driver = slides[index].videos.find((v) => v.dataset.sync);
-      if (!driver) return;
-      const followers = [];
+      const first = slides[index].videos.find((v) => v.dataset.sync);
+      if (!first) return;
+      const group = first.dataset.sync;
+      // Movies of the group on this slide (stacked, shown and hidden by builds)
+      // and on the neighbouring slides follow whichever one here is playing.
+      const members = slides[index].videos.filter((v) => v.dataset.sync === group);
+      const others = [];
       for (const j of [index - 1, index + 1]) {
         if (!slides[j]) continue;
         for (const v of slides[j].videos) {
-          if (v.dataset.sync === driver.dataset.sync) { load(v); followers.push(v); }
+          if (v.dataset.sync === group) { load(v); others.push(v); }
         }
       }
-      if (!followers.length) return;
+      if (members.length + others.length < 2) return;
       let stopped = false, lastSeek = 0;
-      const rvfc = typeof driver.requestVideoFrameCallback === "function";
+      const rvfc = typeof first.requestVideoFrameCallback === "function";
       const tick = () => {
         if (stopped) return;
-        // Followers are hidden: a rough match is enough, and a seek per
-        // presented frame would keep every decoder busy.
+        const driver = members.find((v) => !v.paused) || first;
+        // A rough match is enough, and a seek per presented frame would keep
+        // every decoder busy.
         const now = Date.now();
         if (now - lastSeek >= SEEK_INTERVAL) {
-          for (const f of followers) {
-            if (f.readyState >= 1 && !f.seeking && drift(f, driver.currentTime) > SEEK_DRIFT) { seekTo(f, driver.currentTime); lastSeek = now; }
+          for (const f of [...members, ...others]) {
+            if (f !== driver && f.readyState >= 1 && !f.seeking && drift(f, driver.currentTime) > SEEK_DRIFT) { seekTo(f, driver.currentTime); lastSeek = now; }
           }
         }
-        if (rvfc) driver.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
+        // Frame callbacks stop while a movie is paused, so the clock is the display's.
+        if (rvfc && !driver.paused) driver.requestVideoFrameCallback(tick); else requestAnimationFrame(tick);
       };
       tick();
       mirrorStop = () => { stopped = true; };
@@ -734,12 +744,17 @@
 
     function applyStep(slide, step) {
       for (const el of slide.steps) {
-        el.style.visibility = (parseInt(el.dataset.step, 10) || 0) <= step ? slide.stepVisibility.get(el) : "hidden";
+        el.style.visibility = shownAt(el, step) ? slide.stepVisibility.get(el) : "hidden";
       }
+      const hidden = (v) => { const style = getComputedStyle(v); return style.display === "none" || style.visibility === "hidden"; };
       for (const v of slide.videos) {
-        const style = getComputedStyle(v);
-        if (style.display === "none" || style.visibility === "hidden") v.pause();
-        else if (v.dataset.autoplay === "true" && v.paused && !overviewOpen) v.play().catch(() => {});
+        if (hidden(v)) v.pause();
+        else if (v.dataset.autoplay === "true" && v.paused && !overviewOpen) {
+          // A movie that comes back joins a playing one of its sync group on this slide.
+          const lead = v.dataset.sync && slide.videos.find((o) => o !== v && !o.paused && o.dataset.sync === v.dataset.sync);
+          if (lead) seekTo(v, lead.currentTime);
+          v.play().catch(() => {});
+        }
       }
     }
 
@@ -775,7 +790,8 @@
         const playing = new Map();
         if (previous) {
           for (const v of previous.videos) {
-            if (v.dataset.sync) playing.set(v.dataset.sync, v.currentTime);  // paused ones too: the overview pauses them
+            // Paused ones too (the overview pauses them), but a playing one wins over one hidden by a build.
+            if (v.dataset.sync && (!playing.has(v.dataset.sync) || !v.paused)) playing.set(v.dataset.sync, v.currentTime);
             v.pause();
           }
           previous.el.classList.remove("svgdeck-current");
@@ -784,7 +800,7 @@
         slide.el.classList.add("svgdeck-current");
         for (const v of slide.videos) {
           if (v.dataset.sync && playing.has(v.dataset.sync)) seekTo(v, playing.get(v.dataset.sync));
-          else if (!v.dataset.sync) seekTo(v, v.movieRange.bounds().start);
+          else seekTo(v, v.movieRange.bounds().start);
         }
         syncVideos(index);
       }

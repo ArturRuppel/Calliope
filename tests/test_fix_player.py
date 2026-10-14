@@ -440,3 +440,37 @@ def test_presenter_page_cannot_be_zoomed_by_the_browser(tmp_path):
     root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body=""))])
     assert "user-scalable=no" in render_page(Deck.load(root))
 
+
+# exits and stacked movies
+def test_an_element_can_leave_on_a_click(open_deck):
+    page = open_deck([("a", svg('<rect id="out" data-step-out="1" width="10" height="10"/>'
+                                '<rect id="in" data-step="2" width="10" height="10"/>')), ("b", svg(""))])
+    assert computed(page, "s0-out", "visibility") == "visible" and computed(page, "s0-in", "visibility") == "hidden"
+    page.keyboard.press("ArrowRight")
+    assert pos(page) == [0, 1]
+    assert computed(page, "s0-out", "visibility") == "hidden" and computed(page, "s0-in", "visibility") == "hidden"
+    page.keyboard.press("ArrowRight")
+    assert pos(page) == [0, 2] and computed(page, "s0-in", "visibility") == "visible"
+    page.keyboard.press("ArrowLeft")
+    page.keyboard.press("ArrowLeft")
+    assert computed(page, "s0-out", "visibility") == "visible"
+
+
+def test_a_stacked_movie_leaves_without_interrupting_the_one_below(open_deck):
+    # Two movies of one sync group on one slide: the top one goes on the click,
+    # uncovering the one below, which has been playing in step all along.
+    page = open_deck([("a", svg(VIDEO % ' data-sync="g"' + VIDEO % ' data-sync="g" data-step-out="1"'))])
+    times = "Array.from(document.querySelectorAll('.svgdeck-current video')).map(v => [v.currentTime, v.paused])"
+    page.wait_for_function("Array.from(document.querySelectorAll('.svgdeck-current video')).every(v => v.currentTime > 1)")
+    (below, p0), (top, p1) = page.evaluate(times)
+    assert not p0 and not p1 and abs(below - top) < 0.15
+    page.evaluate("window.seeks = 0; document.querySelector('.svgdeck-current video').addEventListener('seeking', () => window.seeks++)")
+    page.keyboard.press("ArrowRight")
+    page.wait_for_timeout(600)
+    (after, p0), (_, p1) = page.evaluate(times)
+    assert not p0 and p1 and after > below  # kept playing, never restarted
+    assert page.evaluate("window.seeks") == 0  # the uncovered movie was never seeked
+    page.keyboard.press("ArrowLeft")  # back: the top movie rejoins the one below
+    page.wait_for_timeout(400)
+    (below, p0), (top, p1) = page.evaluate(times)
+    assert not p0 and not p1 and abs(below - top) < 0.15
