@@ -418,3 +418,25 @@ def test_speaker_timer_uses_the_wall_clock(open_deck):
     page.get_by_role("button", name="Reset timer").click()
     page.wait_for_timeout(700)
     assert page.evaluate("window.nowCalls") > 0
+
+
+def test_a_quick_second_touch_is_kept_from_the_browser(open_deck):
+    # Safari zooms the page on a double tap; the player cancels the second touchend.
+    page = open_deck([("a", svg("")), ("b", svg("")), ("c", svg(""))], touch=True)
+    cancelled = page.evaluate("""() => {
+        const root = document.getElementById('svgdeck'), out = [];
+        for (let i = 0; i < 2; i++) {
+            const t = new Touch({identifier: i, target: root, clientX: 480, clientY: 270});
+            const e = new TouchEvent('touchend', {bubbles: true, cancelable: true, changedTouches: [t]});
+            root.dispatchEvent(e); out.push(e.defaultPrevented);
+        }
+        return out;
+    }""")
+    assert cancelled == [False, True]
+
+
+def test_presenter_page_cannot_be_zoomed_by_the_browser(tmp_path):
+    from svgdeck.deck import render_page
+    root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body=""))])
+    assert "user-scalable=no" in render_page(Deck.load(root))
+

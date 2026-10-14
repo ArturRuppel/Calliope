@@ -122,7 +122,7 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="generator" content="svgdeck">
 <title>{html.escape(deck.title)}</title>
 {chrome_fonts}<style>

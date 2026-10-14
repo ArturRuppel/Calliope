@@ -1070,6 +1070,18 @@
       if (e.target.closest(".svgdeck-controls,.svgdeck-overview,.svgdeck-board-tools") || performance.now() - doubleAt < 1000 || lastType !== "mouse") return;
       toggleFullscreen();
     });
+    // Safari keeps touch gestures of its own that touch-action does not fully
+    // stop: a second quick tap zooms the page and a pinch scales it. The player
+    // turns slides and zooms by itself, so the browser's versions are cancelled.
+    // Controls, the overview and links still get their clicks.
+    let touchEndAt = -Infinity;
+    root.addEventListener("touchend", (e) => {
+      if (e.target.closest?.("a,.svgdeck-controls,.svgdeck-overview,.svgdeck-board-tools")) return;
+      const now = performance.now();
+      if (now - touchEndAt < 400 && e.cancelable) e.preventDefault();
+      touchEndAt = now;
+    }, { passive: false });
+    for (const type of ["gesturestart", "gesturechange", "gestureend"]) root.addEventListener(type, (e) => e.preventDefault());
     window.addEventListener("resize", fit);
     window.addEventListener("hashchange", () => { const target = fromHash(); if (target) show(target[0], target[1]); });
 
