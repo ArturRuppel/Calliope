@@ -354,6 +354,23 @@ def test_copy_paste_buttons_across_slides(page, server):
     assert "<ellipse" in saved_slide(page, server)
 
 
+def test_paste_on_another_slide_keeps_the_place_and_beside_the_original_steps_aside(page, server):
+    page.keyboard.press("e")
+    drag(page, (100, 100), (300, 200))
+    box = "(() => { const e = svgdeckEditor.editor, b = e.selectionGeometry(); return [b.x, b.y, b.width, b.height]; })()"
+    original = page.evaluate(box)
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Control+v")  # the original is under it: steps aside
+    first = page.evaluate(box)
+    assert first[0] == pytest.approx(original[0] + 24) and first[1] == pytest.approx(original[1] + 24)
+    page.keyboard.press("Control+v")  # both are under it: steps again
+    assert page.evaluate(box)[0] == pytest.approx(original[0] + 48)
+    page.click("#slide-add")
+    page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2")
+    page.keyboard.press("Control+v")
+    assert page.evaluate(box) == pytest.approx(original)
+
+
 def test_editing_imported_rich_text_keeps_its_font_and_size(page, server):
     page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
       e.change(() => {

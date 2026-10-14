@@ -3158,7 +3158,21 @@ export class SlideEditor {
         return el;
       });
       this.selection = pasted;
-      this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(24, 24));
+      // A copy lands where the original stood, so a paste on another slide
+      // keeps its place. Only where an object of the same kind already fills
+      // that spot (a paste beside its original, or a repeated paste) does it
+      // step down and right, until it no longer hides one.
+      const others = Array.from(this.context.children).filter((el) => !pasted.includes(el));
+      const near = (a, b) => a && b && ["x", "y", "width", "height"].every((k) => Math.abs(a[k] - b[k]) < 0.5);
+      const boxes = pasted.map((el) => [el.localName, rootBox(el, this.svg)]);
+      const covered = (d) => boxes.some(([name, b]) => b && others.some((o) => {
+        if (o.localName !== name) return false;
+        const ob = rootBox(o, this.svg);
+        return near(ob, { x: b.x + d, y: b.y + d, width: b.width, height: b.height });
+      }));
+      let d = 0;
+      while (covered(d) && d < 24 * 50) d += 24;
+      if (d) this.applyDelta(this.snapshot(), new DOMMatrix().translateSelf(d, d));
     });
     return true;
   }
