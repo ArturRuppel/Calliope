@@ -2343,7 +2343,9 @@ export class SlideEditor {
     this.begin();
     const glyph = firstGlyphElement(t);
     const gcs = getComputedStyle(glyph);
-    const base = { ...this.lookAt(glyph), letterSpacing: parseFloat(gcs.letterSpacing) || 0,
+    // The anchor is read now: typing rewrites the text, and ending the edit
+    // puts its style back without the anchor that typing moved into it.
+    const base = { ...this.lookAt(glyph), letterSpacing: parseFloat(gcs.letterSpacing) || 0, anchor: gcs.textAnchor,
                    paint: Object.fromEntries(TEXT_PAINT.map((p) => [p, gcs.getPropertyValue(p)])) };
     const box = document.createElement("div");
     box.className = "text-edit";
@@ -2570,7 +2572,7 @@ export class SlideEditor {
     const first = nodes[0] !== t ? nodes[0] : null;
     const x = first?.getAttribute("x") ?? t.getAttribute("x") ?? "0";
     const y0 = parseFloat(first?.getAttribute("y") ?? t.getAttribute("y") ?? "0") || 0;
-    const anchor = getComputedStyle(firstGlyphElement(t)).textAnchor;
+    const anchor = base.anchor || getComputedStyle(firstGlyphElement(t)).textAnchor;
     // Decorations propagate visually through descendants even when set to none.
     // Keep them on individual runs so later words can remain undecorated.
     t.style.removeProperty("text-decoration");

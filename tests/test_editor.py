@@ -594,3 +594,25 @@ def test_objects_off_the_slide_stay_visible_and_selectable(page):
     # Faded outside the slide; the thumbnail (like the presenter) still clips.
     assert page.locator(".overlay .ov-offpage").count() == 1
     assert page.evaluate("getComputedStyle(document.querySelector('.thumbs .thumb svg')).overflow") != "visible"
+
+
+def test_editing_a_centred_text_keeps_it_centred(page, server):
+    # Typing moves the anchor attribute into the style; ending the edit must
+    # not lose it and redraw the text starting at its centre point.
+    page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
+      e.change(() => {
+        const t = document.createElementNS(ns, 'text');
+        for (const [k, v] of [['x', '960'], ['y', '500'], ['font-size', '40'], ['text-anchor', 'middle']]) t.setAttribute(k, v);
+        t.textContent = 'Centred'; e.svg.append(t); e.selection = [t];
+      }); })()""")
+    before = page.evaluate("(() => { const b = svgdeckEditor.editor.svg.querySelector('text').getBBox(); return b.x + b.width / 2; })()")
+    assert abs(before - 960) < 1
+    page.keyboard.press("Enter")
+    page.wait_for_selector(".text-edit")
+    page.keyboard.press("End")
+    page.keyboard.type(" text")
+    page.keyboard.press("Control+Enter")
+    after = page.evaluate("""(() => { const t = svgdeckEditor.editor.svg.querySelector('text'), b = t.getBBox();
+      return [t.textContent, getComputedStyle(t).textAnchor, b.x + b.width / 2]; })()""")
+    assert after[0] == "Centred text" and after[1] == "middle"
+    assert abs(after[2] - 960) < 1
