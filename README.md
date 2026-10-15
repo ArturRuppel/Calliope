@@ -31,11 +31,9 @@ Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed
 svgdeck export DECK_DIR OUT_DIR --zip talk.zip
-svgdeck export DECK_DIR OUT_DIR --no-notes   # leave the speaker notes out of the copy
 svgdeck export DECK_DIR OUT_DIR --pdf        # also write OUT_DIR/deck.pdf (and put it in the zip)
 svgdeck pdf DECK_DIR talk.pdf               # one page per slide, every build step shown
 svgdeck pdf DECK_DIR talk.pdf --steps       # one page per build step
-svgdeck pdf DECK_DIR talk.pdf --notes       # handout: slide plus speaker notes per page
 ```
 
 ## The service on sancho
@@ -91,9 +89,9 @@ The editor is laid out for an iPad in landscape:
 - **Selection bar**: a dark bar above whatever is selected (below it near the
   top of the slide) with that object's quick edits, **Align** and **More**
   (the actions menu).
-- **Inspector** on the right with four tabs: **Design** (the selection's
-  properties, or the slide's with nothing selected), **Objects**, **Builds**
-  and **Notes**.
+- **Inspector** on the right with three tabs: **Design** (the selection's
+  properties, or the slide's with nothing selected), **Objects** and
+  **Builds**.
 
 - **Shapes:** rectangle (R), ellipse (E), circle (C), polygon (G), line (L),
   arrow (A). Drag to size them, or tap for a default size. Circles stay
@@ -236,10 +234,9 @@ The editor is laid out for an iPad in landscape:
   the dialog: tap or click a shape's fill or line, a text or an image pixel to
   take its colour (the opacity stays as set; image adjustments are not
   applied to the picked pixel). Escape or **Cancel** leaves picking.
-- **Notes** (inspector tab) saves plain-text notes with each slide as you type.
-  **Speaker view** (deck menu) shows the current slide, next slide, notes and
-  a timer. Choose **Open audience window** and move that window to the
-  presentation screen; navigation, build steps and blanking stay synchronized
+- **Speaker view** (deck menu) shows the current slide, the next slide, a
+  timer and the controls. Choose **Open audience window** and move that
+  window to the presentation screen; navigation, build steps and blanking stay synchronized
   between them.
 - Double-tap text to edit it (the caret lands where you tapped) or choose **Edit** in its bar, or a group to work inside it; with the Text
   tool, a tap on an existing text edits it (also inside a group). Tap outside,
@@ -275,8 +272,8 @@ The editor is laid out for an iPad in landscape:
 - Edits autosave to the **working copy**. While the service cannot be reached
   the status reads "Not saved · retrying" and saving is retried with backoff;
   leaving the editor waits for the save first. **Deck menu → Commit snapshot…**
-  saves a named, immutable snapshot of the whole deck, including slide order
-  and notes. Its history offers text diffs against the previous commit or
+  saves a named, immutable snapshot of the whole deck, including slide order.
+  Its history offers text diffs against the previous commit or
   working copy and full-deck restore (restore asks for a second confirmation).
   The first edit protects the original as
   a baseline; restoring also saves the working copy as a safety commit.
@@ -284,8 +281,8 @@ The editor is laid out for an iPad in landscape:
   Undo/redo remains per slide. Concurrent edits stop saving or restoring
   instead of silently overwriting changes.
 - **Deck menu → Export offline copy** downloads a .zip that plays without a
-  network; **Download PDF** and **Download handout (with notes)** fetch PDFs
-  from the service (a message says why if the service cannot make them).
+  network; **Download PDF** fetches a PDF from the service (a message says
+  why if the service cannot make one).
 - **Deck menu → Deck settings…** sets the deck's title, its background colour
   (the screen around the slide when the window is not 16:9), and the slide
   size (1920×1080, 3840×2160, 1920×1200, 1024×768 or custom). Changing the
@@ -312,8 +309,7 @@ The editor is laid out for an iPad in landscape:
   the current artwork first. If saving detects a conflict, **Keep both versions**
   preserves local edits as a recovered slide and retains the server's version.
   If recovery cannot reach the server, it downloads the local SVG as a fallback.
-  Revisions cover slide artwork; speaker notes are retained when deleting and
-  restoring slides, but are not part of artwork revision history.
+  Revisions cover slide artwork.
 
 ## Presenting
 
@@ -325,13 +321,11 @@ Press **O** to toggle the overview (Escape only closes it, so a clicker's
 Escape cannot open it mid-talk); tap a thumbnail to jump to that slide,
 shown fully built.
 Overview pauses active movies until returning to the presentation. Only the
-current and neighbouring slides' movies stay loaded. Speaker notes are included
-in offline exports by default so speaker view works there; `--no-notes` omits
-them.
+current and neighbouring slides' movies stay loaded.
 The live service also has **Back to editor**, returning to the current slide.
 Offline exports retain the overview and navigation without an editor dependency.
 Speaker view is also available from the presentation controls in offline exports.
-Its audience window displays only the presentation, with no speaker controls or notes.
+Its audience window displays only the presentation, with no speaker controls.
 
 
 Arrows / space / page keys / click or swipe to move (`n`/`p` work too), a
@@ -368,14 +362,12 @@ focus takes the press.
 `svgdeck pdf DECK OUT.pdf` prints the deck through headless Chromium: one page
 per slide at the deck's size (1920×1080 is 20 × 11.25 in), every build step
 shown, movies as their poster frame. `--steps` prints the initial state and
-then the state after each step that has objects. `--notes` prints a handout:
-the slide scaled down with "Slide N" and its speaker notes underneath, on the
-same page size (long notes get smaller text). The two combine.
+then the state after each step that has objects.
 `svgdeck export … --pdf` also writes `deck.pdf` into the export (and the zip).
 The editor's Deck menu downloads the same PDFs from the service.
 
-Any export's `index.html?print=1` (or `#print`, `?print=steps`, `?print=notes`,
-`?print=steps,notes`) shows every slide stacked as pages, ready for the
+Any export's `index.html?print=1` (or `#print`, `?print=steps`) shows every
+slide stacked as pages, ready for the
 browser's Print; the service's presenter page accepts the same address.
 Printing the normal presenter with Ctrl/Cmd+P prints every slide fully built,
 one per landscape page, without controls, overview or speaker panel.

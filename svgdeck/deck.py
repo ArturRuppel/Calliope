@@ -41,14 +41,8 @@ class Deck:
         except FileNotFoundError:
             raise FileNotFoundError(f"slide {slide_id!r}: file slides/{slide_id}.svg is missing") from None
 
-    def slide_sources(self, include_notes: bool = True) -> list[dict]:
-        sources = []
-        for s in self.meta["slides"]:
-            source = {"id": s["id"], "svg": self._read_slide(s["id"])}
-            if include_notes:
-                source["notes"] = str(s.get("notes") or "")
-            sources.append(source)
-        return sources
+    def slide_sources(self) -> list[dict]:
+        return [{"id": s["id"], "svg": self._read_slide(s["id"])} for s in self.meta["slides"]]
 
     def media_files(self) -> set[str]:
         """Deck-relative paths of every file the slides reference."""
@@ -106,13 +100,11 @@ def font_faces(fonts: list[dict], files: dict[str, str] | None = None) -> str:
     return "\n".join(rules)
 
 
-def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None,
-                include_notes: bool = True) -> str:
+def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None) -> str:
     """The self-contained player page: player, styles and all slides inline.
 
-    Media and fonts stay as files next to the page (media/, fonts/). Speaker
-    notes are inlined unless `include_notes` is false."""
-    data = dict(deck.meta, slides=deck.slide_sources(include_notes))
+    Media and fonts stay as files next to the page (media/, fonts/)."""
+    data = dict(deck.meta, slides=deck.slide_sources())
     # "</" would end the <script> element early.
     payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
     options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("</", "<\\/")

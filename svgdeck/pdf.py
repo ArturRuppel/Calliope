@@ -8,7 +8,6 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from urllib.parse import quote
 
 from .deck import Deck
 
@@ -26,32 +25,28 @@ def require_playwright():
     return sync_playwright
 
 
-def render_pdf(deck: Path, out: Path, *, notes: bool = False, steps: bool = False) -> Path:
+def render_pdf(deck: Path, out: Path, *, steps: bool = False) -> Path:
     """Write the deck as a PDF to `out`: one page per slide, fully built, each
     page the deck size at 96 px per inch (1920x1080 is 20 x 11.25 in).
 
     `steps` prints one page per build step instead (the initial state, then the
-    state after each step). `notes` prints handout pages: the slide scaled
-    down with its speaker notes under it, on the same page size. Returns the
-    absolute path of the PDF."""
+    state after each step). Returns the absolute path of the PDF."""
     sync_playwright = require_playwright()
     source = deck if isinstance(deck, Deck) else Deck.load(Path(deck))
     out = Path(out).absolute()
     with tempfile.TemporaryDirectory(prefix="svgdeck-pdf-") as tmp:
         from .export import export
-        site = export(source, Path(tmp) / "site", include_notes=notes)
-        print_export(site, out, size=source.meta.get("size") or [1920, 1080], notes=notes, steps=steps,
+        site = export(source, Path(tmp) / "site")
+        print_export(site, out, size=source.meta.get("size") or [1920, 1080], steps=steps,
                      sync_playwright=sync_playwright)
     return out
 
 
-def print_export(site: Path, out: Path, *, size, notes: bool = False, steps: bool = False,
-                 sync_playwright=None) -> Path:
+def print_export(site: Path, out: Path, *, size, steps: bool = False, sync_playwright=None) -> Path:
     """Print an existing standalone export (`site`/index.html) to `out`."""
     sync_playwright = sync_playwright or require_playwright()
     width, height = (int(round(float(v))) for v in size)
-    flags = ",".join(name for name, on in (("notes", notes), ("steps", steps)) if on) or "1"
-    url = (Path(site) / "index.html").absolute().as_uri() + "?print=" + quote(flags, safe=",")
+    url = (Path(site) / "index.html").absolute().as_uri() + "?print=" + ("steps" if steps else "1")
     out = Path(out).absolute()
     out.parent.mkdir(parents=True, exist_ok=True)
     executable = os.environ.get("SVGDECK_CHROMIUM") or None

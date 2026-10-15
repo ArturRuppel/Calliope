@@ -1,7 +1,5 @@
 """Regression tests for player, speaker and export fixes."""
-import json
 import os
-import re
 import stat
 import zipfile
 
@@ -35,35 +33,6 @@ def test_export_modes_with_a_private_umask(tmp_path):
         os.umask(old)
     assert stat.S_IMODE(out.stat().st_mode) == 0o700
     assert stat.S_IMODE((tmp_path / "out.zip").stat().st_mode) == 0o600
-
-
-def notes_deck(tmp_path):
-    root = write_deck(tmp_path / "d", [("a", SLIDE.format(color="#fff", body=""))])
-    meta = json.loads((root / "deck.json").read_text())
-    meta["slides"][0]["notes"] = "SECRET-TALKING-POINT"
-    (root / "deck.json").write_text(json.dumps(meta))
-    return root
-
-
-def test_notes_are_included_by_default(tmp_path):
-    out = export(Deck.load(notes_deck(tmp_path)), tmp_path / "out")
-    assert "SECRET-TALKING-POINT" in (out / "index.html").read_text(encoding="utf-8")
-
-
-def test_notes_can_be_left_out(tmp_path):
-    out = export(Deck.load(notes_deck(tmp_path)), tmp_path / "out", include_notes=False)
-    page = (out / "index.html").read_text(encoding="utf-8")
-    assert "SECRET-TALKING-POINT" not in page
-    data = json.loads(re.search(r'id="svgdeck-data">(.*?)</script>', page, re.S).group(1))
-    assert all("notes" not in s for s in data["slides"])
-
-
-def test_cli_no_notes_flag(tmp_path):
-    root = notes_deck(tmp_path)
-    main(["export", str(root), str(tmp_path / "a")])
-    main(["export", str(root), str(tmp_path / "b"), "--no-notes"])
-    assert "SECRET-TALKING-POINT" in (tmp_path / "a" / "index.html").read_text(encoding="utf-8")
-    assert "SECRET-TALKING-POINT" not in (tmp_path / "b" / "index.html").read_text(encoding="utf-8")
 
 
 def test_hyperlinks_are_not_media(tmp_path):
@@ -393,19 +362,19 @@ def test_reloading_the_speaker_keeps_the_audience_attached(open_deck):
     session = page.evaluate("new URL(location.href).searchParams.get('session')")
     assert session and "speaker=1" in page.url
     status = page.locator(".speaker-status")
-    assert status.inner_text() == "Audience window: disconnected"
+    assert status.get_attribute("data-connected") == "false"
     with page.expect_popup() as popup:
         page.get_by_role("button", name="Open audience window").click()
     audience = popup.value
     audience.wait_for_function("document.querySelector('.svgdeck-ready')")
-    page.wait_for_function("document.querySelector('.speaker-status').textContent === 'Audience window: connected'")
+    page.wait_for_function("document.querySelector('.speaker-status').dataset.connected === 'true'")
     page.reload()
     page.wait_for_function("document.querySelector('.svgdeck-ready')")
     assert page.evaluate("new URL(location.href).searchParams.get('session')") == session
-    assert status.inner_text() == "Audience window: disconnected"
+    assert status.get_attribute("data-connected") == "false"
     before = len(page.context.pages)
     page.get_by_role("button", name="Open audience window").click()
-    page.wait_for_function("document.querySelector('.speaker-status').textContent === 'Audience window: connected'")
+    page.wait_for_function("document.querySelector('.speaker-status').dataset.connected === 'true'")
     assert len(page.context.pages) == before  # the same window, not a second one
     page.locator(".speaker-actions").get_by_role("button", name="Next", exact=True).click()
     audience.wait_for_function("svgdeck.svgdeck.state.index === 1")

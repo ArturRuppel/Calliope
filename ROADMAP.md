@@ -132,9 +132,10 @@ exported `index.html`. Font files are licensed and never go into this repo.
 
 ### 4. Later
 - PDF export (headless Chromium printing the player) — done 2026-10-02:
-  `svgdeck pdf`, `export --pdf`, handout with notes, one page per step, and
-  a print mode of the player.
-- Speaker view: notes, next slide, timer (done).
+  `svgdeck pdf`, `export --pdf`, one page per step, and a print mode of the
+  player (the handout with notes went with the notes, 2026-10-15).
+- Speaker view: next slide, timer, controls (done; notes dropped 2026-10-15,
+  never used).
 - Movie helpers: crop and timestamp overlays (now done by hand with ffmpeg).
 
 ## Open questions

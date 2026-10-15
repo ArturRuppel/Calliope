@@ -130,20 +130,6 @@ def test_restore_trash_rolls_back_slide_if_metadata_write_fails(tmp_path, monkey
     assert [s["id"] for s in json.loads((root / "deck.json").read_text())["slides"]] == ["one"]
 
 
-def test_trash_restore_preserves_slide_notes(tmp_path):
-    _, _, store = setup(tmp_path)
-    record = store.get_deck("talk")
-    record["deck"]["slides"][1]["notes"] = "Speaker cue"
-    updated = store.put_deck("talk", record["deck"], record["version"])
-    deck = store.get_deck("talk")["deck"]
-    store.put_deck("talk", dict(deck, slides=[deck["slides"][0]]), updated["version"])
-
-    trash = store.list_trash("talk")
-    assert trash[0]["notes"] == "Speaker cue"
-    restored = store.restore_trash("talk", trash[0]["token"])
-    assert restored["deck"]["slides"][-1] == {"id": "two", "notes": "Speaker cue"}
-
-
 def test_trash_cleanup_failure_still_reports_committed_restore(tmp_path, monkeypatch):
     _, _, store = setup(tmp_path)
     record = store.get_deck("talk")
@@ -162,11 +148,8 @@ def test_trash_cleanup_failure_still_reports_committed_restore(tmp_path, monkeyp
     assert store.get_slide("talk", "two")[0]
 
 
-def test_preserve_conflict_keeps_both_and_uses_latest_metadata(tmp_path):
+def test_preserve_conflict_keeps_both(tmp_path):
     _, root, store = setup(tmp_path)
-    record = store.get_deck("talk")
-    record["deck"]["slides"][0]["notes"] = "Keep with copy"
-    store.put_deck("talk", record["deck"], record["version"])
     local = SLIDE.format(color="#f00", body="<text>local</text>").encode()
     remote = SLIDE.format(color="#0f0", body="<text>remote</text>").encode()
     _, base = store.get_slide("talk", "one")
@@ -177,7 +160,6 @@ def test_preserve_conflict_keeps_both_and_uses_latest_metadata(tmp_path):
     assert store.get_slide("talk", result["recovered"])[0] == local
     assert result["original"].encode() == remote
     assert result["deck"]["slides"][-1]["id"] == result["recovered"]
-    assert result["deck"]["slides"][-1]["notes"] == "Keep with copy"
     assert json.loads((root / "deck.json").read_text()) == result["deck"]
 
 
@@ -249,7 +231,7 @@ def test_recovery_ui_restores_deleted_slide(recovery_browser):
     original = record["deck"]["slides"][0]["id"]
     svg, _ = store.get_slide("talk", original)
     store.put_slide("talk", "deleted", svg.replace(b"#ffffff", b"#abcdef"), None)
-    deck = dict(record["deck"], slides=record["deck"]["slides"] + [{"id": "deleted", "notes": "restore me"}])
+    deck = dict(record["deck"], slides=record["deck"]["slides"] + [{"id": "deleted"}])
     added = store.put_deck("talk", deck, record["version"])
     store.put_deck("talk", dict(deck, slides=deck["slides"][:1]), added["version"])
     page.reload()
@@ -259,5 +241,5 @@ def test_recovery_ui_restores_deleted_slide(recovery_browser):
     page.wait_for_function("svgdeckEditor.state.deck.slides.some(s => s.id === 'deleted')")
 
     restored = store.get_deck("talk")["deck"]["slides"][-1]
-    assert restored == {"id": "deleted", "notes": "restore me"}
+    assert restored == {"id": "deleted"}
     assert b"#abcdef" in store.get_slide("talk", "deleted")[0]

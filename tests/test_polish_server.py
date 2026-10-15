@@ -202,8 +202,8 @@ def stub_pdf(monkeypatch):
     calls = []
     stub = types.ModuleType("svgdeck.pdf")
 
-    def render_pdf(deck_dir, out_path, notes=False, steps=False):
-        calls.append({"dir": deck_dir, "out": out_path, "notes": notes, "steps": steps,
+    def render_pdf(deck_dir, out_path, steps=False):
+        calls.append({"dir": deck_dir, "out": out_path, "steps": steps,
                       "slides": sorted(p.name for p in (deck_dir / "slides").glob("*.svg")),
                       "media": (deck_dir / "media" / "clip.txt").read_text()})
         out_path.write_bytes(b"%PDF-1.4 stub")
@@ -222,19 +222,17 @@ def test_pdf_download(api, stub_pdf):
     assert response.headers["content-disposition"] == 'attachment; filename="talk.pdf"'
     assert response.content == b"%PDF-1.4 stub"
     [call] = stub_pdf
-    assert call["notes"] is False and call["steps"] is False
+    assert call["steps"] is False
     assert call["slides"] == ["one.svg", "two.svg"] and call["media"] == "media"
     assert call["dir"] != data / "decks" / "talk"  # a snapshot, not the live deck
     assert [p.name for p in data.iterdir() if p.name.startswith("svgdeck-pdf-")] == []
 
 
-@pytest.mark.parametrize("query,notes,steps", [
-    ("notes=1", True, False), ("steps=true", False, True), ("notes=true&steps=1", True, True),
-    ("notes=0&steps=false", False, False), ("notes=", False, False)])
-def test_pdf_options(api, stub_pdf, query, notes, steps):
+@pytest.mark.parametrize("query,steps", [("steps=true", True), ("steps=1", True), ("steps=false", False), ("steps=", False)])
+def test_pdf_options(api, stub_pdf, query, steps):
     client, _, _, _ = api
     assert client.get(f"/api/decks/talk/pdf?{query}").status_code == 200
-    assert (stub_pdf[0]["notes"], stub_pdf[0]["steps"]) == (notes, steps)
+    assert stub_pdf[0]["steps"] == steps
 
 
 def test_pdf_missing_deck_and_broken_deck(api, stub_pdf):

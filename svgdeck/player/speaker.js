@@ -1,4 +1,7 @@
-/* Speaker controls and a separate audience window. Included in offline exports. */
+/* Speaker view: the slide to touch, the next one to see, a clock, and the
+   buttons, beside a separate audience window (or screen). Included in offline
+   exports. The player's own icon bar stays out of this page: everything a
+   speaker does is here. */
 (function () {
   "use strict";
   window.SvgDeckSpeaker = function (root, deck, api, options, rewrite, parseSlide) {
@@ -10,6 +13,7 @@
     // travel through the native shell, which also says whether a screen is attached.
     const native = window.svgdeckNative || null;
     let audience = null, audienceReady = false, applying = false, linked = false;
+    let displayAttached = false;  // native only: a screen is there to show the audience view on
     let refreshStatus = () => {};
     const opaqueOrigin = location.protocol === 'file:' || location.origin === 'null';
     const targetOrigin = opaqueOrigin ? '*' : location.origin;
@@ -36,12 +40,11 @@
       livePending = true;
       setTimeout(() => { livePending = false; send(speaker ? audience : (token ? window.opener : null), 'live', api.live); }, 16);
     });
-    let showConnection = () => {};
     const receive = data => {
       if (data.type === 'display' && speaker) {
         // From the native shell: a screen was attached or removed.
-        audience = data.value ? native : null; audienceReady = false;
-        showConnection(data.value ? 'Audience view on the external display.' : 'No external display connected.');
+        displayAttached = !!data.value;
+        audience = displayAttached ? native : null; audienceReady = false;
         refreshStatus(); return;
       }
       if (data.type === 'ready' && speaker) { if (native) audience = native; audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); send(audience, 'live', api.live); return; }
@@ -67,15 +70,45 @@
     api.ready.then(() => { if (!speaker && token) send(window.opener, 'ready'); });
     if (!speaker) return;
 
+    // --- the panel -------------------------------------------------------------
     document.body.classList.add('speaker-mode');
-    const panel = document.createElement('aside'); panel.className = 'speaker-panel';
+    const el = (tag, className, text) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text !== undefined) node.textContent = text;
+      return node;
+    };
+    const panel = el('aside', 'speaker-panel');
     panel.setAttribute('aria-label', 'Speaker view');
-    const heading = document.createElement('h1'); heading.textContent = 'Speaker view'; panel.append(heading);
-    const controls = document.createElement('div'); controls.className = 'speaker-actions'; panel.append(controls);
-    const button = (name, fn) => { const b = document.createElement('button'); b.textContent = name; b.onclick = fn; controls.append(b); return b; };
-    const connection = document.createElement('p'); connection.className = 'speaker-connection';
-    showConnection = text => { connection.textContent = text; };
-    button(native ? 'Show on the external display' : 'Open audience window', () => {
+
+    // Where we are, and the clock.
+    const head = el('div', 'speaker-head');
+    const counter = el('p', 'speaker-counter');
+    const clockBox = el('div', 'speaker-timer');
+    const clock = document.createElement('output');
+    clock.setAttribute('aria-label', 'Elapsed time');
+    const small = (name, fn) => { const b = el('button', 'speaker-small', name); b.type = 'button'; b.onclick = fn; return b; };
+    let started = Date.now(), elapsed = 0, running = true;
+    const timer = () => {
+      const seconds = Math.floor((elapsed + (running ? Date.now() - started : 0)) / 1000);
+      clock.textContent = `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
+    };
+    const pause = small('Pause timer', () => {
+      if (running) elapsed += Date.now() - started; else started = Date.now();
+      running = !running; pause.textContent = running ? 'Pause timer' : 'Resume timer';
+      clock.classList.toggle('paused', !running); timer();
+    });
+    const reset = small('Reset timer', () => { elapsed = 0; started = Date.now(); timer(); });
+    clockBox.append(clock, pause, reset);
+    head.append(counter, clockBox);
+
+    // The other half: a screen in the app, a window in a browser.
+    const status = el('p', 'speaker-status');
+    status.setAttribute('role', 'status');
+    const statusText = el('span');
+    const open = el('button', 'speaker-small', native ? 'Show on the external display' : 'Open audience window');
+    open.type = 'button';
+    open.onclick = () => {
       if (!native && audience && !audience.closed) { audience.focus(); return; }
       const url = new URL(location.href); url.searchParams.delete('speaker'); url.searchParams.set('session', session);
       audienceReady = false;
@@ -83,49 +116,87 @@
       // A named target: after this window is reloaded, the audience window that is
       // still open is found again instead of a second one opening.
       audience = window.open(url.href, 'svgdeck-audience-' + session);
+      if (!audience) statusText.textContent = 'Popup blocked. Allow popups, then try again.';
       send(audience, 'hello');
       refreshStatus();
-      connection.textContent = audience ? 'Move the audience window to your presentation screen.' : 'Popup blocked. Allow popups, then try again.';
-    });
-    button('Previous', api.prev); button('Next', api.next);
+    };
+    status.append(statusText, open);
+    refreshStatus = () => {
+      const present = !!audience && !audience.closed;
+      const connected = present && audienceReady;
+      status.dataset.connected = String(connected);
+      let text;
+      if (native) text = !displayAttached ? 'No external display.' : connected ? 'On the external display.' : 'External display: connecting…';
+      else text = !present ? 'No audience window.' : connected ? 'Audience window open. Move it to the presentation screen.' : 'Audience window: connecting…';
+      statusText.textContent = text;
+      open.hidden = connected || (native && !displayAttached);
+    };
+
+    // The slide after this one.
+    const nextBox = el('section', 'speaker-next-box');
+    nextBox.append(el('h2', null, 'Next'));
+    const next = el('div', 'speaker-next');
+    next.style.aspectRatio = `${size[0]} / ${size[1]}`;
+    nextBox.append(next);
+
+    // The buttons. Turning slides is also a tap on the slide; these are for a
+    // hand that holds the Pencil.
+    const actions = el('div', 'speaker-actions');
+    const button = (name, fn, className = '') => {
+      const b = el('button', className, name); b.type = 'button'; b.onclick = fn; actions.append(b); return b;
+    };
+    button('Previous', api.prev, 'speaker-turn');
+    button('Next', api.next, 'speaker-turn');
     const blank = button('Blank audience', () => api.setBlank(!api.state.blank));
     const board = button('Board', () => api.setBoard(!api.live.board));
-    root.addEventListener('svgdeck:live', () => { board.textContent = api.live.board ? 'Back to slides' : 'Board'; });
-    const status = document.createElement('p'); status.className = 'speaker-status'; status.setAttribute('role', 'status');
-    refreshStatus = () => {
-      const open = !!audience && !audience.closed;
-      status.dataset.connected = String(open && audienceReady);
-      status.textContent = (native ? 'External display: ' : 'Audience window: ') + (!open ? 'disconnected' : audienceReady ? 'connected' : 'connecting');
-    };
-    const counter = document.createElement('p'); panel.append(counter, status, connection);
-    const clock = document.createElement('output'); clock.setAttribute('aria-label', 'Elapsed time'); clock.className = 'speaker-timer'; panel.append(clock);
-    let started = Date.now(), elapsed = 0, running = true;
-    const timer = () => { const seconds = Math.floor((elapsed + (running ? Date.now() - started : 0)) / 1000); clock.textContent = `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`; };
-    const pause = button('Pause timer', () => { if (running) elapsed += Date.now() - started; else started = Date.now(); running = !running; pause.textContent = running ? 'Pause timer' : 'Resume timer'; timer(); });
-    button('Reset timer', () => { elapsed = 0; started = Date.now(); timer(); });
-    const notesTitle = document.createElement('h2'); notesTitle.textContent = 'Notes';
-    const notes = document.createElement('div'); notes.className = 'speaker-notes';
-    const nextTitle = document.createElement('h2'); nextTitle.textContent = 'Next slide';
-    const next = document.createElement('div'); next.className = 'speaker-next';
-    panel.append(notesTitle, notes, nextTitle, next);
+    button('Overview', () => api.setOverview(true));
+    const clear = button('Clear marks', api.clearLive);
+    const boardTools = el('div', 'speaker-board-tools');
+    for (const [name, fn] of [['Undo', api.boardUndo], ['Wipe', api.boardWipe]]) {
+      const b = el('button', null, name); b.type = 'button'; b.onclick = fn; boardTools.append(b);
+    }
+    const foot = el('div', 'speaker-foot');
+    if (options.editorUrl) {
+      const back = el('a', 'speaker-small', 'Back to editor');
+      back.addEventListener('click', () => { back.href = options.editorUrl + `#${api.state.index + 1}`; });
+      back.href = options.editorUrl;
+      foot.append(back);
+    }
+    // The buttons sit at the bottom, where a thumb reaches them; the board's join them.
+    const bottom = el('div', 'speaker-bottom');
+    bottom.append(boardTools, actions, foot);
+    panel.append(head, status, nextBox, bottom);
     document.body.append(panel);
+
+    const refreshLive = () => {
+      const onBoard = api.live.board;
+      board.textContent = onBoard ? 'Back to slides' : 'Board';
+      board.setAttribute('aria-pressed', String(onBoard));
+      boardTools.classList.toggle('on', onBoard);
+      clear.disabled = onBoard || !(api.live.ink.length || api.live.view.k > 1 || api.live.pointer);
+    };
+    root.addEventListener('svgdeck:live', refreshLive);
     let nextIndex = -2;
     update = () => {
-      const index = api.state.index;
-      counter.textContent = `Slide ${index + 1} of ${api.count} · Build ${api.state.step}`;
+      const index = api.state.index, slide = api.slides[index];
+      counter.replaceChildren(`${index + 1} / ${api.count}`,
+        slide?.maxStep ? el('small', null, ` · build ${api.state.step} of ${slide.maxStep}`) : '');
       blank.textContent = api.state.blank ? 'Show audience' : 'Blank audience';
-      notes.textContent = deck.slides[index]?.notes || 'No notes for this slide.';
+      blank.setAttribute('aria-pressed', String(api.state.blank));
+      refreshLive();
       if (nextIndex === index) return;
       nextIndex = index; next.replaceChildren();
-      if (!deck.slides[index + 1]) { next.textContent = 'End of presentation'; return; }
+      if (!deck.slides[index + 1]) { next.append(el('p', 'speaker-end', 'End of presentation')); return; }
       let svg;
-      try { svg = parseSlide(deck.slides[index + 1].svg); } catch (e) { next.textContent = `Slide ${index + 2} could not be loaded`; return; }
+      try { svg = parseSlide(deck.slides[index + 1].svg); } catch (e) { next.append(el('p', 'speaker-end', `Slide ${index + 2} could not be loaded`)); return; }
       rewrite(svg, `speaker-next-${index}-`, new URL(options.slideBase || 'slides/', document.baseURI));
       svg.removeAttribute('width'); svg.removeAttribute('height');
       svg.style.aspectRatio = `${size[0]} / ${size[1]}`;
       next.append(document.importNode(svg, true));
     };
-    const interval = setInterval(() => { timer(); if (audience?.closed) { connection.textContent = 'Audience window closed. Open it again to reconnect.'; audience = null; audienceReady = false; }
+    const interval = setInterval(() => {
+      timer();
+      if (audience?.closed) { audience = null; audienceReady = false; }
       if (audience && !audienceReady) send(audience, 'hello');
       refreshStatus();
     }, 500);

@@ -1,28 +1,23 @@
-"""Speaker notes and real separate-window state synchronization."""
-import json
-
+"""Speaker view and real separate-window state synchronization."""
 from svgdeck.deck import Deck
 from svgdeck.export import export
 from test_editor import page, server
 from test_player import page as player_page
 
 
-def test_notes_roundtrip_and_live_speaker(page, server):
-    page.get_by_role('tab', name='Notes', exact=True).click()
-    notes = 'Opening remarks\n<not HTML> & reminders'
-    page.get_by_role('textbox', name='Notes for this slide').fill(notes)
-    page.evaluate('svgdeckEditor.flush()')
-    _, data = server
-    meta = json.loads((data / 'decks/talk/deck.json').read_text())
-    assert meta['slides'][0]['notes'] == notes
-    page.reload()
-    page.wait_for_function('window.svgdeckEditor?.state.current')
-    page.get_by_role('tab', name='Notes', exact=True).click()
-    assert page.get_by_role('textbox', name='Notes for this slide').input_value() == notes
+def test_speaker_view_has_the_panel_and_no_icon_bar(page, server):
     page.goto(server[0] + '/d/talk/?speaker=1')
     page.wait_for_function('document.querySelector(".svgdeck-ready")')
-    assert page.locator('.speaker-notes').inner_text() == notes
-    assert page.locator('.speaker-notes not').count() == 0
+    # The panel carries every control; the player's own bar and board buttons stay out.
+    assert page.locator('.svgdeck-controls, .svgdeck-board-tools').count() == 0
+    assert page.locator('.speaker-counter').inner_text().startswith('1 / ')
+    assert page.locator('.speaker-status').get_attribute('data-connected') == 'false'
+    assert page.get_by_role('button', name='Open audience window').is_visible()
+    assert page.get_by_role('link', name='Back to editor').get_attribute('href').endswith('/edit/talk')
+    page.locator('.speaker-actions').get_by_role('button', name='Overview', exact=True).click()
+    assert page.locator('.svgdeck-overview').is_visible()
+    page.keyboard.press('Escape')
+    assert page.locator('.svgdeck-overview').is_hidden()
 
 
 def test_speaker_audience_sync_offline(player_page):
@@ -84,8 +79,10 @@ def test_zoom_marks_and_pointer_reach_the_audience(player_page):
     page.locator('.speaker-actions').get_by_role('button', name='Board', exact=True).click()
     audience.wait_for_function('svgdeck.svgdeck.live.board')
     assert audience.locator('.svgdeck-board').is_visible() and audience.locator('.svgdeck-board-tools').count() == 0
+    assert page.locator('.speaker-board-tools').is_visible()
     page.locator('.speaker-actions').get_by_role('button', name='Back to slides', exact=True).click()
     audience.wait_for_function('!svgdeck.svgdeck.live.board')
+    assert page.locator('.speaker-board-tools').is_hidden()
     audience.close()
 
 
@@ -113,17 +110,3 @@ def test_movie_crop_and_build_visibility_in_export(deck, tmp_path):
         page.keyboard.press('ArrowLeft')
         assert video.evaluate('v => v.paused')
         browser.close()
-
-
-def test_pending_notes_survive_slide_reorder(page, server):
-    page.locator('#slide-add').click()
-    page.wait_for_function('svgdeckEditor.state.deck.slides.length === 2')
-    page.get_by_role('tab', name='Notes', exact=True).click()
-    page.get_by_role('textbox', name='Notes for this slide').fill('Keep this note with its slide')
-    sid = page.evaluate('svgdeckEditor.state.current')
-    page.get_by_role('tab', name='Design', exact=True).click()
-    page.click('#slide-menu-btn'); page.locator('#slide-up').click()
-    page.wait_for_function('(id) => svgdeckEditor.state.deck.slides[0].id === id', arg=sid)
-    page.evaluate('svgdeckEditor.flush()')
-    meta = json.loads((server[1] / 'decks/talk/deck.json').read_text())
-    assert meta['slides'][0] == {'id': sid, 'notes': 'Keep this note with its slide'}

@@ -173,25 +173,20 @@ def test_overlapping_deck_writes_both_succeed(page, server):
       let slowed = false;
       window.fetch = async (url, init) => {
         const u = String(url), put = init?.method === 'PUT';
-        // The notes write is slow to reach the server; adding the slide's file too.
+        // The title write is slow to reach the server; adding the slide's file too.
         if (put && /\\/api\\/decks\\/talk$/.test(u) && !slowed) { slowed = true; await new Promise(r => setTimeout(r, 500)); }
         if (put && u.includes('/slides/') && !init.headers?.['If-Match']) await new Promise(r => setTimeout(r, 250));
         return original(url, init);
       };
       document.getElementById('slide-add').click();
-      setTimeout(() => {
-        const notes = document.querySelector('.notes-panel textarea');
-        notes.value = 'spoken words';
-        notes.dispatchEvent(new Event('input'));
-        [...document.querySelectorAll('.notes-panel button')].find(b => b.textContent === 'Save notes').click();
-      }, 50);
+      setTimeout(() => { window.titleWrite = svgdeckEditor.putDeck(d => ({...d, title: 'spoken words'})); }, 50);
     }""")
-    page.wait_for_function("""svgdeckEditor.state.deck.slides.length === 2 &&
-      document.querySelector('.notes-panel [role=status]').textContent !== 'Unsaved notes'""", timeout=10000)
+    page.wait_for_function("svgdeckEditor.state.deck.slides.length === 2 && window.titleWrite", timeout=10000)
+    page.evaluate("window.titleWrite")
     page.wait_for_function(SAVED)
     meta = json.loads((deck_dir(server) / "deck.json").read_text())
     assert len(meta["slides"]) == 2
-    assert meta["slides"][0].get("notes") == "spoken words"
+    assert meta["title"] == "spoken words"
     assert "changed somewhere else" not in toast(page)
 
 

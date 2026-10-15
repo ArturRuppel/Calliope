@@ -2,7 +2,6 @@
 import { SlideEditor, firstGlyphElement, cssFamily, isLayout } from "./canvas.js";
 import { prefixIds, toHex } from "./geom.js";
 import { Controller, DEFAULT_BINDINGS, TOOL_NAMES, actionGroups, actionLabel, inputLabel } from "./inputs.js";
-import { installNotes } from "./notes.js";
 import { installObjects } from "./objects.js";
 import { installMediaTools } from "./media-tools.js";
 import { installRecovery } from "./recovery.js";
@@ -104,7 +103,7 @@ const state = {
   slides: new Map(),  // id -> {text, version, dirty, saving, undo, redo, timer}
   prefs: loadPrefs(),
 };
-let objectPanels = null, mediaTools = null, recovery = null, notes = null, commits = null;
+let objectPanels = null, mediaTools = null, recovery = null, commits = null;
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
@@ -284,14 +283,11 @@ function refreshStatus() {
  *  stays open and a path being drawn stays a draft. */
 async function saveAll({ keepalive = false } = {}) {
   editor.syncTextEdit();
-  const savingNotes = notes?.flush();
-  savingNotes?.catch(() => {});  // its failure is thrown below, after the slides
   while (true) {
     const pending = [...state.slides.entries()].filter(([, r]) => r.dirty || r.savePromise);
     if (!pending.length) break;
     await Promise.all(pending.map(([id]) => save(id, { keepalive })));
   }
-  await savingNotes;
 }
 
 /** Finish the current interaction and save everything: before leaving,
@@ -363,7 +359,6 @@ async function ensureFamily(family) {
   if (!family || (state.deck.fonts || []).some((f) => f.family === family)) return;
   if (!state.faces.some((f) => f.family === family)) return;
   try {
-    await notes?.flush();
     await deckWrite(async () => {
       if ((state.deck.fonts || []).some((f) => f.family === family)) return;
       const res = await api.useFamily(family);
@@ -458,7 +453,6 @@ async function openSlide(id) {
   for (const li of $("thumbs").children) li.classList.toggle("current", li.dataset.id === id);
   $("thumbs").querySelector(".current")?.scrollIntoView({ block: "nearest" });
   renderPanel();
-  notes?.render();
   updateHistoryButtons();
   return true;
 }
@@ -472,7 +466,7 @@ function stepSlide(delta) {
 const index = () => state.deck.slides.findIndex((s) => s.id === state.current);
 const newId = () => "s" + Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, "0")).join("");
 
-async function addSlide(text, notes = "") {
+async function addSlide(text) {
   await flush();
   const id = newId();
   const version = await api.putSlide(id, text, null);
@@ -480,7 +474,7 @@ async function addSlide(text, notes = "") {
   const after = state.current;
   await putDeck((deck) => {
     const slides = [...deck.slides];
-    slides.splice(slides.findIndex((s) => s.id === after) + 1, 0, { id, ...(notes ? {notes} : {}) });
+    slides.splice(slides.findIndex((s) => s.id === after) + 1, 0, { id });
     return { ...deck, slides };
   });
   renderStrip();
@@ -498,7 +492,6 @@ function blankSlide() {
 }
 
 async function moveSlide(delta) {
-  await notes?.flush();
   const id = state.current;
   await putDeck((deck) => {
     const i = deck.slides.findIndex((s) => s.id === id), j = i + delta;
@@ -1314,12 +1307,12 @@ function buildDocMenu() {
   };
   // Downloads are links (long-press or right-click can save them), opened
   // with fetch so a server without PDF support says so in a toast.
-  const download = (id, name, sub, href, notes) => {
+  const download = (id, name, sub, href) => {
     const a = el("a", { role: "menuitem", id, href, download: "", onclick: (e) => {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       closeMenus();
-      guard(() => downloadPdf(href, notes), "Could not download the PDF")();
+      guard(() => downloadPdf(href), "Could not download the PDF")();
     } });
     a.innerHTML = icon("M6 2h9l5 5v15H6zM14 2v6h6M9 13h6M9 17h6");
     a.append(el("span", { class: "item-text" }, el("span", {}, name), el("span", { class: "item-sub" }, sub)));
@@ -1332,9 +1325,8 @@ function buildDocMenu() {
     item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
     sep(),
     item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", guard(exportDeck, "Could not export")),
-    download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`, false),
-    download("download-handout", "Download handout (with notes)", "Each slide with its speaker notes", `/api/decks/${DECK}/pdf?notes=1`, true),
-    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Notes, next slide, timer", guard(() => present(true), "Could not open speaker view")),
+    download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`),
+    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Next slide, timer, audience window", guard(() => present(true), "Could not open speaker view")),
     sep(),
     item("deck-settings", "M4 6h16M4 12h16M4 18h16", "Deck settings…", `Title, size, background, fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
     item("pen-status", "M4 20l1-5L16 4l4 4L9 19z", "Pencil and controller",
@@ -1359,7 +1351,6 @@ function showInspector(tab = inspectorTab) {
   for (const b of document.querySelectorAll("#inspector-tabs [data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === tab));
   for (const body of document.querySelectorAll("#inspector [data-tab-body]")) body.hidden = !body.dataset.tabBody.split(" ").includes(tab);
   if (tab === "objects" || tab === "builds") objectPanels?.open(tab);
-  else if (tab === "notes") notes?.open(false);
   else renderPanel();
 }
 
@@ -1393,7 +1384,6 @@ function deckSections() {
     const value = title.value.trim();
     if (!value) { title.value = state.deck.title || DECK; return; }
     if (value === state.deck.title) return;
-    await notes?.flush();
     await putDeck((d) => ({ ...d, title: value }));
     showDeckTitle();
     toast("Title saved.", 1500);
@@ -1419,7 +1409,6 @@ function deckSections() {
     section("Deck",
       row("Title", title),
       row("Background", colorControl(deck.background || "#000000", guard(async (c) => {
-        await notes?.flush();
         await putDeck((d) => ({ ...d, background: c }));
         renderSettings();
       }, "Could not save the background"), false)),
@@ -1493,9 +1482,9 @@ async function resizeSlides(w, h) {
 }
 
 /** Fetch a PDF and save it; a server that cannot make PDFs says why. */
-async function downloadPdf(url, withNotes) {
+async function downloadPdf(url) {
   try { await flush(); } catch (error) { toast(`Not downloaded: the deck is not saved (${error.message}).`, 8000); return; }
-  toast(withNotes ? "Preparing the handout…" : "Preparing the PDF…", 120000);
+  toast("Preparing the PDF…", 120000);
   const r = await fetch(url);
   if (!r.ok) {
     let detail = "";
@@ -1506,7 +1495,7 @@ async function downloadPdf(url, withNotes) {
   }
   const blob = await r.blob();
   const named = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(r.headers.get("Content-Disposition") || "");
-  const name = named ? decodeURIComponent(named[1]) : `${DECK}${withNotes ? "-handout" : ""}.pdf`;
+  const name = named ? decodeURIComponent(named[1]) : `${DECK}.pdf`;
   const href = URL.createObjectURL(blob);
   const a = el("a", { href, download: name, hidden: true });
   document.body.append(a);
@@ -2791,27 +2780,18 @@ function wire() {
 
 async function duplicateSlide() {
   await flush();
-  await addSlide(state.slides.get(state.current).text, state.deck.slides[index()].notes);
+  await addSlide(state.slides.get(state.current).text);
 }
 
 async function main() {
   wire();
-  notes = installNotes({state,putDeck,toast,mount:$("notes-mount")});
   const objects = installObjects({editor,state,toast,settle:settleCurrentSlide,mount:$("objects-mount")});
-  // Objects, builds and notes opened from anywhere show in the inspector's tabs.
+  // Objects and builds opened from anywhere show in the inspector's tabs.
   objectPanels = { render: objects.render, open(mode = "objects") {
     const tab = mode === "builds" ? "builds" : "objects";
     if (inspectorTab !== tab || document.body.classList.contains("no-panel")) showInspector(tab);
     else objects.open(tab);
   } };
-  const openNotes = notes.open;
-  notes.open = (focus = true) => {
-    if (inspectorTab !== "notes" || document.body.classList.contains("no-panel")) {
-      inspectorTab = "notes";
-      showInspector("notes");
-    }
-    openNotes(focus);
-  };
   mediaTools = installMediaTools({editor,toast,settle:settleCurrentSlide});
   recovery = installRecovery({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus,putDeck});
   commits = installCommits({editor,state,api,toast,settle:settleCurrentSlide,flush,openSlide,renderStrip,refreshStatus});
@@ -2851,5 +2831,5 @@ async function main() {
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, controller, runAction, setTool, exportDeck, copySelection, pasteText,
+window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, putDeck, controller, runAction, setTool, exportDeck, copySelection, pasteText,
   get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;}, get commits() {return commits;} };

@@ -382,7 +382,7 @@ export function installMediaTools({ editor, toast = () => {}, settle = () => {} 
   }
   function onKeyDown(e) {
     if (!session || !valid()) return false;
-    // Keys typed into the notes, a commit message or any other field are theirs.
+    // Keys typed into a commit message or any other field are theirs.
     const target = e.target instanceof Element ? e.target : document.activeElement;
     if (target && !dialog.contains(target) && target.closest?.("input, textarea, select, [contenteditable]:not([contenteditable=false])")) return false;
     if (e.key === "Escape" || (e.key.toLowerCase() === "z" && (e.ctrlKey || e.metaKey))) {

@@ -67,21 +67,48 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 
 .svgdeck.svgdeck-overview-open { touch-action:pan-y; }
 
-/* Speaker controls stay in their own window; the audience page uses the usual player. */
-.speaker-mode { background:#141418; color:#ececef; font:15px/1.5 "Archivo",system-ui,sans-serif; overflow:auto; }
+/* Speaker view: the slide on the left, the panel on the right (below, on a narrow window). The
+   player's icon bar is not on this page; the panel has every control. */
+.speaker-mode { background:#141418; color:#ececef; font:15px/1.5 "Archivo",system-ui,sans-serif; overflow:hidden; }
 .speaker-mode .svgdeck { right:40%; bottom:0; }
-.speaker-mode .speaker-panel { position:absolute; left:60%; right:0; min-height:100%; box-sizing:border-box; padding:24px; background:#1e1e23; border-left:2px solid #ececef; }
-.speaker-panel h1 { font-size:24px; font-weight:800; letter-spacing:-.02em; margin:0 0 16px; }
-.speaker-panel h2 { font-size:16px; margin:22px 0 8px; }
-.speaker-actions { display:flex; flex-wrap:wrap; gap:8px; }
-.speaker-actions button { min-height:44px; padding:8px 12px; border:2px solid #ececef; border-radius:0; background:none; color:#ececef; font:800 13px "Archivo",system-ui,sans-serif; cursor:pointer; }
-.speaker-timer { font:32px/1.3 ui-monospace,monospace; }
-.speaker-notes { white-space:pre-wrap; overflow-wrap:anywhere; user-select:text; }
-.speaker-next svg { width:100%; height:auto; display:block; }
-.speaker-connection { color:#a1a1a9; }
+.speaker-panel { position:absolute; left:60%; right:0; top:0; bottom:0; box-sizing:border-box; display:flex;
+  flex-direction:column; gap:14px; padding:max(16px, env(safe-area-inset-top)) 20px max(16px, env(safe-area-inset-bottom));
+  background:#1e1e23; border-left:2px solid #ececef; overflow:auto; }
+.speaker-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.speaker-counter { margin:0; font:800 26px/1.2 "Archivo",system-ui,sans-serif; letter-spacing:-.02em; font-variant-numeric:tabular-nums; }
+.speaker-counter small { font:600 14px/1 "Archivo",system-ui,sans-serif; color:#a1a1a9; letter-spacing:0; }
+.speaker-timer { display:flex; align-items:baseline; gap:10px; }
+.speaker-timer output { font:600 30px/1 ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+.speaker-timer output.paused { color:#e0b15a; }
+.speaker-small { min-height:32px; padding:4px 10px; border:2px solid rgba(236,236,239,.4); border-radius:0; background:none;
+  color:#ececef; font:700 12px "Archivo",system-ui,sans-serif; cursor:pointer; text-decoration:none; touch-action:manipulation; }
+.speaker-small:hover { border-color:#ececef; }
+.speaker-status { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0; font-weight:600; color:#a1a1a9; }
+.speaker-status::before { content:""; width:10px; height:10px; border-radius:50%; background:#e0b15a; flex:none; }
+.speaker-status[data-connected="true"] { color:#ececef; }
+.speaker-status[data-connected="true"]::before { background:#6cc7a8; }
+.speaker-status button[hidden] { display:none; }
+.speaker-next-box { margin:0; }
+.speaker-next-box h2 { margin:0 0 6px; font:600 12px/1 "Archivo",system-ui,sans-serif; text-transform:uppercase; letter-spacing:.08em; color:#a1a1a9; }
+.speaker-next { aspect-ratio:var(--svgdeck-aspect, 16 / 9); background:#000; box-shadow:0 0 0 1px rgba(236,236,239,.25); }
+.speaker-next svg { width:100%; height:100%; display:block; }
+.speaker-end { display:flex; align-items:center; justify-content:center; height:100%; margin:0; color:#a1a1a9; font-weight:600; }
+.speaker-bottom { margin-top:auto; display:flex; flex-direction:column; gap:8px; }
+.speaker-actions, .speaker-board-tools { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.speaker-actions button, .speaker-board-tools button { min-height:52px; padding:8px 12px; border:2px solid #ececef; border-radius:0; background:none; color:#ececef;
+  font:800 14px "Archivo",system-ui,sans-serif; cursor:pointer; touch-action:manipulation; }
+.speaker-actions button:hover, .speaker-board-tools button:hover { background:rgba(236,236,239,.1); }
+.speaker-actions button[aria-pressed="true"] { background:#ececef; color:#141418; }
+.speaker-actions button:disabled { opacity:.35; cursor:default; background:none; }
+.speaker-actions .speaker-turn { min-height:64px; font-size:16px; }
+.speaker-board-tools { display:none; }
+.speaker-board-tools.on { display:grid; }
+.speaker-foot { display:flex; justify-content:flex-end; }
+.speaker-foot:empty { display:none; }
 @media (max-width:750px) {
  .speaker-mode .svgdeck { right:0; bottom:55%; }
- .speaker-mode .speaker-panel { left:0; top:45%; min-height:55%; border-left:0; border-top:2px solid #ececef; }
+ .speaker-panel { left:0; top:45%; border-left:0; border-top:2px solid #ececef; }
+ .speaker-next-box { display:none; }
 }
 
 /* A slide that failed to load keeps its place in the deck. */
@@ -89,9 +116,6 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: #000; }
 .svgdeck-error { position:absolute; inset:0; margin:0; display:flex; align-items:center; justify-content:center;
   color:#ff9b92; font:56px/1.2 "Archivo", system-ui, sans-serif; text-align:center; padding:0 80px; }
 .svgdeck-thumb-failed { display:flex; align-items:center; justify-content:center; aspect-ratio:16/9; background:#2e1a19; color:#ff9b92; }
-.speaker-status { margin:8px 0 0; font-weight:600; }
-.speaker-status[data-connected="true"] { color:#6cc7a8; }
-.speaker-status[data-connected="false"] { color:#e0b15a; }
 
 /* Print mode (?print=1, SvgDeck.start(..., {print: …})): every slide is a page
    of the deck's aspect, stacked; the page size is set to the deck size. */
@@ -103,14 +127,6 @@ html.svgdeck-print-document, html.svgdeck-print-document body { height:auto; ove
   break-after:page; break-inside:avoid; page-break-after:always; }
 .svgdeck-print .svgdeck-slide { display:block; }
 .svgdeck-print .svgdeck-error { font-size:2.9cqw; padding:0 4cqw; }
-/* Handout: the slide scaled down, its notes under it. */
-.svgdeck-handout .svgdeck-page { background:#fff; color:#1c1b22; }
-.svgdeck-handout .svgdeck-slide { inset:4% auto auto 20%; width:60%; height:60%;
-  background:var(--svgdeck-background, #000); box-shadow:0 0 0 1px #b6b6bc; }
-.svgdeck-print-notes { position:absolute; left:6%; right:6%; top:67%; bottom:3.5%; overflow:hidden;
-  font:calc(1.5cqw * var(--svgdeck-fit, 1))/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-.svgdeck-print-label { margin:0 0 .4em; font-size:.75em; font-weight:600; color:#5c5b63; }
-.svgdeck-print-notes-text { white-space:pre-wrap; overflow-wrap:anywhere; }
 @media screen {
   .svgdeck-print .svgdeck-page + .svgdeck-page { margin-top:12px; }
 }

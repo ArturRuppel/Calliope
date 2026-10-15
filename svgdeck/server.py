@@ -486,7 +486,7 @@ def create_app(data: Path) -> FastAPI:
                             background=BackgroundTask(shutil.rmtree, tmp, ignore_errors=True))
 
     @app.get("/api/decks/{name}/pdf")
-    async def export_pdf(name: str, notes: str = "", steps: str = ""):
+    async def export_pdf(name: str, steps: str = ""):
         """The deck as a PDF, rendered by svgdeck.pdf (needs Playwright)."""
         deck_dir(name)
         try:
@@ -498,7 +498,7 @@ def create_app(data: Path) -> FastAPI:
         try:
             snapshot = await to_thread.run_sync(snapshot_or_http, name, tmp / ".snapshot" / name)
             await to_thread.run_sync(
-                lambda: pdf.render_pdf(snapshot.path, out, notes=truthy(notes), steps=truthy(steps)),
+                lambda: pdf.render_pdf(snapshot.path, out, steps=truthy(steps)),
                 limiter=pdf_limiter)
         except HTTPException:
             shutil.rmtree(tmp, ignore_errors=True)

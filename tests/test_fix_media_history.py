@@ -68,14 +68,16 @@ def test_crop_handles_still_own_their_pointer(page):
 
 def test_enter_and_escape_in_other_fields_leave_the_crop_alone(page):
     add_image_and_rect(page)
-    page.get_by_role("tab", name="Notes").click()
-    notes = page.get_by_label("Notes for this slide")
-    notes.click()
-    page.keyboard.type("first line")
+    open_doc_menu(page)
+    page.click("#deck-settings")
+    title = page.get_by_label("Deck title")
+    title.click()
+    page.keyboard.press("End")
+    page.keyboard.type(" first")
     page.keyboard.press("Enter")
-    page.keyboard.type("second line")
-    page.keyboard.press("Escape")
-    assert notes.input_value() == "first line\nsecond line"
+    page.keyboard.type(" second")
+    assert title.input_value().endswith(" first second")
+    page.keyboard.press("Escape")  # closes the dialog, not the crop
     assert page.evaluate("svgdeckEditor.mediaTools.active()") is True
     # Away from any field the keys still finish or cancel the crop.
     page.evaluate("document.activeElement.blur()")

@@ -23,15 +23,12 @@ def main(argv: list[str] | None = None) -> None:
     exp.add_argument("deck", type=Path, help="deck directory")
     exp.add_argument("out", type=Path, help="output directory (replaced if it is an earlier export)")
     exp.add_argument("--zip", type=Path, help="also write the export as this zip file")
-
-    exp.add_argument("--no-notes", action="store_true", help="leave speaker notes out of the export")
     exp.add_argument("--pdf", action="store_true",
                      help="also write deck.pdf into the export (and the zip); needs svgdeck[pdf]")
 
     pdf = sub.add_parser("pdf", help="print a deck to PDF, one page per slide (needs svgdeck[pdf])")
     pdf.add_argument("deck", type=Path, help="deck directory")
     pdf.add_argument("out", type=Path, help="PDF file to write")
-    pdf.add_argument("--notes", action="store_true", help="handout: each slide with its speaker notes under it")
     pdf.add_argument("--steps", action="store_true", help="one page per build step instead of per slide")
 
     args = parser.parse_args(argv)
@@ -43,7 +40,7 @@ def main(argv: list[str] | None = None) -> None:
         from .deck import Deck
         from .export import export
         try:
-            out = export(Deck.load(args.deck), args.out, args.zip, include_notes=not args.no_notes, pdf=args.pdf)
+            out = export(Deck.load(args.deck), args.out, args.zip, pdf=args.pdf)
         except RuntimeError as error:  # PDF export without Playwright or Chromium
             sys.exit(f"svgdeck: {error}")
         print(f"exported to {out}/index.html" + (f", {out}/deck.pdf" if args.pdf else "")
@@ -51,7 +48,7 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "pdf":
         from .pdf import render_pdf
         try:
-            out = render_pdf(args.deck, args.out, notes=args.notes, steps=args.steps)
+            out = render_pdf(args.deck, args.out, steps=args.steps)
         except RuntimeError as error:
             sys.exit(f"svgdeck: {error}")
         print(f"wrote {out}")

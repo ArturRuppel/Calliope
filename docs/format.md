@@ -28,7 +28,6 @@ my-talk/
 
 - `slides` is the presentation order. Slide `id` names the file
   `slides/<id>.svg`; ids are stable when slides are reordered.
-- A slide entry may also contain `notes`, a plain-text string for speaker view.
 - `background` fills the screen around the slide when the window is not 16:9.
 - The service accepts a `title` of up to 200 characters, a `size` of two
   integers from 16 to 16384, and a `background` of up to 64 characters
@@ -146,7 +145,7 @@ resized in the editor. The PDF and the slide overview show the whole slide.
 
 The service keeps up to 30 preceding artwork versions per slide in
 `revisions/<id>/<timestamp>-<hash>.svg`. Deleted slides live in `trash/`,
-with a JSON sidecar retaining their slide metadata, including speaker notes.
+with a JSON sidecar retaining their slide metadata.
 These recovery files remain in the working deck and are not included in the
 standalone presentation export.
 

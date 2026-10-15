@@ -1,5 +1,4 @@
 """PDF export: the player's print mode, printed by headless Chromium."""
-import json
 import sys
 import zipfile
 
@@ -13,24 +12,12 @@ from svgdeck.pdf import MISSING_PLAYWRIGHT, render_pdf
 playwright = pytest.importorskip("playwright.sync_api")
 pypdf = pytest.importorskip("pypdf")
 
-NOTES = {"a": "Open with the red slide.", "b": "Green: two builds\nthen move on."}
-
-
 def pages(path):
     return pypdf.PdfReader(path).pages
 
 
 def text(page):
     return " ".join(page.extract_text().split())
-
-
-def with_notes(deck):
-    meta = json.loads((deck / "deck.json").read_text())
-    for slide in meta["slides"]:
-        if slide["id"] in NOTES:
-            slide["notes"] = NOTES[slide["id"]]
-    (deck / "deck.json").write_text(json.dumps(meta))
-    return deck
 
 
 def test_one_deck_sized_page_per_slide(deck, tmp_path):
@@ -49,32 +36,10 @@ def test_steps_print_one_page_per_build_step(deck, tmp_path):
     assert len(pages(render_pdf(deck, tmp_path / "steps.pdf", steps=True))) == 1 + 3 + 1
 
 
-def test_notes_handout_shows_each_slides_notes(deck, tmp_path):
-    result = pages(render_pdf(with_notes(deck), tmp_path / "handout.pdf", notes=True))
-    assert len(result) == 3
-    assert "Open with the red slide." in text(result[0])
-    assert "Green: two builds then move on." in text(result[1])
-    assert "Open with" not in text(result[1])
-    assert [float(v) for v in result[0].mediabox[2:]] == pytest.approx([1440, 810], abs=0.5)
-
-
-def test_notes_and_steps_together(deck, tmp_path):
-    result = pages(render_pdf(with_notes(deck), tmp_path / "both.pdf", notes=True, steps=True))
-    assert len(result) == 5
-    assert all("Green: two builds" in text(page) for page in result[1:4])
-
-
-def test_without_notes_no_notes_are_printed(deck, tmp_path):
-    result = pages(render_pdf(with_notes(deck), tmp_path / "plain.pdf"))
-    assert all("Open with" not in text(page) for page in result)
-
-
 def test_cli_pdf(deck, tmp_path, capsys):
-    cli.main(["pdf", str(with_notes(deck)), str(tmp_path / "out.pdf"), "--notes", "--steps"])
+    cli.main(["pdf", str(deck), str(tmp_path / "out.pdf"), "--steps"])
     assert "out.pdf" in capsys.readouterr().out
-    result = pages(tmp_path / "out.pdf")
-    assert len(result) == 5
-    assert "Open with the red slide." in text(result[0])
+    assert len(pages(tmp_path / "out.pdf")) == 5
     cli.main(["pdf", str(deck), str(tmp_path / "plain.pdf")])
     assert len(pages(tmp_path / "plain.pdf")) == 3
 
@@ -154,21 +119,14 @@ def test_print_mode_shows_every_slide_fully_built_without_movies(browser, deck, 
     assert page.evaluate("getComputedStyle(document.querySelector('.svgdeck-page')).breakAfter") == "page"
 
 
-def test_print_mode_steps_and_notes(browser, deck, tmp_path):
-    page = open_print(browser, with_notes(deck), tmp_path, "?print=steps,notes")
+def test_print_mode_steps(browser, deck, tmp_path):
+    page = open_print(browser, deck, tmp_path, "?print=steps")
     assert page.locator(".svgdeck-page").count() == 5
     assert page.evaluate("[...document.querySelectorAll('.svgdeck-page')].map(p => p.dataset.buildStep ?? null)") \
         == ["0", "0", "1", "2", "0"]
     visibility = page.evaluate("""[...document.querySelectorAll('.svgdeck-page[data-slide="2"]')].map(p =>
         [...p.querySelectorAll('[data-step]')].map(e => getComputedStyle(e).visibility))""")
     assert visibility == [["hidden", "hidden"], ["visible", "hidden"], ["visible", "visible"]]
-    assert page.locator(".svgdeck-print-notes-text").nth(0).inner_text() == NOTES["a"]
-    assert page.locator(".svgdeck-print-notes-text").nth(3).inner_text() == NOTES["b"]
-    # The slide is scaled down above its notes, keeping its aspect.
-    slide = page.locator(".svgdeck-page").nth(0).locator(".svgdeck-slide").bounding_box()
-    notes = page.locator(".svgdeck-print-notes").nth(0).bounding_box()
-    assert slide["width"] / slide["height"] == pytest.approx(16 / 9, abs=0.01)
-    assert slide["width"] < 960 and notes["y"] >= slide["y"] + slide["height"]
 
 
 def test_start_option_enables_print_mode(browser, deck, tmp_path):

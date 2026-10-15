@@ -277,6 +277,9 @@ class Store:
         if meta.get("format") != FORMAT:
             raise ValueError("unsupported format")
         check_deck_fields(meta)
+        # Speaker notes were dropped on 2026-10-15; an entry still carrying one loses it here.
+        meta = dict(meta, slides=[{k: v for k, v in s.items() if k != "notes"} if isinstance(s, dict) else s
+                                   for s in meta.get("slides", [])])
         ids = [s.get("id") for s in meta.get("slides", [])]
         if not ids or len(set(ids)) != len(ids) or not all(isinstance(i, str) and SLIDE_ID.match(i) for i in ids):
             raise ValueError("slides must be a non-empty list of unique ids")
@@ -619,9 +622,8 @@ class Store:
             except (OSError, ValueError, ElementTree.ParseError):
                 continue
             original = path.name.split(".", 1)[0]
-            metadata = self._trash_metadata(path)
             result.append({"token": path.name, "slide": original, "version": version(data),
-                           "deleted": path.stat().st_mtime, "notes": metadata.get("notes", "")})
+                           "deleted": path.stat().st_mtime})
         return result
 
     def restore_trash(self, name: str, token: str) -> dict:

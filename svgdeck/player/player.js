@@ -2,9 +2,9 @@
    Classic script (no modules) so it also runs from file:// in an export.
    Usage: SvgDeck.start(root, deck, {slideBase: "slides/"}) where deck is the
    parsed deck.json with each slide carrying its SVG source in `svg`.
-   Print mode ({print: true} or {print: {notes, steps}}, or ?print=1,
-   ?print=notes,steps, #print in the address) lays every slide out as a page
-   instead of presenting. */
+   Print mode ({print: true} or {print: {steps}}, or ?print=1, ?print=steps,
+   #print in the address) lays every slide out as a page instead of
+   presenting. */
 (function () {
   "use strict";
   const SVGNS = "http://www.w3.org/2000/svg";
@@ -283,13 +283,13 @@
   }
 
   // --- print mode ------------------------------------------------------------
-  // {notes, steps} when the page should print instead of present, else null.
+  // {steps} when the page should print instead of present, else null.
   // options.print wins; otherwise ?print=… or #print=… in the address, whose
   // value lists the flags ("1" or nothing for a plain print, "0" for off).
   function printOptions(options) {
     if (options.print !== undefined && options.print !== null) {
       const p = options.print;
-      return p ? { notes: !!p.notes, steps: !!p.steps } : null;
+      return p ? { steps: !!p.steps } : null;
     }
     let value = new URLSearchParams(location.search).get("print");
     if (value === null) {
@@ -297,8 +297,7 @@
       if (m) value = m[1] ? decodeURIComponent(m[1]) : "";
     }
     if (value === null || /^(0|false|no|off)$/i.test(value)) return null;
-    const flags = value.toLowerCase().split(/[\s,+]+/);
-    return { notes: flags.includes("notes"), steps: flags.includes("steps") };
+    return { steps: value.toLowerCase().split(/[\s,+]+/).includes("steps") };
   }
 
   const stepOf = (el) => parseInt(el.dataset.step, 10) || 0;
@@ -322,21 +321,10 @@
     return Promise.race([Promise.all(loads), new Promise((resolve) => setTimeout(resolve, ms))]);
   }
 
-  // Shrinks a handout's notes until they fit under the slide.
-  function fitNotes(block) {
-    let fit = 1;
-    block.style.setProperty("--svgdeck-fit", "1");
-    while (block.scrollHeight > block.clientHeight + 1 && fit > 0.3) {
-      fit *= 0.9;
-      block.style.setProperty("--svgdeck-fit", String(fit));
-    }
-  }
-
   // Every slide as a page of the deck's aspect, fully built (or one page per
   // build step), with no controls, keys or movies: movies show their poster.
   function startPrint(root, deck, options, size, base, print) {
     root.classList.add("svgdeck", "svgdeck-print");
-    if (print.notes) root.classList.add("svgdeck-handout");
     document.documentElement.classList.add("svgdeck-print-document");
     root.style.setProperty("--svgdeck-aspect", `${size[0]} / ${size[1]}`);
     root.style.setProperty("--svgdeck-background", deck.background || "#000");
@@ -354,7 +342,7 @@
     container.className = "svgdeck-pages";
     root.appendChild(container);
 
-    const pages = [], notesBlocks = [];
+    const pages = [];
     const slides = deck.slides.map((s, i) => {
       const build = (prefix) => {
         try {
@@ -383,19 +371,6 @@
         const label = `Slide ${i + 1}` + (states.length > 1 ? ` (${k + 1}/${states.length})` : "");
         page.setAttribute("aria-label", label);
         page.append(slide.el);
-        if (print.notes) {
-          const block = document.createElement("div");
-          block.className = "svgdeck-print-notes";
-          const heading = document.createElement("p");
-          heading.className = "svgdeck-print-label";
-          heading.textContent = label;
-          const text = document.createElement("div");
-          text.className = "svgdeck-print-notes-text";
-          text.textContent = String(s.notes || "");
-          block.append(heading, text);
-          page.append(block);
-          notesBlocks.push(block);
-        }
         container.append(page);
         pages.push({ el: page, index: i, step, slide });
       });
@@ -408,10 +383,7 @@
     const ready = Promise.race([Promise.all(faces), timeout])
       .then(() => document.fonts.ready)
       .then(() => imagesLoaded(root, 15000))
-      .then(() => {
-        notesBlocks.forEach(fitNotes);
-        root.classList.add("svgdeck-ready");
-      });
+      .then(() => root.classList.add("svgdeck-ready"));
     const api = { print: { ...print }, slides, pages, ready, count: slides.length, options };
     root.svgdeck = api;
     return api;
@@ -566,6 +538,10 @@
     }
     let mirrorStop = null;
     let overviewOpen = false, resumeVideos = [];
+    const query = new URLSearchParams(location.search);
+    // In speaker view (speaker.js) the panel carries every control, so the
+    // page's own chrome stays out: no icon bar, no board buttons, no tap zone.
+    const speakerMode = query.get("speaker") === "1";
     const controls = document.createElement("nav");
     controls.className = "svgdeck-controls";
     controls.setAttribute("aria-label", "Presentation controls");
@@ -599,15 +575,14 @@
       back.href = options.editorUrl; controls.append(back);
     }
     button("Fullscreen", toggleFullscreen, controls, "fullscreen");
-    const query = new URLSearchParams(location.search);
-    if (query.get("speaker") !== "1" && !query.has("session")) {
+    if (!speakerMode && !query.has("session")) {
       button("Speaker view", () => {
         const url = new URL(location.href); url.searchParams.set("speaker", "1"); location.href = url.href;
       }, controls, "speaker");
     }
-    root.append(controls);
-    // The board's own buttons, on the window the speaker draws in.
-    if (query.get("speaker") === "1" || !query.has("session")) {
+    if (!speakerMode) root.append(controls);
+    // The board's own buttons, on a window the speaker draws in without a panel.
+    if (!speakerMode && !query.has("session")) {
       const tools = document.createElement("div");
       tools.className = "svgdeck-board-tools";
       button("Undo", boardUndo, tools); button("Wipe", boardWipe, tools); button("Back to slides", () => setBoard(false), tools);
@@ -615,6 +590,7 @@
     }
     let hideTimer = null;
     function revealControls(ms = 2500) {
+      if (speakerMode) return;
       root.classList.add("svgdeck-show-controls");
       clearTimeout(hideTimer);
       hideTimer = setTimeout(function hide() {
@@ -1058,7 +1034,7 @@
       if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy)) { if (dx < 0) next(); else prev(); }
       else if (Math.abs(dx) < 10 && Math.abs(dy) < 10) {
         // Touch has no hover: a tap along the bottom edge shows or hides the controls.
-        if (e.pointerType !== "mouse" && e.clientY > root.getBoundingClientRect().bottom - 80) {
+        if (!speakerMode && e.pointerType !== "mouse" && e.clientY > root.getBoundingClientRect().bottom - 80) {
           if (root.classList.contains("svgdeck-show-controls")) hideControls(); else revealControls(4000);
           return;
         }
@@ -1112,7 +1088,8 @@
       show(i, s);
     });
 
-    const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length, live, setLive, clearLive, setBoard };
+    const api = { slides, state, next, prev, show, setBlank, ready, count: slides.length, live, setLive, clearLive, setBoard,
+      setOverview, boardUndo, boardWipe, toggleFullscreen };
     root.svgdeck = api;
     window.SvgDeckSpeaker?.(root, deck, api, options, rewrite, parseSlide);
     return api;

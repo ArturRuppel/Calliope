@@ -20,13 +20,11 @@ def to_woff2(source: Path, target: Path) -> None:
     font.save(target)
 
 
-def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes: bool = True,
-           pdf: bool = False) -> Path:
+def export(deck: Deck, out: Path, zip_path: Path | None = None, *, pdf: bool = False) -> Path:
     """Write the deck to `out`: index.html, media/ (only what the slides use)
-    and fonts/ as woff2. Existing contents of `out` are replaced. Speaker notes
-    are part of index.html unless `include_notes` is false. With `pdf`, the
-    export (and the zip) also holds deck.pdf, every slide fully built (needs
-    Playwright, see svgdeck.pdf)."""
+    and fonts/ as woff2. Existing contents of `out` are replaced. With `pdf`,
+    the export (and the zip) also holds deck.pdf, every slide fully built
+    (needs Playwright, see svgdeck.pdf)."""
     if pdf:
         from .pdf import require_playwright
         require_playwright()  # fail before doing any work
@@ -60,8 +58,7 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None, *, include_notes
             to_woff2(deck.path / font["file"], fonts_dir / name)
             font_files[font["file"]] = f"fonts/{name}"
 
-        (staging / "index.html").write_text(render_page(deck, font_files, include_notes=include_notes),
-                                            encoding="utf-8")
+        (staging / "index.html").write_text(render_page(deck, font_files), encoding="utf-8")
         if pdf:
             from .pdf import print_export
             print_export(staging, staging / "deck.pdf", size=deck.meta.get("size") or [1920, 1080])

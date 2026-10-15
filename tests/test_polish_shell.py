@@ -202,11 +202,11 @@ def test_arrow_keys_leave_fields_text_edits_and_menus_alone(page):
     page.locator("#pos-x").focus()
     page.keyboard.press("ArrowLeft")
     assert geometry(page)["x"] == 100
-    page.get_by_role("tab", name="Notes").click()
-    page.locator("#notes-mount textarea").focus()
+    page.evaluate("svgdeckEditor.commits.open()")
+    page.get_by_label("Commit message").focus()
     page.keyboard.press("ArrowRight")
     assert geometry(page)["x"] == 100
-    page.get_by_role("tab", name="Design").click()
+    page.keyboard.press("Escape")
     # Arrow keys move between the deck menu's items, not the selection.
     select_rect(page)
     open_doc_menu(page)
@@ -397,7 +397,7 @@ def test_restore_under_another_name_when_the_name_is_taken(decks_page, server):
 
 
 # --- 7: PDF downloads ---------------------------------------------------------------------------------
-def test_pdf_and_handout_download(page):
+def test_pdf_download(page):
     urls = []
 
     def pdf(route):
@@ -408,14 +408,11 @@ def test_pdf_and_handout_download(page):
     page.route("**/api/decks/talk/pdf*", pdf)
     open_doc_menu(page)
     assert page.get_attribute("#download-pdf", "href") == "/api/decks/talk/pdf"
-    assert page.get_attribute("#download-handout", "href") == "/api/decks/talk/pdf?notes=1"
+    assert page.locator("#download-handout").count() == 0
     with page.expect_download() as info:
         page.click("#download-pdf")
     assert info.value.suggested_filename == "talk.pdf"
-    open_doc_menu(page)
-    with page.expect_download() as info:
-        page.click("#download-handout")
-    assert urls[0].endswith("/api/decks/talk/pdf") and urls[1].endswith("/api/decks/talk/pdf?notes=1")
+    assert urls == [urls[0]] and urls[0].endswith("/api/decks/talk/pdf")
 
 
 def test_pdf_not_available_shows_the_reason(page):
