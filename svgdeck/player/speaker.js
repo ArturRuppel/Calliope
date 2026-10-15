@@ -6,6 +6,9 @@
     const speaker = params.get('speaker') === '1';
     const size = deck.size || [1920, 1080];
     const token = params.get('session');
+    // In the iPad app a second screen stands in for the second window: messages
+    // travel through the native shell, which also says whether a screen is attached.
+    const native = window.svgdeckNative || null;
     let audience = null, audienceReady = false, applying = false, linked = false;
     let refreshStatus = () => {};
     const opaqueOrigin = location.protocol === 'file:' || location.origin === 'null';
@@ -15,7 +18,11 @@
       // Keep the session in the address, so reloading this window keeps it.
       try { const url = new URL(location.href); url.searchParams.set('session', session); history.replaceState(null, '', url.href); } catch (e) { /* session lasts until reload */ }
     }
-    const send = (win, type, value) => { if (win && !win.closed) win.postMessage({svgdeck: session, type, value}, targetOrigin); };
+    const send = (win, type, value) => {
+      const message = {svgdeck: session, type, value};
+      if (native) { native.postMessage(message); return; }
+      if (win && !win.closed) win.postMessage(message, targetOrigin);
+    };
     const snapshot = () => ({index: api.state.index, step: api.state.step, blank: api.state.blank});
     let update = () => {};
     root.addEventListener('svgdeck:change', () => {
@@ -29,21 +36,32 @@
       livePending = true;
       setTimeout(() => { livePending = false; send(speaker ? audience : (token ? window.opener : null), 'live', api.live); }, 16);
     });
-    window.addEventListener('message', e => {
-      const expected = speaker ? audience : (token ? window.opener : null);
-      if (!expected || e.source !== expected || (!opaqueOrigin && e.origin !== location.origin) || e.data?.svgdeck !== session) return;
-      if (e.data.type === 'ready' && speaker) { audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); send(audience, 'live', api.live); return; }
+    let showConnection = () => {};
+    const receive = data => {
+      if (data.type === 'display' && speaker) {
+        // From the native shell: a screen was attached or removed.
+        audience = data.value ? native : null; audienceReady = false;
+        showConnection(data.value ? 'Audience view on the external display.' : 'No external display connected.');
+        refreshStatus(); return;
+      }
+      if (data.type === 'ready' && speaker) { if (native) audience = native; audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); send(audience, 'live', api.live); return; }
       // An audience window that is reused without reloading (same address) is asked to report in.
-      if (e.data.type === 'hello' && !speaker) { send(window.opener, 'ready'); return; }
-      if (e.data.type === 'live') { api.setLive(e.data.value); return; }
-      if (e.data.type !== 'state') return;
-      const v = e.data.value;
+      if (data.type === 'hello' && !speaker) { send(window.opener, 'ready'); return; }
+      if (data.type === 'live') { api.setLive(data.value); return; }
+      if (data.type !== 'state') return;
+      const v = data.value;
       if (!v || !Number.isInteger(v.index) || !Number.isInteger(v.step) || typeof v.blank !== 'boolean') return;
       linked = true;
       applying = true;
       try { api.show(v.index, v.step); api.setBlank(v.blank); } finally { applying = false; }
       update();
+    };
+    window.addEventListener('message', e => {
+      const expected = speaker ? audience : (token ? window.opener : null);
+      if (native || !expected || e.source !== expected || (!opaqueOrigin && e.origin !== location.origin) || e.data?.svgdeck !== session) return;
+      receive(e.data);
     });
+    if (native) window.addEventListener('svgdeck:native', e => { if (e.detail?.svgdeck === session) receive(e.detail); });
     // True while this window is one of a synchronized speaker/audience pair.
     api.paired = () => speaker ? !!audience && !audience.closed && audienceReady : linked;
     api.ready.then(() => { if (!speaker && token) send(window.opener, 'ready'); });
@@ -56,12 +74,14 @@
     const controls = document.createElement('div'); controls.className = 'speaker-actions'; panel.append(controls);
     const button = (name, fn) => { const b = document.createElement('button'); b.textContent = name; b.onclick = fn; controls.append(b); return b; };
     const connection = document.createElement('p'); connection.className = 'speaker-connection';
-    button('Open audience window', () => {
-      if (audience && !audience.closed) { audience.focus(); return; }
+    showConnection = text => { connection.textContent = text; };
+    button(native ? 'Show on the external display' : 'Open audience window', () => {
+      if (!native && audience && !audience.closed) { audience.focus(); return; }
       const url = new URL(location.href); url.searchParams.delete('speaker'); url.searchParams.set('session', session);
+      audienceReady = false;
+      if (native) { send(null, 'open', url.href); return; }
       // A named target: after this window is reloaded, the audience window that is
       // still open is found again instead of a second one opening.
-      audienceReady = false;
       audience = window.open(url.href, 'svgdeck-audience-' + session);
       send(audience, 'hello');
       refreshStatus();
@@ -75,7 +95,7 @@
     refreshStatus = () => {
       const open = !!audience && !audience.closed;
       status.dataset.connected = String(open && audienceReady);
-      status.textContent = 'Audience window: ' + (!open ? 'disconnected' : audienceReady ? 'connected' : 'connecting');
+      status.textContent = (native ? 'External display: ' : 'Audience window: ') + (!open ? 'disconnected' : audienceReady ? 'connected' : 'connecting');
     };
     const counter = document.createElement('p'); panel.append(counter, status, connection);
     const clock = document.createElement('output'); clock.setAttribute('aria-label', 'Elapsed time'); clock.className = 'speaker-timer'; panel.append(clock);
@@ -112,5 +132,6 @@
     window.addEventListener('pagehide', () => clearInterval(interval));
     new ResizeObserver(() => window.dispatchEvent(new Event('resize'))).observe(root);
     api.ready.then(update); timer(); refreshStatus();
+    if (native) send(null, 'display');  // is a screen attached? The answer arrives as a 'display' message.
   };
 })();
