@@ -31,10 +31,21 @@ A standalone app does.
 ## Build and install
 
 One-time: install Swift, `usbmuxd` and xtool, run `xtool setup` (Apple ID +
-`Xcode.xip`), enable Developer Mode on the iPad. Then, with the iPad on USB:
+`Xcode.xip`), enable Developer Mode on the iPad, and write the app's
+`Info.plist` for your server:
 
 ```
 cd ~/Projects/Calliope/ios/Calliope
+./configure sancho.example.ts.net      # the host the iPad reaches Calliope at
+```
+
+That host goes into `WKAppBoundDomains`, which is what lets the app's web views
+run service workers: the deck list then keeps its offline copy inside the app,
+as it does in Safari, and a deck presents without the server. Open the deck
+list in the app while the server is reachable before a talk; its status line
+says how current the copy is. Then, with the iPad on USB:
+
+```
 xtool dev
 ```
 

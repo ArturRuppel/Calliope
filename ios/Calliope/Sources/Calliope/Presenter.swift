@@ -72,6 +72,9 @@ final class Presenter: NSObject, ObservableObject {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        // Service workers, and with them the offline copy the deck list keeps, only
+        // run in a web view bound to the domains in Info.plist (WKAppBoundDomains).
+        config.limitsNavigationsToAppBoundDomains = true
         let bridge = """
         (function () {
           if (window.svgdeckNative) return;

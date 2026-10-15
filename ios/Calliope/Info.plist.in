@@ -2,9 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Merged over xtool's generated Info.plist. -->
+	<!-- Merged over xtool's generated Info.plist. Written by ./configure from Info.plist.in,
+	     which fills in the server's host: a web view bound to it may run service workers,
+	     so the deck list's offline copy works in the app as it does in Safari. -->
 	<key>CFBundleDisplayName</key>
 	<string>Calliope</string>
+	<key>WKAppBoundDomains</key>
+	<array>
+		<string>@SERVER_HOST@</string>
+	</array>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UISupportedInterfaceOrientations</key>

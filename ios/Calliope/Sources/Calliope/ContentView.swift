@@ -83,7 +83,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Calliope server")
                 } footer: {
-                    Text("The address this iPad opens Calliope at. Tailscale has to be connected.")
+                    Text("The address this iPad opens Calliope at, on the host the app was configured for. Tailscale has to be connected; a deck the list has copied presents without it.")
                 }
             }
             .navigationTitle("Settings")
