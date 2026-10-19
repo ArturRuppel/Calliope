@@ -48,6 +48,12 @@
         refreshStatus(); return;
       }
       if (data.type === 'ready' && speaker) { if (native) audience = native; audienceReady = true; refreshStatus(); send(audience, 'state', snapshot()); send(audience, 'live', api.live); return; }
+      // In the app, two audience copies (iPad and external display) share a session
+      // and drive each other: the one that hears the other arrive sends its state.
+      if (data.type === 'ready' && !speaker) {
+        if (native) { linked = true; send(null, 'state', snapshot()); send(null, 'live', api.live); }
+        return;
+      }
       // An audience window that is reused without reloading (same address) is asked to report in.
       if (data.type === 'hello' && !speaker) { send(window.opener, 'ready'); return; }
       if (data.type === 'live') { api.setLive(data.value); return; }

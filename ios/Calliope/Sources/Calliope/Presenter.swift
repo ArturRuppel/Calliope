@@ -103,8 +103,12 @@ final class Presenter: NSObject, ObservableObject {
         guard let pair = pair(for: url) else { speakerView.load(URLRequest(url: url)); return }
         session = pair.session
         if externalConnected, let audienceView {
+            // The same audience page on both screens: the iPad's copy is the one the
+            // speaker touches and the one a screen share (Teams) captures, the external
+            // one fills the projector at the deck's aspect ratio. Speaker view stays a
+            // button away on the iPad's copy.
             audienceView.load(URLRequest(url: pair.audience))
-            speakerView.load(URLRequest(url: pair.speaker))
+            speakerView.load(URLRequest(url: pair.audience))
         } else {
             speakerView.load(URLRequest(url: url))
         }
@@ -146,10 +150,17 @@ final class Presenter: NSObject, ObservableObject {
         externalWindows[key] = window
         externalConnected = true
         tell(speakerView, ["svgdeck": session, "type": "display", "value": true])
-        // Already in the speaker view? Its audience half belongs on the new screen.
+        // Already presenting? The audience page belongs on the new screen too. A page
+        // that was opened without a screen has no session yet; it is reloaded with
+        // one (its #slide.step comes along) so the two copies hear each other.
         if let url = speakerView.url, let pair = pair(for: url) {
             session = pair.session
             view.load(URLRequest(url: pair.audience))
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: true)?.queryItems ?? []
+            if !items.contains(where: { $0.name == "session" }) {
+                let speaker = items.contains { $0.name == "speaker" && $0.value == "1" }
+                speakerView.load(URLRequest(url: speaker ? pair.speaker : pair.audience))
+            }
         }
         return window
     }

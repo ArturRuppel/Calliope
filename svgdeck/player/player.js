@@ -575,14 +575,18 @@
       back.href = options.editorUrl; controls.append(back);
     }
     button("Fullscreen", toggleFullscreen, controls, "fullscreen");
-    if (!speakerMode && !query.has("session")) {
+    // A window in a session is normally the audience half of a pair and keeps quiet.
+    // In the app, the iPad's copy is in a session with the external display and
+    // still is the page the speaker works from.
+    const drives = !speakerMode && (!query.has("session") || window.svgdeckNative?.role === "speaker");
+    if (drives) {
       button("Speaker view", () => {
         const url = new URL(location.href); url.searchParams.set("speaker", "1"); location.href = url.href;
       }, controls, "speaker");
     }
     if (!speakerMode) root.append(controls);
     // The board's own buttons, on a window the speaker draws in without a panel.
-    if (!speakerMode && !query.has("session")) {
+    if (drives) {
       const tools = document.createElement("div");
       tools.className = "svgdeck-board-tools";
       button("Undo", boardUndo, tools); button("Wipe", boardWipe, tools); button("Back to slides", () => setBoard(false), tools);

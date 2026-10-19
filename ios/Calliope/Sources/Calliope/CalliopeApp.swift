@@ -3,7 +3,10 @@ import UIKit
 
 /// A thin shell around the Calliope web app. The iPad shows Calliope itself; when
 /// a second screen is attached (cable or AirPlay) and a deck is presented, the
-/// audience view goes to that screen and the speaker view stays on the iPad.
+/// audience view goes to that screen and a second copy of it stays on the iPad,
+/// where it is touched (zoom, marks, pointer) and where a screen share picks it
+/// up: iPadOS only ever broadcasts the iPad's own screen. Speaker view is a button
+/// on that copy.
 @main
 struct CalliopeApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var delegate
