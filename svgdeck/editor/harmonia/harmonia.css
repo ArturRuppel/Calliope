@@ -202,3 +202,19 @@ a.hm-row:active, button.hm-row:active { background: var(--hm-sunk); }
 .hm-pips > i.on { background: var(--hm-home); border-color: var(--hm-home); }
 .hm-meter { height: 6px; background: var(--hm-hairline); }
 .hm-meter > i { display: block; height: 100%; background: var(--hm-home); }
+
+/* — iPadOS status bar. Home-screen apps on iPadOS 26 blur ~40pt of the page under the status
+   bar unless a fixed box covers the point 4px below the top edge's midpoint, spans at least 90%
+   of the width and is over 10px tall; then the bar takes that box's background colour instead.
+   Put <div class="hm-status-band" aria-hidden="true"></div> first in <body>, in the HTML itself
+   so it exists from the first frame. background-clip: text keeps it invisible. Workaround from
+   coder/coder#31027, confirmed on the iPad in Athena 2026-10-25. — */
+.hm-status-band { display: none; }
+@media (display-mode: standalone) {
+  @supports (-webkit-touch-callout: none) {
+    .hm-status-band { display: block; position: fixed; inset: 0 0 auto; height: 12px;
+      background-color: var(--hm-status-band, var(--hm-ground));
+      -webkit-background-clip: text; background-clip: text;
+      z-index: 2147483647; pointer-events: none; }
+  }
+}
