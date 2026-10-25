@@ -467,6 +467,20 @@ def test_bold_on_selected_words_while_editing(page, server):
     assert "font-weight: 700" in saved_slide(page, server) or "font-weight:700" in saved_slide(page, server)
 
 
+def test_superscript_needs_selected_characters(page, server):
+    page.keyboard.press("t")
+    page.mouse.click(*to_screen(page, 300, 300))
+    page.keyboard.type("Title")
+    page.get_by_title("Superscript", exact=True).click()
+    assert page.locator(".text-edit").count() == 1, "the bar ended the edit"
+    page.keyboard.press("Shift+ArrowLeft")
+    page.get_by_title("Superscript", exact=True).click()
+    page.get_by_role("button", name="Done", exact=True).click()
+    raised = page.evaluate("""Array.from(svgdeckEditor.editor.svg.querySelectorAll('text tspan tspan'))
+      .map(s => [s.textContent, s.style.baselineShift])""")
+    assert raised == [["e", "super"]]
+
+
 def test_whole_text_weight_keeps_bold_words(page, server):
     page.evaluate("""(() => { const e = svgdeckEditor.editor, ns = 'http://www.w3.org/2000/svg';
       e.change(() => {

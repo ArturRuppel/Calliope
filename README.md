@@ -27,6 +27,11 @@ bodies are capped at 64 MiB; media uploads at 2 GiB.
 Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 `$SVGDECK_DATA`), never in this repo. Fonts are licensed and stay out of it too.
 
+On sancho, `scripts/backup.sh` mirrors the whole data directory to
+`/helix/projects/Pomice2/Artur/backups/calliope/svgdeck/` with rsync (never
+deleting there); `calliope-backup.timer` (systemd user, hourly) runs it and it
+skips quietly when the Pasteur share is unreachable.
+
 ```
 svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
 svgdeck export DECK_DIR OUT_DIR     # standalone copy: open OUT_DIR/index.html, no network needed

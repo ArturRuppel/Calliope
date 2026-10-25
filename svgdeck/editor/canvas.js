@@ -2398,7 +2398,8 @@ export class SlideEditor {
   }
 
   /** Bold, italic or a colour for the selected words while editing; with
-   *  nothing selected, for the whole text. */
+   *  nothing selected, for the whole text. Sub- and superscript need a
+   *  selection. */
   formatText(command, value) {
     const te = this.textEdit;
     if (!te) return;
@@ -2406,6 +2407,12 @@ export class SlideEditor {
     const sel = getSelection();
     if (te.range && te.box.contains(te.range.startContainer)) { sel.removeAllRanges(); sel.addRange(te.range); }
     const whole = sel.isCollapsed || !te.box.contains(sel.anchorNode);
+    // Raising or lowering is for characters (x², CO₂), never a whole text: on
+    // a touch screen a stray tap on x² lifted titles off their line.
+    if (whole && (command === "superscript" || command === "subscript")) {
+      this.hooks.toast?.("Select the characters to raise or lower first");
+      return;
+    }
     if (whole) {
       const r = document.createRange();
       r.selectNodeContents(te.box);
