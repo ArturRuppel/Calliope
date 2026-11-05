@@ -135,10 +135,13 @@ try {
   await page.waitForFunction(() => /cannot convert/.test(document.getElementById("toast").textContent), null, { timeout: 15000 });
   step("an .mkv is refused with a reason (no converter in the browser)");
 
+  await page.goto(base + "index.html");
+  await page.waitForSelector("text=E2E deck");
   const [download] = await Promise.all([
     page.waitForEvent("download", { timeout: 60000 }),
-    page.evaluate("CalliopeRuntime.download('/api/decks/e2e-deck/export.zip', 'e2e-deck.zip')"),
+    page.click(".deck:has-text('E2E deck') button[data-export='e2e-deck']"),
   ]);
+  await page.waitForSelector("button[data-export='e2e-deck']:not([disabled])", { timeout: 30000 });
   const zipPath = await download.path();
   const entries = unzipSync(new Uint8Array(readFileSync(zipPath)));
   const png = Object.keys(entries).find((n) => /media\/dots-[0-9a-f]{8}\.png$/.test(n));

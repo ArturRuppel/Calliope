@@ -118,6 +118,7 @@
         <a class="btn" href="/d/${encodeURIComponent(d.name)}/" target="_blank">Present</a>
         <button data-rename="${esc(d.name)}" title="Rename the deck's folder">Rename</button>
         <button data-duplicate="${esc(d.name)}" title="Make a copy of the deck">Duplicate</button>
+        <button data-export="${esc(d.name)}" title="Download an offline copy: a .zip that plays without network">Export</button>
         <button class="danger" data-delete="${esc(d.name)}">Delete</button>
         <div class="inline"></div><div class="row-error" role="alert"></div></div>`).join("")
       : "<p>No decks yet.</p>";
@@ -194,6 +195,24 @@
     else await load();
   }
 
+  /** Download the deck's offline copy. The server answers the zip as an attachment, so a
+      navigation is a download; the browser build fetches it and hands over a blob. */
+  async function exportDeck(rowEl, name) {
+    const button = rowEl.querySelector("[data-export]");
+    const path = `/api/decks/${encodeURIComponent(name)}/export.zip`;
+    if (!window.CalliopeRuntime) { location.href = path; return; }
+    button.disabled = true;
+    button.textContent = "Preparing…";
+    try {
+      await CalliopeRuntime.download(path, `${name}.zip`);
+    } catch (err) {
+      rowEl.querySelector(".row-error").textContent = `Could not export the deck: ${err.message}`;
+    } finally {
+      button.disabled = false;
+      button.textContent = "Export";
+    }
+  }
+
   /** Restore a deleted deck; when its name is taken, ask for another one. */
   async function restoreDeck(rowEl, token, name) {
     const message = await post(`/api/trash/${encodeURIComponent(token)}/restore`, undefined, "Could not restore the deck");
@@ -216,12 +235,14 @@
   document.addEventListener("click", async (e) => {
     const del = e.target.closest("[data-delete]"), restore = e.target.closest("[data-restore]");
     const ren = e.target.closest("[data-rename]"), dup = e.target.closest("[data-duplicate]");
-    if (ren || dup) {
+    const exp = e.target.closest("[data-export]");
+    if (ren || dup || exp) {
       disarm();
-      const rowEl = (ren || dup).closest(".deck");
+      const rowEl = (ren || dup || exp).closest(".deck");
       rowEl.querySelector(".row-error").textContent = "";
       if (ren) rename(rowEl, ren.dataset.rename);
-      else await duplicate(rowEl, dup.dataset.duplicate);
+      else if (dup) await duplicate(rowEl, dup.dataset.duplicate);
+      else await exportDeck(rowEl, exp.dataset.export);
       return;
     }
     if (restore) {
