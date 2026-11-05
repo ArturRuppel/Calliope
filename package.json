@@ -1,0 +1,17 @@
+{
+  "name": "calliope-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Calliope in the browser: the editor and the svgdeck service under Pyodide, no server",
+  "scripts": {
+    "build:web": "node tools/build-web.mjs",
+    "test:e2e": "node e2e/browser_runtime_test.mjs",
+    "boot-timing": "node tools/boot-timing.mjs"
+  },
+  "devDependencies": {
+    "fflate": "0.8.3",
+    "playwright": "1.60.0",
+    "pyodide": "314.0.7"
+  }
+}

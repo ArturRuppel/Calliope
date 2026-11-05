@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" xml:space="preserve">
+<defs/>
+<rect id="background" data-label="background" data-locked="true" width="1920" height="1080" fill="#f3f3f4"/>
+<text id="title" x="120" y="200" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:800;font-size:80px;fill:#111111">Moving a deck in and out</text>
+<rect id="out" x="120" y="300" width="800" height="520" fill="#ffffff" stroke="#0e7c7b" stroke-width="6"/>
+<text id="out1" x="170" y="390" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:800;font-size:44px;fill:#0e7c7b">Out</text>
+<text id="out2" x="170" y="470" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">Deck menu, Export offline copy:</text>
+<text id="out3" x="170" y="520" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">a .zip that plays from index.html</text>
+<text id="out4" x="170" y="570" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">anywhere, with no network.</text>
+<rect id="in" x="1000" y="300" width="800" height="520" fill="#ffffff" stroke="#6b3fa0" stroke-width="6"/>
+<text id="in1" x="1050" y="390" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:800;font-size:44px;fill:#6b3fa0">In</text>
+<text id="in2" x="1050" y="470" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">All decks, Import a deck: such a .zip,</text>
+<text id="in3" x="1050" y="520" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">or a deck folder zipped as it is.</text>
+<text id="in4" x="1050" y="570" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:34px;fill:#333333">Its history stays behind.</text>
+</svg>

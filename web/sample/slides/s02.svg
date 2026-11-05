@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" xml:space="preserve">
+<defs><marker id="head" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#111111"/></marker></defs>
+<rect id="background" data-label="background" data-locked="true" width="1920" height="1080" fill="#ffffff"/>
+<text id="title" x="120" y="170" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:800;font-size:80px;fill:#111111">Shapes, lines and builds</text>
+<rect id="box" x="160" y="320" width="440" height="300" rx="24" fill="#92b1e5" stroke="#1f3f7a" stroke-width="6"/>
+<ellipse id="oval" cx="1000" cy="470" rx="230" ry="150" fill="#ffffff" stroke="#6b3fa0" stroke-width="10" stroke-dasharray="30 18" data-step="1"/>
+<path id="ink" d="M1380 600 C 1420 380 1560 330 1640 420 S 1700 640 1560 610 S 1430 440 1600 360" fill="none" stroke="#d62728" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" data-step="2"/>
+<line id="arrow" x1="620" y1="470" x2="740" y2="470" stroke="#111111" stroke-width="8" marker-end="url(#head)" data-step="1"/>
+<text id="caption" x="160" y="820" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:40px;fill:#333333">The oval and the arrow appear at build step 1, the ink at step 2.</text>
+<text id="caption2" x="160" y="880" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:40px;fill:#333333">Draw with the Pencil (P), pick shapes from the rail on the left.</text>
+</svg>

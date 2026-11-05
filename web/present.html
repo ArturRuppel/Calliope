@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en" data-calliope-page="present">
+<head>
+<meta charset="utf-8">
+<script src="runtime.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Calliope</title>
+<link rel="icon" href="editor/icon.svg" type="image/svg+xml">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #c2c2c2; font: 600 14px/1.4 system-ui, sans-serif; }
+  #wait { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; text-align: center; }
+  #wait.error { color: #ff8a80; }
+</style>
+</head>
+<body>
+<div id="wait" role="status">Loading the deck…</div>
+<script>
+  // The service renders the player page; the runtime swaps it in for this one.
+  const wait = document.getElementById("wait");
+  CalliopeRuntime.onState((s) => {
+    if (s.error) { wait.classList.add("error"); wait.textContent = `Calliope could not start: ${s.error}`; }
+    else if (s.fraction < 1) wait.textContent = `Loading the deck… ${Math.round(25 * (s.read || 0) + 75 * (s.fraction || 0))}%`;
+  });
+  CalliopeRuntime.present().catch((e) => { wait.classList.add("error"); wait.textContent = `The deck cannot be shown: ${e.message}`; });
+</script>
+</body>
+</html>

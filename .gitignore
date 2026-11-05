@@ -16,3 +16,7 @@ ios/Calliope/xtool/
 ios/Calliope/.build/
 ios/Calliope/.bsp/
 ios/Calliope/Info.plist
+
+# Browser build (npm run build:web) and its e2e failure screenshot
+dist-web/
+e2e/failure.png

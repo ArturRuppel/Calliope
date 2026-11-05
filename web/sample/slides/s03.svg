@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080" xml:space="preserve">
+<defs/>
+<rect id="background" data-label="background" data-locked="true" width="1920" height="1080" fill="#111111"/>
+<image id="picture" href="../media/PICTURE" x="160" y="140" width="1000" height="800" preserveAspectRatio="xMidYMid slice"/>
+<rect id="frame" x="160" y="140" width="1000" height="800" fill="none" stroke="#ffffff" stroke-width="4"/>
+<text id="title" x="1240" y="260" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:800;font-size:64px;fill:#ffffff">A picture</text>
+<text id="l1" x="1240" y="350" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:36px;fill:#c2c2c2">Drawn by the build script, not taken</text>
+<text id="l2" x="1240" y="400" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:36px;fill:#c2c2c2">from anywhere. Pictures and movies</text>
+<text id="l3" x="1240" y="450" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:36px;fill:#c2c2c2">you add are kept in the browser's</text>
+<text id="l4" x="1240" y="500" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:36px;fill:#c2c2c2">private file storage.</text>
+<text id="l5" x="1240" y="620" style="font-family:Archivo, sans-serif;white-space:pre;font-weight:400;font-size:36px;fill:#92b1e5">Movies: H.264 .mp4 or .webm, as is.</text>
+</svg>

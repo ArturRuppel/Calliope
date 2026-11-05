@@ -1,0 +1,9 @@
+{
+  "name": "Welcome-to-Calliope",
+  "format": 1,
+  "title": "Welcome to Calliope",
+  "size": [1920, 1080],
+  "background": "#000000",
+  "slides": [{"id": "s01"}, {"id": "s02"}, {"id": "s03"}, {"id": "s04"}],
+  "fonts": []
+}
