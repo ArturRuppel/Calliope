@@ -7,8 +7,10 @@
 
      npm run build:web && npm run test:e2e
      node e2e/browser_runtime_test.mjs https://host/sub/path/   # a deployed copy */
+import { execFileSync } from "node:child_process";
 import { createServer } from "node:http";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { readFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { extname, join, dirname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { unzipSync } from "fflate";
@@ -105,6 +107,34 @@ try {
   check(/href="\.\.\/media\/dots-[0-9a-f]{8}\.png"/.test(stored), "the slide file names the picture as ../media/, not a blob URL");
   step("picture added: stored in OPFS, drawn from a blob URL, saved as ../media/");
 
+  /* a movie, if ffmpeg is here to make one (VP9: Playwright's Chromium has no H.264) */
+  let movie = null;
+  try {
+    movie = join(tmpdir(), `calliope-e2e-${process.pid}.webm`);
+    execFileSync("ffmpeg", ["-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=10:duration=1",
+      "-c:v", "libvpx-vp9", "-b:v", "50k", movie]);
+  } catch (e) { movie = null; }
+  if (movie) {
+    await page.setInputFiles("#media-file", movie);
+    const video = await page.waitForFunction(() => {
+      const el = svgdeckEditor.editor.svg.querySelector("image[data-video]");
+      return el && { poster: el.getAttribute("href"), video: el.getAttribute("data-video"), w: +el.getAttribute("width") };
+    }, null, { timeout: 30000 });
+    const v = await video.jsonValue();
+    check(v.poster.startsWith("blob:") && v.video.startsWith("blob:"), `movie and poster from blob URLs (${JSON.stringify(v)})`);
+    await saved();
+    await page.evaluate("svgdeckEditor.flush()");
+    const text = await page.evaluate(async () => (await fetch(`/api/decks/e2e-deck/slides/${svgdeckEditor.state.current}`)).text());
+    check(/data-video="\.\.\/media\/calliope-e2e-\d+-[0-9a-f]{8}\.webm"/.test(text) && /\.poster\.jpg"/.test(text),
+      "the slide names the movie (kept as .webm) and its poster frame");
+    step("movie added: size and poster frame taken in the page, kept as .webm");
+    rmSync(movie, { force: true });
+  } else step("movie skipped: no ffmpeg to make one");
+
+  await page.setInputFiles("#media-file", { name: "clip.mkv", mimeType: "video/x-matroska", buffer: Buffer.from("not a movie") });
+  await page.waitForFunction(() => /cannot convert/.test(document.getElementById("toast").textContent), null, { timeout: 15000 });
+  step("an .mkv is refused with a reason (no converter in the browser)");
+
   const [download] = await Promise.all([
     page.waitForEvent("download", { timeout: 60000 }),
     page.evaluate("CalliopeRuntime.download('/api/decks/e2e-deck/export.zip', 'e2e-deck.zip')"),
@@ -139,6 +169,24 @@ try {
   }, null, { timeout: 30000 });
   check(await shown.jsonValue() === 120, "the presenter draws the imported picture");
   step("presenter shows the imported deck with its picture");
+
+  if (!process.argv[2]) {
+    /* the same build opened straight from disk */
+    const disk = await context.newPage();
+    disk.on("pageerror", (e) => errors.push(`file://: ${e.message}`));
+    await disk.goto(`file://${DIST}/index.html`);
+    await disk.waitForSelector("text=Welcome to Calliope", { timeout: 60000 });
+    await disk.goto(`file://${DIST}/edit.html?deck=Welcome-to-Calliope`);
+    await disk.waitForFunction("document.getElementById('status')?.textContent.includes('Saved')", null, { timeout: 30000 });
+    const width = await disk.evaluate(async () => {
+      await svgdeckEditor.openSlide("s03");
+      const href = svgdeckEditor.editor.svg.querySelector("image")?.getAttribute("href") || "";
+      const img = new Image(); img.src = href; await img.decode();
+      return href.startsWith("blob:") ? img.naturalWidth : 0;
+    });
+    check(width === 800, `the sample picture is drawn over file:// (${width})`);
+    step("over file:// too: deck list and editor (modules from blob URLs, media in IndexedDB)");
+  }
 
   check(!errors.length, `no page errors (${errors.join("; ")})`);
   console.log("PASS");
