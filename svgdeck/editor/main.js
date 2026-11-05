@@ -11,6 +11,10 @@ import { IMAGE_ADJUSTMENTS, adjustmentValue, setImageAdjustment, resetImageAdjus
 import { openMovieTrim } from "./movie-trim.js";
 
 const DECK = document.body.dataset.deck;
+// The browser build (web/runtime.js) runs the service in a worker; it hands out
+// URLs for deck files and pages. Absent when the service serves the editor.
+const RT = globalThis.CalliopeRuntime;
+const pageUrl = (u) => (RT ? RT.link(u) : u);
 const $ = (id) => document.getElementById(id);
 const PALETTE = ["#000000", "#333333", "#7c7c7c", "#c2c2c2", "#ffffff", "#92b1e5",
                  "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd", "#8c564b"];
@@ -124,8 +128,12 @@ function savePrefs() {
 // Media paths: slides say ../media/x (relative to slides/); the editor page
 // needs URLs the server can answer.
 const slideBase = `/d/${DECK}/slides/`;
-const hrefIn = (v) => (/^(#|data:|[a-z][a-z0-9+.-]*:|\/)/i.test(v) ? v : new URL(v, location.origin + slideBase).pathname);
+const hrefIn = (v) => {
+  const out = /^(#|data:|[a-z][a-z0-9+.-]*:|\/)/i.test(v) ? v : new URL(v, location.origin + slideBase).pathname;
+  return RT ? RT.asset(out) : out;
+};
 const hrefOut = (v) => {
+  if (RT) v = RT.unasset(v);
   if (v.startsWith(location.origin)) v = v.slice(location.origin.length);
   const prefix = `/d/${DECK}/`;
   return v.startsWith(prefix) ? "../" + v.slice(prefix.length) : v;
@@ -325,7 +333,7 @@ async function leave(url = "/") {
       return;
     }
   }
-  location.href = url;
+  location.href = pageUrl(url);
 }
 
 // Deck writes go one at a time, each built from the deck and version the
@@ -1325,7 +1333,9 @@ function buildDocMenu() {
     item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
     sep(),
     item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", guard(exportDeck, "Could not export")),
-    download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`),
+    RT ? item("download-pdf", "M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z", "Print or save as PDF",
+      "The browser's print dialog, one page per slide", guard(printDeck, "Could not print"))
+      : download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`),
     item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Next slide, timer, audience window", guard(() => present(true), "Could not open speaker view")),
     sep(),
     item("deck-settings", "M4 6h16M4 12h16M4 18h16", "Deck settings…", `Title, size, background, fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
@@ -1508,7 +1518,14 @@ async function downloadPdf(url) {
 async function exportDeck() {
   try { await flush(); } catch (error) { toast(`Not exported: the deck is not saved (${error.message}).`, 8000); return; }
   toast("Preparing the export…");
-  location.href = `/api/decks/${DECK}/export.zip`;
+  if (RT) toast(`Downloaded ${await RT.download(`/api/decks/${DECK}/export.zip`, `${DECK}.zip`)}`);
+  else location.href = `/api/decks/${DECK}/export.zip`;
+}
+
+/** The browser build has no PDF renderer: its print of the player's print mode. */
+async function printDeck() {
+  try { await flush(); } catch (error) { toast(`Not printed: the deck is not saved (${error.message}).`, 8000); return; }
+  window.open(pageUrl(`/d/${DECK}/?print=1`), "_blank");
 }
 
 async function uploadMedia(files, target = state.current, center = editor.visibleCenter()) {
@@ -2165,7 +2182,7 @@ function updateBreadcrumb() {
 // --- fonts ------------------------------------------------------------------------------------
 function installFaces(faces) {
   const css = faces.map((f) => `@font-face { font-family: ${JSON.stringify(f.family)}; src: url(${JSON.stringify(
-    "/api/fonts/file/" + f.path.split("/").map(encodeURIComponent).join("/"))}); font-weight: ${f.weight}; font-style: ${f.style}; }`).join("\n");
+    hrefIn("/api/fonts/file/" + f.path.split("/").map(encodeURIComponent).join("/")))}); font-weight: ${f.weight}; font-style: ${f.style}; }`).join("\n");
   let style = $("library-fonts");
   if (!style) { style = el("style", { id: "library-fonts" }); document.head.append(style); }
   style.textContent = css;
@@ -2682,7 +2699,7 @@ function redo() {
 
 // --- wiring ------------------------------------------------------------------------------------------
 async function present(speaker = false) {
-  const url = `/d/${DECK}/${speaker ? "?speaker=1" : ""}#${index() + 1}`;
+  const url = pageUrl(`/d/${DECK}/${speaker ? "?speaker=1" : ""}#${index() + 1}`);
   const win = window.open("about:blank", "_blank");
   try { await flush(); if (win) win.location.href = url; else location.href = url; }
   catch (e) { win?.close(); toast(`Not presenting: the deck is not saved (${e.message}).`, 8000); }

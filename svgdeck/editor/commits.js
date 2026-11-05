@@ -20,7 +20,7 @@ export function installCommits({state, api, flush, settle, toast,
     if (dialog) return dialog;
     if (!document.querySelector("link[data-svgdeck-commits]")) {
       const css = document.createElement("link");
-      css.rel = "stylesheet"; css.href = "/editor/commits.css"; css.dataset.svgdeckCommits = "true";
+      css.rel = "stylesheet"; css.href = globalThis.CalliopeRuntime?.asset("/editor/commits.css") ?? "/editor/commits.css"; css.dataset.svgdeckCommits = "true";
       document.head.append(css);
     }
     dialog = document.createElement("dialog");

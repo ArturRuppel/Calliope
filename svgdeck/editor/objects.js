@@ -27,7 +27,7 @@ export function installObjects({ editor, state, toast, settle, mount = document.
     if (document.querySelector('link[data-svgdeck-objects]')) return;
     const link = document.createElement("link");
     link.rel = "stylesheet";
-    link.href = "/editor/objects.css";
+    link.href = globalThis.CalliopeRuntime?.asset("/editor/objects.css") ?? "/editor/objects.css";
     link.dataset.svgdeckObjects = "";
     document.head.append(link);
   }

@@ -67,7 +67,7 @@ export function installRecovery({ state, api, toast, settle, flush, openSlide,
     dialog = document.createElement("dialog");
     if (!document.querySelector('link[data-svgdeck-recovery]')) {
       const css = document.createElement("link");
-      css.rel = "stylesheet"; css.href = "/editor/recovery.css"; css.dataset.svgdeckRecovery = "true";
+      css.rel = "stylesheet"; css.href = globalThis.CalliopeRuntime?.asset("/editor/recovery.css") ?? "/editor/recovery.css"; css.dataset.svgdeckRecovery = "true";
       document.head.append(css);
     }
     dialog.className = "recovery-dialog";

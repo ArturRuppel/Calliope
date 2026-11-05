@@ -77,6 +77,8 @@ const CalliopeOffline = (() => {
 
   /** Wire the status line: `el` shows the state, and a tap syncs again. */
   function attach(el) {
+    // The browser build has no server to copy from: the decks already live here.
+    if (window.CalliopeRuntime) return attachBrowser(el);
     if (!supported) { el.textContent = "No offline copy: this browser cannot keep one here."; return; }
     navigator.serviceWorker.register("/sw.js").catch(() => {});
     const when = (t) => new Date(t).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
@@ -90,6 +92,13 @@ const CalliopeOffline = (() => {
     const go = () => sync(({ done, total }) => { if (total) el.textContent = `Copying for offline use… ${done} of ${total}`; }).then(show);
     el.addEventListener("click", go);
     navigator.serviceWorker.ready.then(go);
+  }
+
+  async function attachBrowser(el) {
+    const { usage, persisted } = await CalliopeRuntime.storageSummary();
+    el.textContent = `Stored in this browser${usage ? ` · ${megabytes(usage)}` : ""} · ` +
+      (persisted ? "kept until you clear the site's data" : "the browser may clear it when space runs low; add Calliope to the Home Screen to keep it");
+    el.style.cursor = "default";
   }
 
   return { attach, sync, lastSync };

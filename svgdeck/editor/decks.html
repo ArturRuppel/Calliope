@@ -50,6 +50,7 @@
   .deck .inline { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .deck .inline label { width: 100%; font-size: 13px; color: var(--muted); }
   .deck .inline input { flex: 1; }
+  .note { width: 100%; margin: 0 0 4px; color: var(--muted); font-size: 13px; }
   #offline { margin: 12px 0 0; color: var(--muted); font-size: 12px; cursor: pointer; }
   /* Without the server the list is read-only: present, nothing else. */
   .offline header .btn, .offline .deck .btn.primary, .offline .deck button, .offline #new, .offline #deleted { display: none; }
@@ -69,6 +70,13 @@
     <input name="name" placeholder="Folder name, e.g. 2026-10-01_group_meeting" pattern="[A-Za-z0-9][A-Za-z0-9_.\-]*" required>
     <button class="primary">Create</button>
     <div class="error" id="error"></div>
+  </form>
+  <form id="import" hidden>
+    <h2>Import a deck</h2>
+    <p class="note">An offline copy (the editor's <em>Export offline copy</em>) or a deck folder zipped as it is. Its history stays behind.</p>
+    <input type="file" name="file" accept=".zip,application/zip" required>
+    <button class="primary">Import</button>
+    <div class="error" id="import-error"></div>
   </form>
 </main>
 <script src="/editor/offline.js"></script>
@@ -256,12 +264,34 @@
     try {
       const r = await fetch("/api/decks", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: form.name.value, title: form.title.value }) });
-      if (r.ok) location.href = `/edit/${encodeURIComponent(form.name.value)}`;
+      const target = `/edit/${encodeURIComponent(form.name.value)}`;
+      if (r.ok) location.href = window.CalliopeRuntime ? CalliopeRuntime.link(target) : target;
       else error.textContent = await errorText(r, "Could not create the deck");
     } catch (err) {
       error.textContent = `Could not create the deck: ${err.message}`;
     }
   });
+  // The browser build (web/runtime.js) keeps decks in this browser: they come in as zips.
+  const importForm = document.getElementById("import");
+  if (window.CalliopeRuntime) {
+    importForm.hidden = false;
+    importForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const error = document.getElementById("import-error"), button = importForm.querySelector("button");
+      error.textContent = "";
+      button.disabled = true;
+      try {
+        const deck = await CalliopeRuntime.importDeck(importForm.file.files[0]);
+        importForm.reset();
+        status.textContent = `Imported ${deck.title} as ${deck.name}.`;
+        await load();
+      } catch (err) {
+        error.textContent = err.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  }
   load().catch((e) => { status.textContent = e.message; });
   CalliopeOffline.attach(document.getElementById("offline"));
 </script>
