@@ -7,14 +7,14 @@
    - /data is an IDBFS mount: decks, commits, revisions, trash, the font
      library. Loaded once at boot, written back after every successful request
      that changes something.
-   - Media bytes live in the Origin Private File System, in calliope-media/<sha1>,
-     written here with sync access handles (the one OPFS write path Safari has).
-     The deck's media/ folder in /data holds a stub per file (svgdeck/browser.py).
+   - Media bytes live in the Origin Private File System (IndexedDB where there
+     is none), named by SHA-1, written here (web/media-store.js). The deck's
+     media/ folder in /data holds a stub per file (svgdeck/browser.py).
 
-   Built by tools/build-web.mjs, which puts fflate and tools/fs-image.mjs in
-   front of this file. Pyodide reads its files through `fetch`, which is
+   Built by tools/build-web.mjs, which puts fflate, tools/fs-image.mjs and
+   web/media-store.js in front of this file. Pyodide reads its files through `fetch`, which is
    overridden to answer from memory for one reserved address (the Iris recipe). */
-/* global fflate, populate */
+/* global fflate, populate, CalliopeMediaStore */
 "use strict";
 
 /* Chromium only allows a classic worker from a blob on file://, and Pyodide
@@ -23,7 +23,6 @@ self.importScripts = () => { throw new TypeError("importScripts is unavailable")
 
 const DATA = "/data";
 const VIRTUAL = "https://calliope-payload.invalid/";
-const MEDIA_DIR = "calliope-media";
 const STORED = /\.(mp4|m4v|mov|webm|woff2|jpe?g|png|gif|webp|avif)$/i;
 const MAGIC = new TextEncoder().encode("calliope-blob\n");
 
@@ -93,52 +92,13 @@ const syncData = (populate) => new Promise((resolve, reject) => {
   py.FS.syncfs(populate, (err) => (err ? reject(err) : resolve()));
 });
 
-// --- OPFS media -----------------------------------------------------------------
-let mediaDir = null;
-async function media() {
-  if (!mediaDir) {
-    if (!navigator.storage?.getDirectory) throw new Error("this browser has no private file storage (OPFS) for pictures and movies");
-    mediaDir = await (await navigator.storage.getDirectory()).getDirectoryHandle(MEDIA_DIR, { create: true });
-  }
-  return mediaDir;
-}
-
+// --- media (web/media-store.js) ------------------------------------------------
 async function sha1(blob) {
   const digest = await crypto.subtle.digest("SHA-1", await blob.arrayBuffer());
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
-
-/* Content-addressed: a file already there with the same size is kept. */
-async function putBlob(hash, blob) {
-  const dir = await media();
-  try {
-    const existing = await (await dir.getFileHandle(hash)).getFile();
-    if (existing.size === blob.size) return;
-  } catch (e) { /* not there yet */ }
-  const handle = await dir.getFileHandle(hash, { create: true });
-  const access = await handle.createSyncAccessHandle();
-  try {
-    access.truncate(0);
-    const reader = blob.stream().getReader();
-    let at = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      access.write(value, { at });
-      at += value.byteLength;
-    }
-    access.flush();
-  } catch (e) {
-    access.close();
-    await dir.removeEntry(hash).catch(() => {});
-    throw e;
-  }
-  access.close();
-}
-
-async function getBlob(hash) {
-  return (await (await media()).getFileHandle(hash)).getFile();
-}
+const putBlob = (hash, blob) => CalliopeMediaStore.put(hash, blob);
+const getBlob = (hash) => CalliopeMediaStore.get(hash);
 
 function isStub(bytes) {
   if (bytes.byteLength < MAGIC.byteLength || bytes.byteLength > 4096) return false;

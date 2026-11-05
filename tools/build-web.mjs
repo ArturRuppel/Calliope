@@ -87,6 +87,9 @@ function page(source, kind) {
       .replace(/(<body[^>]*>)/, `$1\n<script>document.body.dataset.deck = CalliopeRuntime.param("deck") || ""; ` +
         `document.title = document.body.dataset.deck + " · Calliope";</script>`);
     if (html.includes("{{DECK}}")) throw new Error("editor.html: a {{DECK}} left over");
+    const module = /<script type="module" src="editor\/main\.js"><\/script>/;
+    if (!module.test(html)) throw new Error("editor.html: no main.js module tag");
+    html = html.replace(module, `<script>CalliopeRuntime.loadModule("editor/main.js");</script>`);
   }
   return html;
 }
@@ -98,9 +101,16 @@ for (const path of walk(EDITOR, (p) => !/\/(sw\.js|decks\.html|editor\.html|mani
   mkdirSync(dirname(target), { recursive: true });
   copyFileSync(path, target);
 }
+/* the same modules as text, for a page opened over file:// (web/runtime.js, loadModule) */
+const modules = Object.fromEntries(readdirSync(EDITOR).filter((f) => f.endsWith(".js") && f !== "sw.js")
+  .filter((f) => /^\s*(import|export)\b/m.test(readFileSync(join(EDITOR, f), "utf8")))
+  .map((f) => [f, readFileSync(join(EDITOR, f), "utf8")]));
+writeFileSync(join(OUT, "editor", "modules.js"), `__calliopeModules(${JSON.stringify(modules)});\n`);
 writeFileSync(join(OUT, "index.html"), page(join(EDITOR, "decks.html"), "index"));
 writeFileSync(join(OUT, "edit.html"), page(join(EDITOR, "editor.html"), "edit"));
-for (const f of ["present.html", "runtime.js", "manifest.webmanifest"]) copyFileSync(join(ROOT, "web", f), join(OUT, f));
+for (const f of ["present.html", "manifest.webmanifest"]) copyFileSync(join(ROOT, "web", f), join(OUT, f));
+const mediaStore = readFileSync(join(ROOT, "web", "media-store.js"), "utf8");
+writeFileSync(join(OUT, "runtime.js"), `${mediaStore}\n${readFileSync(join(ROOT, "web", "runtime.js"), "utf8")}`);
 
 /* --- Python ------------------------------------------------------------------ */
 mkdirSync(PYO, { recursive: true });
@@ -182,10 +192,11 @@ addPayload("svgdeck.img", built.image);
 imageNames.push("svgdeck.img");
 addPayload("sample-picture.png", picture);
 
-/* The worker's source: fflate, the image reader, then web/worker.js. */
+/* The worker's source: fflate, the image reader, the media store, then web/worker.js. */
 const workerSource = [
   readFileSync(join(ROOT, "node_modules", "fflate", "umd", "index.js"), "utf8"),
   readFileSync(join(ROOT, "tools", "fs-image.mjs"), "utf8").replace(/^export /gm, ""),
+  mediaStore,
   readFileSync(join(ROOT, "web", "worker.js"), "utf8"),
 ].join("\n;\n");
 const workerScript = `worker-${sha256(workerSource).slice(0, 10)}.js`;

@@ -14,6 +14,7 @@
 
    The editor and the deck list call it through `globalThis.CalliopeRuntime`,
    which is absent on the service. Design: docs/browser-runtime.md */
+/* global CalliopeMediaStore */
 (function () {
   "use strict";
   const script = document.currentScript;
@@ -116,12 +117,7 @@
   const media = new Map();     // "/d/<deck>/media/<file>" -> {sha1, type, url}
   const fonts = new Map();     // "/d/<deck>/fonts/..." or "/api/fonts/file/..." -> {v, url}
   const reverse = new Map();   // blob url -> path
-  let mediaDir = null;
-
-  async function opfsFile(sha1) {
-    mediaDir ??= await (await navigator.storage.getDirectory()).getDirectoryHandle("calliope-media", { create: true });
-    return (await mediaDir.getFileHandle(sha1)).getFile();
-  }
+  const opfsFile = (sha1) => CalliopeMediaStore.get(sha1);   // web/media-store.js, in front of this file
 
   let indexing = null;
   async function refreshIndex() {
@@ -298,10 +294,13 @@
       const timer = setTimeout(() => finish(null), 20000);
       video.muted = true;
       video.playsInline = true;
+      video.setAttribute("muted", "");
+      video.setAttribute("playsinline", "");
       video.preload = "auto";
       video.onerror = () => finish(null);
-      video.onloadeddata = () => {
+      video.onloadedmetadata = () => {
         if (!video.videoWidth || !video.videoHeight) return finish(null);
+        const at = Math.min(0.05, (video.duration || 1) / 2);
         video.onseeked = () => {
           const canvas = document.createElement("canvas");
           canvas.width = video.videoWidth;
@@ -310,7 +309,11 @@
           canvas.toBlob((poster) => finish(poster ? { width: canvas.width, height: canvas.height, poster } : null),
             "image/jpeg", 0.85);
         };
-        video.currentTime = Math.min(0.05, (video.duration || 1) / 2);
+        /* iOS loads no frames for a video that has not played: play it (muted
+           playback needs no gesture), then seek to the poster time */
+        const seek = () => { video.pause(); video.currentTime = at; };
+        const playing = video.play();
+        if (playing?.then) playing.then(seek, seek); else seek();
       };
       video.src = url;
     });
@@ -428,8 +431,38 @@
     return { usage: est?.usage ?? null, quota: est?.quota ?? null, persisted: !!kept };
   }
 
+  // --- the editor's modules ------------------------------------------------------------
+  /* Over http(s) the editor's ES modules load as they are. A page opened over
+     file:// may not load a module from a file in Chromium, so the build also
+     ships them as text in one classic script (editor/modules.js), and they run
+     from blob: URLs with their "./x.js" imports pointed at each other's blobs. */
+  async function loadModule(src) {
+    if (location.protocol !== "file:") {
+      const tag = Object.assign(document.createElement("script"), { type: "module", src: ROOT + src });
+      document.body.append(tag);
+      return;
+    }
+    const sources = await new Promise((resolve, reject) => {
+      window.__calliopeModules = resolve;
+      loadScript(ROOT + "editor/modules.js").catch(reject);
+    });
+    const urls = new Map();
+    const url = (name, trail = []) => {
+      if (urls.has(name)) return urls.get(name);
+      if (trail.includes(name)) throw new Error(`editor modules import each other in a cycle: ${[...trail, name].join(" > ")}`);
+      if (!(name in sources)) throw new Error(`editor module missing from this build: ${name}`);
+      const text = sources[name].replace(/((?:from|import)\s*\(?\s*)"\.\/([\w.-]+\.js)"/g,
+        (m, head, dep) => `${head}"${url(dep, [...trail, name])}"`);
+      const blob = URL.createObjectURL(new Blob([text], { type: "text/javascript" }));
+      urls.set(name, blob);
+      return blob;
+    };
+    const tag = Object.assign(document.createElement("script"), { type: "module", src: url(src.replace(/^editor\//, "")) });
+    document.body.append(tag);
+  }
+
   window.CalliopeRuntime = {
-    root: ROOT, page: PAGE, asset, unasset, link, download, importDeck, present, storageSummary,
+    root: ROOT, page: PAGE, asset, unasset, link, download, importDeck, present, storageSummary, loadModule,
     param: (name) => new URLSearchParams(location.search).get(name),
     ready: () => indexed,
     onState: (f) => { listeners.add(f); f(state); return () => listeners.delete(f); },
