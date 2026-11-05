@@ -131,7 +131,7 @@ shutil.rmtree("/tmp/stdlib")
    whole image once and runs a smoke test through the real app, which proves it
    imports and serves, and records which shared libraries the import loads so
    the worker can load them ahead of it. */
-export async function appImage({ images, appFiles, smoke }) {
+export async function appImage({ images, appFiles, smoke, fixtures = {} }) {
   const py = await loadPyodide({ env: ENV, stdout: () => {}, stderr: (s) => console.error(s) });
   const FS = py.FS;
   for (const gz of Object.values(images)) populate(FS, new Uint8Array(gunzipSync(gz)));
@@ -153,6 +153,10 @@ browser.install()
 import svgdeck.server, svgdeck.export
 `);
   const boot = extensions();
+  for (const [path, data] of Object.entries(fixtures)) {   // for the smoke test only, not shipped
+    FS.mkdirTree(dirname(path));
+    FS.writeFile(path, new Uint8Array(data));
+  }
   if (smoke) py.runPython(smoke);
 
   const files = [];

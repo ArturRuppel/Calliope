@@ -181,8 +181,15 @@ summary = json.loads(ask("POST", "/api/browser/import?filename=w.zip", z)[1])
 assert summary["name"] == "Welcome-to-Calliope-2", summary
 index = json.loads(ask("GET", "/api/browser/media")[1])
 assert "/d/smoke/media/x-aaaaaaaa.png" in index["media"], index
+# a font: into the library (fontTools), into the deck, out as woff2 (brotli)
+face = json.loads(ask("POST", "/api/fonts?filename=plex.ttf", open("/fixtures/plex.ttf", "rb").read())[1])
+ask("POST", "/api/decks/smoke/fonts", json.dumps({"family": face["family"]}).encode(), {"content-type": "application/json"})
+import io, zipfile
+names = zipfile.ZipFile(io.BytesIO(ask("GET", "/api/decks/smoke/export.zip")[1])).namelist()
+assert any(n.endswith(".woff2") for n in names), names
 `;
-const built = await appImage({ images, appFiles, smoke });
+const built = await appImage({ images, appFiles, smoke,
+  fixtures: { "/fixtures/plex.ttf": readFileSync(join(EDITOR, "harmonia", "fonts", "ibm-plex-mono-400.ttf")) } });
 
 const core = ["pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip", "pyodide-lock.json"];
 for (const f of core) addPayload(f, f === "python_stdlib.zip" ? built.stdlib : readFileSync(join(NPM_PYO, f)));
