@@ -1,0 +1,60 @@
+# The browser build on GitHub Pages (https://arturruppel.github.io/Calliope/).
+# Everything the page loads is built in: Pyodide from node_modules, its
+# packages downloaded once and checked against the SHA-256 in Pyodide's lock
+# file, installed and compiled by Pyodide under Node into filesystem images
+# (tools/build-web.mjs, tools/web-image.mjs), with a smoke test of the svgdeck
+# service under Pyodide. No Python is needed on the runner. The e2e then runs
+# the build in headless Chromium from a sub-path, as Pages serves it.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # git describe stamps the build with its commit
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # after npm ci, which empties node_modules: the verified wheels and the
+      # images built from them, keyed on what pins and shapes them
+      - uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/calliope-web
+          key: calliope-web-${{ hashFiles('package-lock.json', 'tools/build-web.mjs', 'tools/web-image.mjs', 'tools/fs-image.mjs') }}
+          restore-keys: calliope-web-
+      - run: npm run build:web
+      # the build in Chromium, served from /sub/calliope/ (ffmpeg makes its movie)
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

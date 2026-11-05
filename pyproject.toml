@@ -3,6 +3,7 @@ name = "svgdeck"
 version = "0.1.0"
 description = "Draw slide decks in the browser, present them with movies, export them as standalone offline HTML"
 requires-python = ">=3.11"
+license = {text = "AGPL-3.0-only"}
 dependencies = [
     "fastapi",
     "uvicorn",

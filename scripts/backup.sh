@@ -2,6 +2,8 @@
 # Mirror the Calliope data directory (decks, slides, media, commits, revisions, fonts, uploads,
 # trash) to Pomice2 with rsync. Never deletes on the share. Skips quietly when the share is not
 # reachable (Pasteur VPN down). Run by calliope-backup.timer, or by hand.
+# The destination below is an example default (the author's lab share); set CALLIOPE_BACKUP_DIR
+# to your own.
 set -euo pipefail
 SRC="${SVGDECK_DATA:-$HOME/Data/svgdeck}"
 DEST="${CALLIOPE_BACKUP_DIR:-/helix/projects/Pomice2/Artur/backups/calliope/svgdeck}"

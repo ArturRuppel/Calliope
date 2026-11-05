@@ -5,6 +5,8 @@ embedded movies, and export them as standalone offline HTML.
 
 Plan: [ROADMAP.md](ROADMAP.md). Deck format: [docs/format.md](docs/format.md).
 
+Licensed under the GNU AGPL-3.0: see [LICENSE](LICENSE).
+
 ## Setup
 
 ```
