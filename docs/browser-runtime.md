@@ -1,9 +1,14 @@
 # Calliope with nothing to install: the browser build
 
-An experiment on the `browser-runtime` branch. Calliope's editor, presenter
-and the whole svgdeck service run in the browser, with no server: the service
-is the same FastAPI app, run by Pyodide in a Web Worker, the way Iris runs its
-engine. The live service on sancho is untouched by any of this.
+Calliope's editor, presenter and the whole svgdeck service run in the
+browser, with no server: the service is the same FastAPI app, run by Pyodide
+in a Web Worker, the way Iris runs its engine. The live service on sancho is
+untouched by any of this.
+
+**Published** 2026-11-05 at https://arturruppel.github.io/Calliope/: GitHub
+Pages, built by `.github/workflows/pages.yml` on every push to `main`, which
+runs the e2e against the build from a sub-path before deploying. The open
+questions below still stand.
 
 ```sh
 npm install                 # pyodide, fflate, playwright (dev only)

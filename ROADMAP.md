@@ -138,12 +138,15 @@ exported `index.html`. Font files are licensed and never go into this repo.
   never used).
 - Movie helpers: crop and timestamp overlays (now done by hand with ffmpeg).
 
-### 5. Calliope with nothing to install (experiment, branch `browser-runtime`)
+### 5. Calliope with nothing to install — published 2026-11-05
 - Started 2026-11-05: the service under Pyodide in a Web Worker, the Iris
   way; decks in IndexedDB, media in OPFS behind stubs; import and export as
   zips; a sample deck on the first visit; the app shell cached by a service
   worker; boots in about 2 s. See docs/browser-runtime.md.
-- Next, if it stays: one Python for all pages (single-page shell or a
+- Published 2026-11-05 at https://arturruppel.github.io/Calliope/ (GitHub
+  Pages, built and tested by `.github/workflows/pages.yml` on every push to
+  `main`); the repository is public under the AGPL-3.0.
+- Next: one Python for all pages (single-page shell or a
   SharedWorker), media garbage collection, a sync with the service on sancho.
 
 ## Open questions

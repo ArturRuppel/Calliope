@@ -5,6 +5,7 @@ embedded movies, and export them as standalone offline HTML.
 
 Plan: [ROADMAP.md](ROADMAP.md). Deck format: [docs/format.md](docs/format.md).
 
+Try it at https://arturruppel.github.io/Calliope/, nothing to install.
 Licensed under the GNU AGPL-3.0: see [LICENSE](LICENSE).
 
 ## Setup
@@ -80,10 +81,12 @@ decks and files the server no longer has.
   the deck list once while online, after a change, is what brings the copy up
   to date.
 
-## In the browser, with nothing to install (branch `browser-runtime`)
+## In the browser, with nothing to install
 
-An experiment: the editor, the presenter and the svgdeck service itself, run
-by Pyodide in a Web Worker, so Calliope works from static files with no
+Try it at https://arturruppel.github.io/Calliope/.
+
+The editor, the presenter and the svgdeck service itself run in the
+browser, under Pyodide in a Web Worker, so Calliope works from static files with no
 server. Decks are kept in the browser (IndexedDB, pictures and movies in the
 Origin Private File System); they move in and out as zips (**Export offline
 copy**, **Import a deck**). Movies are stored as they are (no ffmpeg) and PDF
