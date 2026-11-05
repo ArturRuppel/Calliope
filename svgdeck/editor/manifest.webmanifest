@@ -1,0 +1,13 @@
+{
+  "name": "Calliope",
+  "short_name": "Calliope",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f3f3f4",
+  "theme_color": "#f3f3f4",
+  "icons": [
+    { "src": "/editor/apple-touch-icon.png?v=2", "sizes": "180x180", "type": "image/png" },
+    { "src": "/editor/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
