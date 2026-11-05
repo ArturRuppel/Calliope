@@ -138,6 +138,14 @@ exported `index.html`. Font files are licensed and never go into this repo.
   never used).
 - Movie helpers: crop and timestamp overlays (now done by hand with ffmpeg).
 
+### 5. Calliope with nothing to install (experiment, branch `browser-runtime`)
+- Started 2026-11-05: the service under Pyodide in a Web Worker, the Iris
+  way; decks in IndexedDB, media in OPFS behind stubs; import and export as
+  zips; a sample deck on the first visit; the app shell cached by a service
+  worker; boots in about 2 s. See docs/browser-runtime.md.
+- Next, if it stays: one Python for all pages (single-page shell or a
+  SharedWorker), media garbage collection, a sync with the service on sancho.
+
 ## Open questions
 
 - Backups of the working data directory (decks in progress exist only

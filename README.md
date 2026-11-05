@@ -78,6 +78,21 @@ decks and files the server no longer has.
   the deck list once while online, after a change, is what brings the copy up
   to date.
 
+## In the browser, with nothing to install (branch `browser-runtime`)
+
+An experiment: the editor, the presenter and the svgdeck service itself, run
+by Pyodide in a Web Worker, so Calliope works from static files with no
+server. Decks are kept in the browser (IndexedDB, pictures and movies in the
+Origin Private File System); they move in and out as zips (**Export offline
+copy**, **Import a deck**). Movies are stored as they are (no ffmpeg) and PDF
+is the browser's print. Design, storage layout and open questions:
+[docs/browser-runtime.md](docs/browser-runtime.md).
+
+```sh
+npm install && npm run build:web     # -> dist-web/: serve it anywhere, or open dist-web/index.html
+npm run test:e2e                     # headless Chromium, about 20 s
+```
+
 ## Editing
 
 The editor is laid out for an iPad in landscape:
