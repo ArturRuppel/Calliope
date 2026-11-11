@@ -30,10 +30,14 @@ bodies are capped at 64 MiB; media uploads at 2 GiB.
 Decks live in the data directory (`~/Data/svgdeck/decks/<name>/`, or
 `$SVGDECK_DATA`), never in this repo. Fonts are licensed and stay out of it too.
 
-On sancho, `scripts/backup.sh` mirrors the whole data directory to
-`/helix/projects/Pomice2/Artur/backups/calliope/svgdeck/` with rsync (never
-deleting there); `calliope-backup.timer` (systemd user, hourly) runs it and it
-skips quietly when the Pasteur share is unreachable.
+`scripts/backup.sh` mirrors the whole data directory with rsync to the
+directory named by `CALLIOPE_BACKUP_DIR` (required; never deleting there), for
+example a mounted network share. `calliope-backup.timer` (systemd user, hourly)
+runs it; set the variable in a local drop-in such as
+`~/.config/systemd/user/calliope-backup.service.d/local.conf`
+(`[Service]` / `Environment=CALLIOPE_BACKUP_DIR=...`). It skips quietly when
+the share is unreachable (the directory in `CALLIOPE_BACKUP_PROBE`, by default
+the destination's parent, is missing).
 
 ```
 svgdeck serve                       # http://127.0.0.1:8490: deck list, editor, presenter
@@ -44,7 +48,7 @@ svgdeck pdf DECK_DIR talk.pdf               # one page per slide, every build st
 svgdeck pdf DECK_DIR talk.pdf --steps       # one page per build step
 ```
 
-## The service on sancho
+## The service
 
 `systemd/calliope.service` runs `svgdeck serve` on 127.0.0.1:8490 (install:
 copy it to `~/.config/systemd/user/`, then `systemctl --user enable --now
@@ -399,7 +403,7 @@ one per landscape page, without controls, overview or speaker panel.
 
 ## Development tools
 
-- `tools/import_inkscape.py` — one-off import of the 2026-05-19 Inkscape talk,
+- `tools/import_inkscape.py` — one-off import of one real Inkscape talk,
   the development test deck.
 - `tools/compare_render.py` — renders every slide of an export in headless
   Chromium and diffs it against the old Inkscape PNGs.
@@ -409,8 +413,8 @@ one per landscape page, without controls, overview or speaker panel.
 SVGDECK_BROWSER=webkit .venv/bin/python -m pytest tests  # WebKit = the iPad's engine
 ```
 
-Playwright's WebKit does not run on Arch (sancho); it runs on rocinante
-(Ubuntu 24.04) after `playwright install webkit`, with `libavif16`,
+Playwright's WebKit does not run on Arch Linux; it runs on Ubuntu 24.04
+after `playwright install webkit`, with `libavif16`,
 `libgav1-1` and `libyuv0` unpacked from `apt-get download` into the WebKit
 build's `minibrowser-wpe/lib/` (no sudo needed). Headless WebKit there freezes
 on video, so movie tests only run in Chromium.
