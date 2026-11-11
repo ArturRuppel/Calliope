@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write Info.plist for this machine: ./configure sancho.example.ts.net
+"""Write Info.plist for this machine: ./configure myhost.example.ts.net
 
 The host is the Calliope server the iPad will use. It goes into WKAppBoundDomains,
 which lets the app's web views run service workers, so the offline copy the deck
@@ -10,6 +10,6 @@ from pathlib import Path
 
 here = Path(__file__).resolve().parent
 if len(sys.argv) != 2 or not re.fullmatch(r"[A-Za-z0-9.-]+", sys.argv[1]):
-    sys.exit("usage: ./configure SERVER_HOST   (a host name, such as sancho.example.ts.net)")
+    sys.exit("usage: ./configure SERVER_HOST   (a host name, such as myhost.example.ts.net)")
 (here / "Info.plist").write_text((here / "Info.plist.in").read_text().replace("@SERVER_HOST@", sys.argv[1]))
 print(f"wrote {here / 'Info.plist'} for {sys.argv[1]}")

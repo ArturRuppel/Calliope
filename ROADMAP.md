@@ -42,13 +42,13 @@ Reference decks: `presentations/` in the lab-book database repo.
   they are; only the latest one is imported (as a development test ground).
 - **Offline presenting.** Export a self-contained folder (and zip) that runs
   from `index.html` with no network access.
-- **Editing is online.** A service on sancho, reached over Tailscale.
+- **Editing is online.** A service on the host, reached over Tailscale.
 
 Secondary, later: PDF export, speaker view.
 
 ## Architecture
 
-**Service on sancho.** A `systemd --user` unit like the lab book. Stores
+**Service on the host.** A `systemd --user` unit like the lab book. Stores
 decks, the font library and media; serves the editor; runs exports.
 
 **Deck on disk.** Plain files, git-friendly, inspectable:
@@ -73,7 +73,7 @@ SVGs inlined (avoids `file://` fetch restrictions), `media/`, and `fonts/`
 converted to woff2.
 
 **Standalone app; the lab book is only the archive.** svgdeck owns its working
-decks in its own data directory on sancho, outside this repo (set in the
+decks in its own data directory on the host, outside this repo (set in the
 service config; decks and the font library are content, not code). When a
 talk is final, its standalone export is copied into the lab-book database
 repo (`presentations/<date>_<name>/`) as the archived record. Because the
@@ -86,9 +86,9 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Define `deck.json` and the slide SVG conventions (movies, builds, fonts).
 - Player with builds, movies and sync groups.
 - Standalone export with fonts converted to woff2.
-- One-off importer for the latest talk only, the 2026-05-19 Paris postdoc
-  seminar (62 slides, video overlays, sync group across slides 51–53,
-  Helvetica Neue). It is a development test ground, not a general Inkscape
+- One-off importer for the latest talk only, a real 62-slide talk
+  (video overlays, a sync group across three slides, one licensed font
+  family). It is a development test ground, not a general Inkscape
   converter: split `slides.svg` by its `slideN` groups into editable shapes
   (clip paths, markers and filters kept), turn the hand-positioned video
   overlays and the `*b.png` layers into real slide objects, collect fonts.
@@ -104,7 +104,7 @@ exported `index.html`. Font files are licensed and never go into this repo.
 - Pencil freehand drawing with smoothing.
 - Stacking order, undo/redo, autosave to the service.
 - Also done: group/ungroup, lock, copy/paste across slides, pinch zoom,
-  font upload, save-conflict detection, service on sancho.
+  font upload, save-conflict detection, service on the host.
 - Known limits: strokes of freehand paths scale when resized.
 
 ### 3. Editor, second pass
@@ -147,7 +147,7 @@ exported `index.html`. Font files are licensed and never go into this repo.
   Pages, built and tested by `.github/workflows/pages.yml` on every push to
   `main`); the repository is public under the AGPL-3.0.
 - Next: one Python for all pages (single-page shell or a
-  SharedWorker), media garbage collection, a sync with the service on sancho.
+  SharedWorker), media garbage collection, a sync with the server-side service.
 
 ## Open questions
 

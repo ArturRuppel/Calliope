@@ -15,13 +15,13 @@ my-talk/
 ```json
 {
   "format": 1,
-  "title": "Paris postdoc seminar",
+  "title": "Example talk",
   "size": [1920, 1080],
   "background": "#000000",
   "slides": [{"id": "s00"}, {"id": "s01"}],
   "fonts": [
-    {"family": "Helvetica Neue", "weight": 300, "style": "normal",
-     "file": "fonts/HelveticaNeueLight.otf"}
+    {"family": "Inter", "weight": 300, "style": "normal",
+     "file": "fonts/Inter-Light.otf"}
   ]
 }
 ```

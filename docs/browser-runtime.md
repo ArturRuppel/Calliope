@@ -2,7 +2,7 @@
 
 Calliope's editor, presenter and the whole svgdeck service run in the
 browser, with no server: the service is the same FastAPI app, run by Pyodide
-in a Web Worker, the way Iris runs its engine. The live service on sancho is
+in a Web Worker, the way Iris runs its engine. The live server-side service is
 untouched by any of this.
 
 **Published** 2026-11-05 at https://arturruppel.github.io/Calliope/: GitHub
@@ -115,7 +115,7 @@ second editor tab is read-only and says so. The presenter only reads.
   service (`index.html` plays it anywhere, offline).
 - **In:** **Import a deck** on the deck list takes such a zip, or a deck
   folder zipped as it is (for example from `~/Data/svgdeck/decks/` on
-  sancho). History (`commits/`, `revisions/`, `trash/`) stays behind; a name
+  the server). History (`commits/`, `revisions/`, `trash/`) stays behind; a name
   already taken gets `-2`. From an export the deck gets the woff2 fonts the
   export carries.
 
@@ -144,7 +144,7 @@ gone.
 - **Speaker view** reopens `present.html` with `speaker=1`, and its audience
   window is another `present.html`; not covered by the e2e.
 
-## Measured (sancho, headless Chromium, local files)
+## Measured (an Arch Linux machine, headless Chromium, local files)
 
 Cold boot to the deck list with its decks: **1.9 s** (Python up at 0.9 s,
 decks open at 1.7 s). Every later page boots again: **1.5 s** to an editor
@@ -181,6 +181,6 @@ download.
 - **Licence and fonts:** the build ships Archivo and IBM Plex Mono (OFL) as
   the service does, and no other fonts. A public build needs a licence for
   the app itself and a word on uploaded fonts staying in the browser.
-- **Moving decks between the browser and sancho** is by zip only. A sync
+- **Moving decks between the browser and the server** is by zip only. A sync
   (pull a deck from the service over CORS, push back with its version) is the
   natural next step, and needs care with two copies being edited.

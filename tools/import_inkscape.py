@@ -1,6 +1,6 @@
 """One-off importer: an Inkscape + reveal.js talk -> an svgdeck deck.
 
-Written for the 2026-05-19 talk, the development test ground; not a general
+Written for one real talk, the development test ground; not a general
 Inkscape converter. That talk is one Inkscape canvas (slides/slides.svg) in
 which each `slideN` is a frame rectangle and a slide is whatever lies inside
 its frame (what `inkscape --export-id=slideN` renders). Movies were laid over

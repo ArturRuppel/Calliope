@@ -2,7 +2,7 @@
 
 The browser has no sockets, so each request calls the real FastAPI app from
 `svgdeck.server` directly over ASGI (`dispatch`). Going through the app keeps
-validation, status codes and error messages identical to the service on sancho.
+validation, status codes and error messages identical to the server-side service.
 
 Pyodide cannot start threads, and the app runs sync endpoints and
 `anyio.to_thread.run_sync` work in a thread pool. `install()` makes those

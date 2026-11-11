@@ -76,7 +76,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("https://sancho.example.ts.net:8490/", text: $text)
+                    TextField("https://myhost.example.ts.net:8490/", text: $text)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()

@@ -36,7 +36,7 @@ One-time: install Swift, `usbmuxd` and xtool, run `xtool setup` (Apple ID +
 
 ```
 cd ~/Projects/Calliope/ios/Calliope
-./configure sancho.example.ts.net      # the host the iPad reaches Calliope at
+./configure myhost.example.ts.net      # the host the iPad reaches Calliope at
 ```
 
 That host goes into `WKAppBoundDomains`, which is what lets the app's web views

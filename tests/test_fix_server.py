@@ -327,10 +327,10 @@ def test_uploaded_media_are_cached_for_good(tmp_path):
     from fastapi.testclient import TestClient
     from svgdeck.server import create_app
     data, root, _ = make_store(tmp_path)
-    (root / "media" / "image-0edd4764.png").write_bytes(b"x")
-    (root / "media" / "clip-0edd4764.poster.jpg").write_bytes(b"x")
+    (root / "media" / "image-0a1b2c3d.png").write_bytes(b"x")
+    (root / "media" / "clip-0a1b2c3d.poster.jpg").write_bytes(b"x")
     (root / "media" / "by-hand.png").write_bytes(b"x")
     client = TestClient(create_app(data))
-    for name in ("image-0edd4764.png", "clip-0edd4764.poster.jpg"):
+    for name in ("image-0a1b2c3d.png", "clip-0a1b2c3d.poster.jpg"):
         assert "immutable" in client.get(f"/d/talk/media/{name}").headers["cache-control"]
     assert client.get("/d/talk/media/by-hand.png").headers["cache-control"] == "max-age=300"
