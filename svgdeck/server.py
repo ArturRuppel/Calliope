@@ -450,6 +450,8 @@ def create_app(data: Path) -> FastAPI:
             return await to_thread.run_sync(store.use_family, name, family)
         except KeyError:
             raise HTTPException(404, "no such font family in the library")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
 
     # --- API: export ------------------------------------------------------------------
     def snapshot_deck(name: str, dest: Path) -> Deck:

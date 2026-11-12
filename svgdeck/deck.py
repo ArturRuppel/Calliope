@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
@@ -86,18 +87,58 @@ def _asset(name: str) -> str:
     return resources.files("svgdeck.player").joinpath(name).read_text(encoding="utf-8")
 
 
+# A deck's font entry: {"family", "file", "weight", "style"} (docs/format.md).
+FONT_FILE = re.compile(r"^fonts/(?!\.)[A-Za-z0-9_.-]{1,200}$")
+FONT_WEIGHT_WORDS = {"normal", "bold"}
+FONT_STYLES = {"normal", "italic"}
+_FAMILY_FORBIDDEN = re.compile(r"[<>{};\\\x00-\x1f\x7f]")
+
+
+def font_problem(font) -> str | None:
+    """Why a deck.json font entry is not acceptable, or None."""
+    if not isinstance(font, dict):
+        return "a font entry must be an object"
+    family, file = font.get("family"), font.get("file")
+    if not (isinstance(family, str) and family.strip() and len(family) <= 200
+            and not _FAMILY_FORBIDDEN.search(family)):
+        return "a font family must be a name of at most 200 characters, without < > { } ; \\ or control characters"
+    if not (isinstance(file, str) and FONT_FILE.match(file)):
+        return "a font file must be fonts/<name> (letters, digits, - _ and .)"
+    weight = font.get("weight", 400)
+    if not ((type(weight) is int and 1 <= weight <= 1000) or weight in FONT_WEIGHT_WORDS):
+        return "a font weight must be a number from 1 to 1000, normal or bold"
+    if font.get("style", "normal") not in FONT_STYLES:
+        return "a font style must be normal or italic"
+    return None
+
+
+def css_string(value: str) -> str:
+    """A CSS string literal: quotes, backslashes, < and controls escaped."""
+    out = []
+    for ch in value:
+        if ch in '"\\<>' or ord(ch) < 0x20 or ord(ch) == 0x7f:
+            out.append("\\%x " % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + "".join(out) + '"'
+
+
 def font_faces(fonts: list[dict], files: dict[str, str] | None = None) -> str:
-    """@font-face rules; `files` maps a deck font file to the URL to use."""
+    """@font-face rules; `files` maps a deck font file to the URL to use.
+    Entries that are not valid (font_problem) are left out."""
     formats = {".otf": "opentype", ".ttf": "truetype", ".woff": "woff", ".woff2": "woff2"}
     rules = []
-    for font in fonts:
-        url = (files or {}).get(font["file"], font["file"])
+    for font in fonts if isinstance(fonts, list) else []:
+        if font_problem(font):
+            continue
+        url = str((files or {}).get(font["file"], font["file"]))
         fmt = formats.get(Path(url).suffix.lower(), "opentype")
         rules.append(
             "@font-face { font-family: %s; src: url(%s) format(%s); font-weight: %s; font-style: %s; }"
-            % (json.dumps(font["family"]), json.dumps(url), json.dumps(fmt),
+            % (css_string(font["family"]), css_string(url), css_string(fmt),
                font.get("weight", 400), font.get("style", "normal")))
-    return "\n".join(rules)
+    # A second barrier: nothing in the rules can close the <style> element.
+    return "\n".join(rules).replace("<", "\\3c ")
 
 
 def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_url: str | None = None) -> str:
@@ -105,9 +146,10 @@ def render_page(deck: Deck, font_files: dict[str, str] | None = None, *, editor_
 
     Media and fonts stay as files next to the page (media/, fonts/)."""
     data = dict(deck.meta, slides=deck.slide_sources())
-    # "</" would end the <script> element early.
-    payload = json.dumps(data, ensure_ascii=False).replace("</", "<\\/")
-    options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("</", "<\\/")
+    # No "<" at all, so neither "</script" nor "<!--" can end or bend the
+    # <script> element; JSON reads \u003c back as "<".
+    payload = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
+    options = json.dumps({"slideBase": "slides/", "editorUrl": editor_url}).replace("<", "\\u003c")
     # The served presenter can reach the family fonts for its chrome; an export stays self-contained.
     chrome_fonts = '<link rel="stylesheet" href="/editor/harmonia/harmonia-fonts.css">\n' if editor_url else ""
     return f"""<!DOCTYPE html>

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
-from .deck import Deck, render_page
+from .deck import Deck, font_problem, render_page
 
 STORED_SUFFIXES = {".mp4", ".m4v", ".mov", ".webm", ".woff2", ".jpg", ".jpeg", ".png", ".gif", ".webp", ".avif"}
 
@@ -51,11 +51,17 @@ def export(deck: Deck, out: Path, zip_path: Path | None = None, *, pdf: bool = F
         font_files = {}
         fonts_dir = staging / "fonts"
         for font in deck.meta.get("fonts", []):
+            problem = font_problem(font)
+            if problem:
+                raise ValueError(f"deck.json: {problem}")
             if font["file"] in font_files:
                 continue
+            source = (deck.path / font["file"]).resolve()
+            if not source.is_relative_to((deck.path / "fonts").resolve()):
+                raise ValueError(f"font file leaves the deck's fonts/: {font['file']}")
             name = Path(font["file"]).with_suffix(".woff2").name
             fonts_dir.mkdir(exist_ok=True)
-            to_woff2(deck.path / font["file"], fonts_dir / name)
+            to_woff2(source, fonts_dir / name)
             font_files[font["file"]] = f"fonts/{name}"
 
         (staging / "index.html").write_text(render_page(deck, font_files), encoding="utf-8")

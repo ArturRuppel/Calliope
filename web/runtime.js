@@ -361,7 +361,7 @@
       slide.svg = slide.svg.replace(/\b(href|xlink:href|data-video)="([^"]*)"/g,
         (m, attr, ref) => `${attr}="${resolve(ref.replace(/&amp;/g, "&"), base + "slides/").replace(/&/g, "&amp;")}"`);
     }
-    html = html.slice(0, data.index) + data[1] + JSON.stringify(meta).replace(/<\//g, "<\\/") + data[3]
+    html = html.slice(0, data.index) + data[1] + JSON.stringify(meta).replace(/</g, "\\u003c") + data[3]
       + html.slice(data.index + data[0].length);
     html = html.replace(/(@font-face \{[^}]*?src: )url\("([^"]+)"\)/g, (m, head, ref) => `${head}url(${JSON.stringify(resolve(ref, base))})`)
       .replace(/href="\/editor\//g, `href="${ROOT}editor/`)

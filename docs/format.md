@@ -34,7 +34,13 @@ my-talk/
   (a CSS colour; no `<` or line breaks).
 - `fonts` lists every font face the deck ships. Text in the slides refers to
   them with `font-family`, `font-weight` and `font-style`, exactly as CSS
-  font matching does.
+  font matching does. The service and the import accept an entry only when
+  `file` is `fonts/<name>` (letters, digits, `- _ .`; no subfolders),
+  `weight` is a number from 1 to 1000 (or `normal`/`bold`), `style` is
+  `normal` or `italic`, and `family` is a name of at most 200 characters
+  without `< > { } ; \` or control characters. The presenter leaves out any
+  entry that does not, and an export refuses it. A deck may not list a slide
+  id twice.
 
 ## Slides
 

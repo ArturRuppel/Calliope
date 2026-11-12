@@ -24,7 +24,7 @@ from xml.parsers import expat
 from fontTools.ttLib import TTFont
 
 from . import sanitize
-from .deck import FORMAT, Deck
+from .deck import FORMAT, Deck, font_problem
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
 SLIDE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -126,6 +126,18 @@ def check_deck_fields(meta: dict) -> None:
         if not (isinstance(colour, str) and colour.strip() and len(colour) <= 64
                 and "<" not in colour and "\n" not in colour and "\r" not in colour):
             raise ValueError("background must be a CSS colour of at most 64 characters")
+    if "fonts" in meta:
+        check_fonts(meta["fonts"])
+
+
+def check_fonts(fonts) -> None:
+    """deck.json "fonts": a list of entries that font_problem accepts."""
+    if not isinstance(fonts, list) or len(fonts) > 1000:
+        raise ValueError("fonts must be a list of font entries")
+    for font in fonts:
+        problem = font_problem(font)
+        if problem:
+            raise ValueError(problem)
 
 
 def safe_filename(name: str) -> str:
@@ -850,7 +862,7 @@ class Store:
         self._ensure_baseline(name)
         for face in faces:
             source = self.fonts / face["path"]
-            filename = Path(face["path"]).name
+            filename = safe_filename(Path(face["path"]).name)   # deck font files are plain names
             rel = f"fonts/{filename}"
             if rel in have:
                 continue
@@ -866,8 +878,11 @@ class Store:
                 shutil.copy2(source, target)
             elif target.read_bytes() != source.read_bytes():
                 raise OSError(f"font asset collision for {rel}")
-            meta.setdefault("fonts", []).append(
-                {"family": family, "weight": face["weight"], "style": face["style"], "file": rel})
+            entry = {"family": family, "weight": face["weight"], "style": face["style"], "file": rel}
+            problem = font_problem(entry)
+            if problem:
+                raise ValueError(f"{face['path']}: {problem}")
+            meta.setdefault("fonts", []).append(entry)
         data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
         write_atomic(path / "deck.json", data)
         return {"deck": meta, "version": version(data)}

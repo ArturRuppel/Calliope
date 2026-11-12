@@ -32,8 +32,8 @@ from fastapi import HTTPException, Request
 
 from . import server
 from .deck import FORMAT, Deck
-from .store import (IMAGE_TYPES, SLIDE_ID, VIDEO_TYPES, Store, check_deck_fields, check_name, check_svg,
-                    clean_svg, safe_filename, write_atomic)
+from .store import (IMAGE_TYPES, SLIDE_ID, VIDEO_TYPES, Store, check_deck_fields, check_fonts, check_name,
+                    check_svg, clean_svg, safe_filename, write_atomic)
 
 MAGIC = b"calliope-blob\n"
 # What a browser can play as is (there is no ffmpeg to convert the rest).
@@ -300,6 +300,7 @@ def import_deck(store: Store, data: bytes, filename: str = "") -> dict:
             slides[sid] = str(entry.pop("svg", "")).encode("utf-8")
         # The export converts fonts to woff2 next to the page; point the deck at those.
         fonts = {}
+        check_fonts(meta.get("fonts", []))
         for font in meta.get("fonts", []):
             woff2 = f"fonts/{PurePosixPath(font['file']).with_suffix('.woff2').name}"
             if f"{root}{woff2}" in names:
