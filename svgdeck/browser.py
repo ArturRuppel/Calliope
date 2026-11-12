@@ -166,7 +166,9 @@ def boot(data: str) -> None:
     original = server.Store
     server.Store = BrowserStore   # create_app builds its store from this name
     try:
-        _app = server.create_app(Path(data))
+        # No Host/Origin guard: requests come from the page itself, over
+        # dispatch(), with no Host header (svgdeck.guard).
+        _app = server.create_app(Path(data), guard=False)
     finally:
         server.Store = original
     # The store create_app made is reachable from any route's closure; keep our own

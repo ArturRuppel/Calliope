@@ -18,6 +18,10 @@ def main(argv: list[str] | None = None) -> None:
                        help=f"data directory holding decks/ (default {DEFAULT_DATA}, or $SVGDECK_DATA)")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8490)
+    serve.add_argument("--allow-host", action="append", default=[], metavar="NAME",
+                       help="also serve requests for this Host name, e.g. the name a proxy publishes "
+                            "the service under (repeatable; also $SVGDECK_HOSTS, comma separated; "
+                            "*.example.net allows its subdomains). Loopback names are always allowed.")
 
     exp = sub.add_parser("export", help="write a standalone offline copy of a deck")
     exp.add_argument("deck", type=Path, help="deck directory")
@@ -34,8 +38,10 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if args.command == "serve":
         import uvicorn
+        from .guard import hosts_from_env
         from .server import create_app
-        uvicorn.run(create_app(args.data), host=args.host, port=args.port)
+        hosts = hosts_from_env() + [h for h in args.allow_host if h.strip()]
+        uvicorn.run(create_app(args.data, hosts=hosts), host=args.host, port=args.port)
     elif args.command == "export":
         from .deck import Deck
         from .export import export

@@ -63,6 +63,22 @@ Open `https://<machine>.<tailnet>.ts.net:8490/` on the iPad; "Add to Home
 Screen" gives it a full-screen window. HTTPS matters: without it the browser
 will not keep the offline copy (below).
 
+The service answers only requests addressed to a name it knows: 127.0.0.1,
+localhost and [::1], plus the names in `SVGDECK_HOSTS` (comma separated) or
+given with `--allow-host`. Tailscale Serve passes the browser's `Host` on as
+it is, so the tailnet name has to be listed, without scheme or port:
+
+```ini
+# ~/.config/systemd/user/calliope.service.d/local.conf
+[Service]
+Environment=SVGDECK_HOSTS=<machine>.<tailnet>.ts.net
+```
+
+Requests for any other name get 400 (this stops DNS rebinding). Requests that
+change something (anything but GET, HEAD and OPTIONS) are refused with 403 when
+the browser marks them cross-site or their `Origin` is not the service's own;
+requests without an `Origin`, such as curl or a script on the machine, pass.
+
 ### The offline copy
 
 Opening the deck list copies every deck into the browser so it can be

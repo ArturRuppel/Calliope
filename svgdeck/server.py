@@ -18,6 +18,7 @@ from starlette.background import BackgroundTask
 
 from .deck import Deck, render_page
 from .export import export
+from .guard import RequestGuard, hosts_from_env
 from .store import Conflict, Store, check_name
 
 # An SVG opened on its own runs its scripts with the site's rights; served
@@ -32,9 +33,15 @@ def truthy(value: str) -> bool:
     return value.strip().lower() in ("1", "true", "yes", "on")
 
 
-def create_app(data: Path) -> FastAPI:
+def create_app(data: Path, *, hosts: list[str] | None = None, guard: bool = True) -> FastAPI:
+    """The service over a data directory. `hosts` are the Host names served
+    besides loopback (default: $SVGDECK_HOSTS); `guard=False` leaves out the
+    Host and Origin checks, for the browser build, whose requests never
+    leave the page (svgdeck.guard)."""
     store = Store(data)
     app = FastAPI(title="svgdeck", docs_url=None, redoc_url=None)
+    if guard:
+        app.add_middleware(RequestGuard, hosts=hosts_from_env() if hosts is None else hosts)
     editor_dir = Path(str(resources.files("svgdeck") / "editor"))
     # Serialize CPU-heavy conversions without blocking saves or consuming the
     # thread-pool capacity used by the read endpoints. Waiting stays async.

@@ -99,3 +99,10 @@ def select_several(page) -> None:
     if page.locator('#tool-flyout[data-family="select"]').count() == 0:
         page.click('#tools [data-tool="select"]')
     page.click("#multi")
+
+
+@pytest.fixture(autouse=True)
+def _test_client_host(monkeypatch):
+    """Starlette's TestClient sends Host: testserver; let the Host guard serve it."""
+    if "SVGDECK_HOSTS" not in os.environ:
+        monkeypatch.setenv("SVGDECK_HOSTS", "testserver")

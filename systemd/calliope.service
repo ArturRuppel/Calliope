@@ -11,6 +11,10 @@ StartLimitIntervalSec=0
 # `tailscale serve --bg --https=8490 http://127.0.0.1:8490`). HTTPS is what lets
 # the iPad keep an offline copy: service workers need a secure context.
 # Data (decks, fonts) lives in ~/Data/svgdeck, outside the repo.
+# The tailnet name must be allowed as a Host (README, "The service"), e.g. in
+# a drop-in calliope.service.d/local.conf:
+#   [Service]
+#   Environment=SVGDECK_HOSTS=<machine>.<tailnet>.ts.net
 ExecStart=%h/Projects/Calliope/.venv/bin/svgdeck serve --data %h/Data/svgdeck --host 127.0.0.1 --port 8490
 Restart=on-failure
 RestartSec=5
