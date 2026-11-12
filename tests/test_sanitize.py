@@ -133,10 +133,10 @@ def test_script_in_a_utf16_slide_cannot_get_through():
 
 def test_unsafe_url_rules():
     for bad in ["javascript:x", " JAVASCRIPT:x", "\x00javascript:x", "java\tscript:x", "java\nscript:x",
-                "data:text/html,x", "vbscript:x", "file:///etc/passwd", "blob:https://x/y"]:
+                "data:text/html,x", "vbscript:x", "file:///etc/passwd"]:
         assert sanitize.unsafe_url(bad), bad
     for good in ["", "#a", "../media/x.png", "x.png", "https://example.org", "HTTP://x", "mailto:a@b",
-                 "data:image/png;base64,AA", "Data: image/svg+xml,x", "/d/talk/media/x.png"]:
+                 "data:image/png;base64,AA", "Data: image/svg+xml,x", "blob:https://x/y", "/d/talk/media/x.png"]:
         assert not sanitize.unsafe_url(good), good
 
 

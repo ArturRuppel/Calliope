@@ -67,7 +67,7 @@ them may run script. Slides are UTF-8 and have no DTD. Not allowed:
 `<script>`, `<foreignObject>`, `<iframe>`, `<embed>`, `<object>` (and a few
 more of their kind, plus any XHTML or MathML element), any `on…` event
 attribute, `xml:base`, a link or reference (`href`, `xlink:href`, `src`,
-`data-video`) with a scheme other than `http:`, `https:`, `mailto:` or
+`data-video`) with a scheme other than `http:`, `https:`, `mailto:`, `blob:` or
 `data:image/`, a `<set>`/`<animate…>` that animates an `href` or an `on…`
 attribute, and CSS (in `<style>` or `style=`) with `@import` or a `url()` to
 anything but `#id` or a `data:image/`. The full rules are in

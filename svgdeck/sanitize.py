@@ -16,7 +16,7 @@ Unsafe is:
   an href or an on* attribute;
 - every on* attribute, and xml:base;
 - an href / xlink:href / src / data-video / action / formaction whose URL has
-  a scheme other than http, https, mailto or data:image/ (after removing what
+  a scheme other than http, https, mailto, blob or data:image/ (after removing what
   a browser ignores in a URL: tabs and newlines anywhere, controls and spaces
   at the ends);
 - a <style> element or style attribute with @import, or with a url() that
@@ -41,7 +41,9 @@ DROP_ELEMENTS = {"script", "foreignobject", "iframe", "embed", "object", "frame"
 FOREIGN_NAMESPACES = {XHTML_NS, MATHML_NS}
 ANIMATIONS = {"set", "animate", "animatetransform", "animatemotion", "animatecolor"}
 URL_ATTRIBUTES = {"href", "src", "data-video", "action", "formaction"}
-SAFE_SCHEMES = {"http", "https", "mailto"}
+# blob: is how the browser build hands media to the page; only script of the
+# page's own origin can make one, so a slide cannot bring a working one along.
+SAFE_SCHEMES = {"http", "https", "mailto", "blob"}
 
 _SCHEME = re.compile(r"^([a-zA-Z][a-zA-Z0-9+.\-]*):")
 _CSS_HEX = re.compile(r"\\([0-9a-fA-F]{1,6})[ \t\r\n\f]?")

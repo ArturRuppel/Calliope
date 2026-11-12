@@ -22,7 +22,8 @@
   const FOREIGN_NAMESPACES = new Set([XHTML, MATHML]);
   const ANIMATIONS = new Set(["set", "animate", "animatetransform", "animatemotion", "animatecolor"]);
   const URL_ATTRIBUTES = new Set(["href", "src", "data-video", "action", "formaction"]);
-  const SAFE_SCHEMES = new Set(["http", "https", "mailto"]);
+  // blob: is how the browser build hands media to the page (web/runtime.js).
+  const SAFE_SCHEMES = new Set(["http", "https", "mailto", "blob"]);
   const SCHEME = /^([a-zA-Z][a-zA-Z0-9+.\-]*):/;
 
   // A URL as a browser reads it: tabs and newlines go, controls and spaces at the ends too.
