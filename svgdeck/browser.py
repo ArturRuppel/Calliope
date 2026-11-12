@@ -33,7 +33,7 @@ from fastapi import HTTPException, Request
 from . import server
 from .deck import FORMAT, Deck
 from .store import (IMAGE_TYPES, SLIDE_ID, VIDEO_TYPES, Store, check_deck_fields, check_name, check_svg,
-                    safe_filename, write_atomic)
+                    clean_svg, safe_filename, write_atomic)
 
 MAGIC = b"calliope-blob\n"
 # What a browser can play as is (there is no ffmpeg to convert the rest).
@@ -310,9 +310,14 @@ def import_deck(store: Store, data: bytes, filename: str = "") -> dict:
     check_deck_fields(meta)
     if not slides:
         raise ValueError("the deck has no slides")
+    ids = [entry.get("id") if isinstance(entry, dict) else None for entry in meta.get("slides", [])]
+    if len(set(ids)) != len(ids):
+        raise ValueError("the deck lists a slide id more than once")
     for sid, svg in slides.items():
         try:
-            check_svg(svg)
+            # A deck from elsewhere: anything in it that would run script is
+            # removed (svgdeck.sanitize), the rest is imported as it is.
+            slides[sid] = clean_svg(svg)
         except ValueError as e:
             raise ValueError(f"slide {sid}: {e}") from None
     media = {}

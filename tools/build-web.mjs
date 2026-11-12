@@ -135,7 +135,7 @@ const images = await packageImages({ packages, cacheDir: CACHE, lock });
 const appFiles = {};
 const PKG = join(ROOT, "svgdeck");
 for (const path of walk(PKG, (p) => /\.py$/.test(p) || /\/player\//.test(p)
-  || /\/editor\/(movie-range\.js|decks\.html|editor\.html)$/.test(p))) {
+  || /\/editor\/(movie-range\.js|sanitize-svg\.js|decks\.html|editor\.html)$/.test(p))) {
   appFiles[`/app/svgdeck/${relative(PKG, path)}`] = readFileSync(path);
 }
 const picture = samplePicture();

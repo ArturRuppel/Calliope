@@ -143,6 +143,8 @@
     if (!svg || svg.localName !== "svg" || doc.getElementsByTagName("parsererror").length) {
       throw new Error("not a valid SVG");
     }
+    // Nothing in a slide may run script in the presenter (sanitize-svg.js).
+    window.SvgDeckSanitize.sanitize(svg);
     return svg;
   }
 

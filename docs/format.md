@@ -54,6 +54,28 @@ slide when it puts all slides in one page.
 The top-level children of the `<svg>` are the slide's objects, in stacking
 order (first is at the back).
 
+### What a slide may not contain
+
+Slides are put into the editor's and the presenter's own page, so nothing in
+them may run script. Slides are UTF-8 and have no DTD. Not allowed:
+`<script>`, `<foreignObject>`, `<iframe>`, `<embed>`, `<object>` (and a few
+more of their kind, plus any XHTML or MathML element), any `on…` event
+attribute, `xml:base`, a link or reference (`href`, `xlink:href`, `src`,
+`data-video`) with a scheme other than `http:`, `https:`, `mailto:` or
+`data:image/`, a `<set>`/`<animate…>` that animates an `href` or an `on…`
+attribute, and CSS (in `<style>` or `style=`) with `@import` or a `url()` to
+anything but `#id` or a `data:image/`. The full rules are in
+`svgdeck/sanitize.py` and, for the browser, `svgdeck/editor/sanitize-svg.js`.
+
+- Saving a slide through the API (`PUT …/slides/<id>`) that breaks them is
+  refused with 400 and a list of what was found; the slide is left as it was.
+- Importing a deck, uploading an `.svg` picture and keeping a conflict copy
+  remove those parts and keep the rest; a slide without them is stored byte
+  for byte.
+- The editor and the player remove them from every slide before it enters the
+  page, so a slide already on disk that has them shows without them. Opening
+  such a slide does not rewrite it; the next edit saves it without them.
+
 ### Movies
 
 A movie is a top-level `<image>` whose `href` is a poster frame and whose

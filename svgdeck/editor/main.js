@@ -568,6 +568,7 @@ async function renderThumb(id, force = false) {
   try { rec = await slideRecord(id); } catch (e) { delete li.dataset.rendered; throw e; }
   const doc = new DOMParser().parseFromString(rec.text, "image/svg+xml");
   if (doc.querySelector("parsererror")) return;
+  window.SvgDeckSanitize.sanitize(doc.documentElement);
   for (const el of doc.querySelectorAll("[href]")) el.setAttribute("href", hrefIn(el.getAttribute("href")));
   const svg = document.importNode(doc.documentElement, true);
   prefixIds(svg, `t-${id}-`);
@@ -1443,9 +1444,11 @@ function resizedSlide(text, w, h) {
   const doc = new DOMParser().parseFromString(text, "image/svg+xml");
   const svg = doc.documentElement;
   if (doc.querySelector("parsererror") || svg.localName !== "svg") throw new Error("a slide is not valid SVG");
+  // A resized slide is saved as it comes out: clean (sanitize-svg.js).
+  const unsafe = window.SvgDeckSanitize.sanitize(svg).length > 0;
   const vb = (svg.getAttribute("viewBox") || `0 0 ${svg.getAttribute("width") || 1920} ${svg.getAttribute("height") || 1080}`).trim().split(/[\s,]+/).map(Number);
   const [x0, y0, ow, oh] = vb;
-  if (ow === w && oh === h && svg.getAttribute("width") === String(w) && svg.getAttribute("height") === String(h)) return text;
+  if (!unsafe && ow === w && oh === h && svg.getAttribute("width") === String(w) && svg.getAttribute("height") === String(h)) return text;
   svg.setAttribute("viewBox", `${x0} ${y0} ${w} ${h}`);
   svg.setAttribute("width", String(w));
   svg.setAttribute("height", String(h));
@@ -2580,13 +2583,7 @@ function svgToClipboard(text) {
   const doc = new DOMParser().parseFromString(markup, "image/svg+xml");
   const root = doc.documentElement;
   if (doc.querySelector("parsererror") || root.namespaceURI !== SVG_NS || root.localName !== "svg") return null;
-  for (const bad of [...root.querySelectorAll("script, foreignObject, iframe, embed, object")]) bad.remove();
-  for (const node of [root, ...root.querySelectorAll("*")]) {
-    for (const attr of [...node.attributes]) {
-      const value = attr.value.trim().toLowerCase();
-      if (/^on/i.test(attr.localName) || (attr.localName === "href" && value.startsWith("javascript:"))) node.removeAttributeNode(attr);
-    }
-  }
+  window.SvgDeckSanitize.sanitize(root);
   const ser = new XMLSerializer();
   const defs = [], items = [];
   for (const child of [...root.children]) {

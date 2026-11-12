@@ -19,9 +19,11 @@ import threading
 import time
 from pathlib import Path
 from xml.etree import ElementTree
+from xml.parsers import expat
 
 from fontTools.ttLib import TTFont
 
+from . import sanitize
 from .deck import FORMAT, Deck
 
 NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
@@ -62,15 +64,45 @@ def write_atomic(path: Path, data: bytes) -> None:
         raise
 
 
+def _refuse_dtd(*_args) -> None:
+    raise ValueError("DTDs are not allowed in slides")
+
+
 def check_svg(data: bytes) -> None:
-    if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
-        raise ValueError("DTDs are not allowed in slides")
+    """A well-formed UTF-8 <svg> document without a DTD. The DTD test runs in
+    the parser, so no encoding (UTF-16, a declared charset) can hide one."""
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("slides must be UTF-8") from None
+    parser = expat.ParserCreate()
+    parser.StartDoctypeDeclHandler = _refuse_dtd
+    parser.EntityDeclHandler = _refuse_dtd
+    try:
+        parser.Parse(data, True)
+    except expat.ExpatError as error:
+        raise ValueError(str(error)) from error
     try:
         root = ElementTree.fromstring(data)
     except ElementTree.ParseError as error:
         raise ValueError(str(error)) from error
     if root.tag != "{http://www.w3.org/2000/svg}svg":
         raise ValueError("not an SVG document")
+
+
+def check_safe_svg(data: bytes) -> None:
+    """check_svg, and nothing in the slide that would run script (svgdeck.sanitize)."""
+    check_svg(data)
+    found = sanitize.problems(data)
+    if found:
+        listed = ", ".join(dict.fromkeys(found))
+        raise ValueError(f"the slide carries content that could run script ({listed}); remove it and save again")
+
+
+def clean_svg(data: bytes) -> bytes:
+    """check_svg, then the slide with anything that would run script removed."""
+    check_svg(data)
+    return sanitize.sanitize(data)[0]
 
 
 def check_name(name: str) -> str:
@@ -327,7 +359,10 @@ class Store:
         creates a new slide and fails if it exists."""
         with self._lock(name):
             path = self.slide_path(name, slide)
-            check_svg(data)
+            # A save is refused rather than altered: the editor never sends
+            # script (it strips it on load), so this is a client writing
+            # through the API, which should hear about it.
+            check_safe_svg(data)
             if base is None:
                 if path.exists():
                     raise Conflict(slide)
@@ -661,7 +696,9 @@ class Store:
             return {"slide": slide, "deck": meta, "version": version(encoded)}
 
     def preserve_conflict(self, name: str, slide: str, data: bytes) -> dict:
-        check_svg(data)
+        # The rescue copy of unsaved edits: cleaned, not refused, so a refusal
+        # never costs the edits it exists to keep.
+        data = clean_svg(data)
         if not SLIDE_ID.fullmatch(slide):
             raise KeyError(slide)
         with self._lock(name):
@@ -724,10 +761,15 @@ class Store:
                 Path(tmp).unlink(missing_ok=True)
         filename = safe_filename(filename)
         stem, ext = os.path.splitext(filename)
+        if ext == ".svg":
+            # A picture from elsewhere: whatever would run script is removed
+            # before it is named by its content and stored.
+            original = upload.read_bytes()
+            cleaned = clean_svg(original)
+            if cleaned != original:
+                upload.write_bytes(cleaned)
         digest = file_digest(upload)
         if ext in IMAGE_TYPES:
-            if ext == ".svg":
-                check_svg(upload.read_bytes())
             target = media / f"{stem}-{digest}{ext}"
             existed = target.exists()
             shutil.copyfile(upload, target)

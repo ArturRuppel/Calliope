@@ -282,6 +282,9 @@ export class SlideEditor {
     // Rewrite media paths before the slide enters the page, or WebKit starts
     // fetching them relative to the editor's URL.
     const parsed = doc.documentElement;
+    // Nothing in a slide may run script in the editor (sanitize-svg.js). This
+    // changes only the page's copy: the slide is saved, clean, on the next edit.
+    window.SvgDeckSanitize.sanitize(parsed);
     for (const el of parsed.querySelectorAll("[href], [data-video]")) this.rewriteRefs(el, this.hooks.hrefIn);
     for (const el of parsed.querySelectorAll("*")) {
       const legacy = el.getAttributeNS("http://www.w3.org/1999/xlink", "href");
@@ -3082,6 +3085,7 @@ export class SlideEditor {
     const doc = new DOMParser().parseFromString(text, "image/svg+xml");
     const svg = doc.documentElement;
     if (doc.querySelector("parsererror") || svg.localName !== "svg") throw new Error("this slide is not valid SVG");
+    window.SvgDeckSanitize.sanitize(svg);   // it is saved as it comes out: clean
     const vb = (svg.getAttribute("viewBox") || "0 0 1920 1080").split(/[\s,]+/).map(Number);
     const W = vb[2] || 1920, H = vb[3] || 1080;
     const scale = Math.min(1, (W * 0.6) / info.width, (H * 0.6) / info.height);
@@ -3138,6 +3142,7 @@ export class SlideEditor {
     if (!clip || clip.svgdeck !== 1) return false;
     const parse = (s) => {
       const doc = new DOMParser().parseFromString(`<svg xmlns="${SVGNS}">${s}</svg>`, "image/svg+xml");
+      window.SvgDeckSanitize.sanitize(doc.documentElement);
       const parsed = doc.documentElement.firstElementChild;
       this.rewriteRefs(parsed, this.hooks.hrefIn);
       for (const d of parsed.querySelectorAll("[href],[data-video]")) this.rewriteRefs(d, this.hooks.hrefIn);

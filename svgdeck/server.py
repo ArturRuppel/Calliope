@@ -20,6 +20,10 @@ from .deck import Deck, render_page
 from .export import export
 from .store import Conflict, Store, check_name
 
+# An SVG opened on its own runs its scripts with the site's rights; served
+# with these headers it is a picture in an opaque origin, and never sniffed.
+SVG_HEADERS = {"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"}
+
 MAX_UPLOAD = 2 * 1024**3   # movies and images, streamed to disk
 MAX_BODY = 64 * 1024**2    # slides and fonts, held in memory
 
@@ -145,7 +149,8 @@ def create_app(data: Path) -> FastAPI:
         shell += [{"url": "/editor/" + quote(path.relative_to(editor_dir).as_posix()), "v": version(path)}
                   for path in sorted(editor_dir.rglob("*")) if path.is_file() and path.name != "sw.js"]
         # The presenter page inlines the player, so new player code is a new page.
-        player = [*Path(str(resources.files("svgdeck") / "player")).iterdir(), editor_dir / "movie-range.js"]
+        player = [*Path(str(resources.files("svgdeck") / "player")).iterdir(), editor_dir / "movie-range.js",
+                  editor_dir / "sanitize-svg.js"]
         code = max(path.stat().st_mtime_ns for path in player)
         decks = []
         for summary in store.list_decks():
@@ -185,7 +190,10 @@ def create_app(data: Path) -> FastAPI:
         # WebKit downloads it again for every element that shows it.
         hashed = path.startswith(("media/", "fonts/")) and re.search(r"-[0-9a-f]{8,16}(\.poster)?\.[^./]+$", path)
         cache = "public, max-age=31536000, immutable" if hashed else "max-age=300"
-        return FileResponse(target, headers={"Cache-Control": cache})
+        headers = {"Cache-Control": cache, "X-Content-Type-Options": "nosniff"}
+        if target.suffix.lower() == ".svg":
+            headers.update(SVG_HEADERS)
+        return FileResponse(target, headers=headers)
 
     # --- API: decks -------------------------------------------------------------
     @app.get("/api/decks")
@@ -324,7 +332,8 @@ def create_app(data: Path) -> FastAPI:
             data, ver = store.get_slide(name, slide)
         except KeyError:
             raise HTTPException(404, "no such slide")
-        return Response(data, media_type="image/svg+xml", headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache"})
+        return Response(data, media_type="image/svg+xml",
+                        headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache", **SVG_HEADERS})
 
     @app.put("/api/decks/{name}/slides/{slide}")
     async def put_slide(name: str, slide: str, request: Request):
@@ -356,7 +365,8 @@ def create_app(data: Path) -> FastAPI:
             data, ver = await to_thread.run_sync(store.get_revision, name, slide, token)
         except (KeyError, ValueError):
             raise HTTPException(404, "no such revision")
-        return Response(data, media_type="image/svg+xml", headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache"})
+        return Response(data, media_type="image/svg+xml",
+                        headers={"ETag": f'"{ver}"', "Cache-Control": "no-cache", **SVG_HEADERS})
 
     @app.post("/api/decks/{name}/slides/{slide}/revisions/{token}/restore")
     async def restore_slide_revision(name: str, slide: str, token: str, request: Request):
