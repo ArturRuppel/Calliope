@@ -4,8 +4,9 @@ with nothing next to it.
 
 - Media become data: URLs. Pictures stay what they are (a raster stays a
   raster, an SVG picture stays vector); a raster much larger than it is shown
-  is scaled down to `dpi` at its size on the slide (needs Pillow; without it
-  pictures are embedded as they are). A movie keeps its poster frame.
+  is scaled down to `dpi` at its size on the slide, and a photograph goes in
+  as JPEG when that is much smaller (needs Pillow; without it pictures are
+  embedded as they are). A movie keeps its poster frame.
 - The deck's fonts that the slide names are embedded as @font-face rules with
   woff2 data: URLs, cut down to the characters the slide uses, so the text
   renders with the same font everywhere.
@@ -75,21 +76,28 @@ def _picture(data: bytes, suffix: str, target_px: float | None) -> tuple[bytes, 
         image.load()
     except Exception:
         return data, mime
-    if image.width <= target_px * 1.25:
+    shrink = image.width > target_px * 1.25
+    # A large PNG at its size may still be a photograph, which JPEG keeps in far less.
+    if not shrink and not (suffix == ".png" and len(data) > 150_000):
         return data, mime
-    height = max(1, round(image.height * target_px / image.width))
     alpha = image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info)
-    image = image.convert("RGBA" if alpha else "RGB").resize((max(1, round(target_px)), height), Image.LANCZOS)
+    image = image.convert("RGBA" if alpha else "RGB")
+    if shrink:
+        image = image.resize((max(1, round(target_px)), max(1, round(image.height * target_px / image.width))), Image.LANCZOS)
     if alpha and image.getchannel("A").getextrema()[0] == 255:
         image, alpha = image.convert("RGB"), False
-    png = io.BytesIO()
-    image.save(png, "PNG", optimize=True)
+    if shrink:
+        png = io.BytesIO()
+        image.save(png, "PNG", optimize=True)
+        best, best_mime = png.getvalue(), "image/png"
+    else:
+        best, best_mime = data, mime
     if not alpha:
         jpeg = io.BytesIO()
         image.save(jpeg, "JPEG", quality=90, optimize=True)
-        if jpeg.tell() < 0.6 * png.tell():
+        if jpeg.tell() < 0.6 * len(best):
             return jpeg.getvalue(), "image/jpeg"
-    return png.getvalue(), "image/png"
+    return best, best_mime
 
 
 def _font_rules(deck: Deck, source: str, characters: str) -> str:

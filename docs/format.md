@@ -103,9 +103,10 @@ Panel letters are texts with `data-panel-letter="a"` (`b`, …).
 
 - Pictures and movies' posters are embedded as `data:` URLs. A raster stays a
   raster and an SVG picture stays vector. A raster much wider than it is
-  shown is scaled down to `dpi` pixels per inch at its size on the slide
-  (JPEG when that is less than 60 % of the PNG and nothing is transparent;
-  this needs Pillow, which the service has and the browser build has not:
+  shown is scaled down to `dpi` pixels per inch at its size on the slide,
+  and it, or a PNG over 150 kB, goes in as JPEG (quality 90) when that is
+  less than 60 % of the PNG and nothing is transparent (a photograph, not a
+  plot); this needs Pillow, which the service has and the browser build has not:
   there pictures go in as they are).
 - The deck's font faces whose family the slide names are embedded as
   `@font-face` rules with woff2 `data:` URLs, cut down to the characters the
