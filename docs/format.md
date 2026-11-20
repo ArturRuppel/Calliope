@@ -36,16 +36,90 @@ my-talk/
   them with `font-family`, `font-weight` and `font-style`, exactly as CSS
   font matching does. The service and the import accept an entry only when
   `file` is `fonts/<name>` (letters, digits, `- _ .`; no subfolders),
-  `weight` is a number from 1 to 1000 (or `normal`/`bold`), `style` is
+  `weight` is a number from 1 to 1000 (or `normal`/`bold`, or a range such
+  as `"100 900"` for a variable font, which the font library gives one entry
+  for its whole weight axis), `style` is
   `normal` or `italic`, and `family` is a name of at most 200 characters
   without `< > { } ; \` or control characters. The presenter leaves out any
   entry that does not, and an export refuses it. A deck may not list a slide
   id twice.
 
+## Kinds and sizes of slides
+
+A slide entry may carry two more fields; a deck without them is read exactly
+as before, by every version of the code, the presenter and the exports.
+
+```json
+"slides": [
+  {"id": "s00"},
+  {"id": "s-1a2b3c4d", "kind": "material", "name": "Board 1"},
+  {"id": "s-5e6f7a8b", "kind": "figure", "name": "streams"}
+]
+```
+
+- `kind`: `slide` (the same as leaving it out), `material` (a board for
+  collecting snapshots, drawings, plots and notes, at any size) or `figure`
+  (a figure for a document). Only the editor's figure mode tells them apart;
+  the presenter and the exports show every slide, in deck order.
+- `name`: what figure mode calls the slide (at most 200 characters, no `<`).
+- A slide's size is its own `viewBox` (and `width`/`height`): numbers from 1
+  to 100000, fractions allowed. The deck `size` is the size of new slides
+  and of the presentation; a slide of another shape is shown whole inside
+  it. **Deck settings → Slide size** resizes only slides of kind `slide`.
+
+A **figures deck** belongs to one document of a writing app. It carries a
+`figureStyle`, set when the deck is made:
+
+```json
+"figureStyle": {"width": 481.89, "unit": "pt", "textSize": 9.24, "letterSize": 10.5, "font": "Inter Variable"}
+```
+
+`width` is the document's text width; a figure slide is that wide and as
+tall as it needs. Its unit is the point (`unit` is always `pt`), so a text of
+`font-size` 9 on a figure prints at 9 pt when the figure is printed at the
+text width. `textSize` is the document's size for text in figures (its
+caption size), `letterSize` that of panel letters (bold), `font` the family
+new text on a figure uses when the font library has it. All are optional.
+
+Panel letters are texts with `data-panel-letter="a"` (`b`, …).
+
+### The API for slides of their own
+
+| Request | What it does |
+|---|---|
+| `POST /api/decks` with `{"name", "title", "size"?, "figureStyle"?}` | A new deck; with `figureStyle` a figures deck whose first slide is the material board "Board 1" |
+| `POST /api/decks/<deck>/slides` with `{"kind"?, "name"?, "size"?, "after"?}` | A blank slide of `size` (default the deck's), after slide `after` (default at the end). Answers `{id, version, deck, deckVersion}` (201) |
+| … with `{"svg": "<svg …>", …}` | The given SVG as the new slide (refused with 400 if it could run script, as `PUT …/slides/<id>` is) |
+| … with `{"from": {"deck": "<other>", "slide": "<id>"}, …}` | A copy of a slide of another deck (or of this one), with its kind and name unless given. The media files it uses and the font faces it names are copied too; the source deck is not changed |
+| … with `{"svg": …, "from": {"deck": "<other>"}}` | A selection copied from another deck: the media it refers to come from that deck |
+| `PUT /api/decks/<deck>` | As before; `kind` and `name` of slide entries and `figureStyle` are checked |
+| `PUT /api/decks/<deck>/slides/<id>` | As before. A slide changes size by changing its `viewBox`, `width` and `height` |
+| `GET /api/decks/<deck>/slides/<id>/export.svg?dpi=300` | The slide as a standalone SVG (below), with `X-Slide-Version` and `ETag`: the version of the slide it was made from, the same as `GET …/slides/<id>` gives |
+
+### Standalone export of one slide
+
+`export.svg` is the slide as one file another program can show as it is
+(`svgdeck/slide_export.py`):
+
+- Pictures and movies' posters are embedded as `data:` URLs. A raster stays a
+  raster and an SVG picture stays vector. A raster much wider than it is
+  shown is scaled down to `dpi` pixels per inch at its size on the slide
+  (JPEG when that is less than 60 % of the PNG and nothing is transparent;
+  this needs Pillow, which the service has and the browser build has not:
+  there pictures go in as they are).
+- The deck's font faces whose family the slide names are embedded as
+  `@font-face` rules with woff2 `data:` URLs, cut down to the characters the
+  slide uses. A browser shows the text in the same font in an `<img>`, in a
+  page and in a printed PDF, whatever fonts the machine has.
+- Layout boxes, camera frames and objects hidden in the Objects panel are
+  left out, as in a presentation.
+- A `figure` slide gets `width="<w>pt" height="<h>pt"`; other slides keep
+  their size in pixels.
+
 ## Slides
 
-Each slide is a standalone SVG with `viewBox="0 0 W H"` equal to the deck
-`size`. Paths to media are relative to the slide file (`../media/x.png`), so a
+Each slide is a standalone SVG with `viewBox="0 0 W H"`, equal to the deck
+`size` for a slide of kind `slide`. Paths to media are relative to the slide file (`../media/x.png`), so a
 slide opens correctly on its own in a browser.
 
 A slide's `<style>` element applies to that slide only: the player scopes its

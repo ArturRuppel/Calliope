@@ -10,6 +10,7 @@ import tempfile
 from importlib import resources
 from pathlib import Path
 from urllib.parse import quote
+from xml.etree import ElementTree
 
 from anyio import CapacityLimiter, to_thread
 from fastapi import FastAPI, HTTPException, Request
@@ -209,9 +210,12 @@ def create_app(data: Path, *, hosts: list[str] | None = None, guard: bool = True
 
     @app.post("/api/decks")
     async def create_deck(request: Request):
-        req = await request.json()
+        req = await json_object(request)
+        size = req.get("size", [1920, 1080])
+        style = req.get("figureStyle")
         try:
-            return await to_thread.run_sync(store.create_deck, str(req.get("name", "")), str(req.get("title", "")))
+            return await to_thread.run_sync(lambda: store.create_deck(
+                str(req.get("name", "")), str(req.get("title", "")), size, style))
         except FileExistsError:
             raise HTTPException(409, "a deck with that name exists")
         except ValueError as e:
@@ -356,6 +360,46 @@ def create_app(data: Path, *, hosts: list[str] | None = None, guard: bool = True
         except ValueError as e:
             raise HTTPException(400, f"not a valid slide: {e}")
         return {"version": ver}
+
+    @app.post("/api/decks/{name}/slides")
+    async def add_slide(name: str, request: Request):
+        """A new slide: given as `svg`, copied from `from` ({deck, slide}), or
+        blank at `size`; with `kind`, `name` and `after` (docs/format.md)."""
+        deck_dir(name)
+        req = await json_object(request)
+        source = req.get("from") or {}
+        if not isinstance(source, dict):
+            raise HTTPException(400, "from must be {deck, slide}")
+        svg = req.get("svg")
+        if svg is not None and not isinstance(svg, str):
+            raise HTTPException(400, "svg must be a string")
+        for key in ("kind", "name", "after"):
+            if req.get(key) is not None and not isinstance(req.get(key), str):
+                raise HTTPException(400, f"{key} must be a string")
+        try:
+            return JSONResponse(await to_thread.run_sync(lambda: store.add_slide(
+                name, svg=svg.encode("utf-8") if svg is not None else None, kind=req.get("kind"),
+                slide_name=req.get("name"), size=req.get("size"), after=req.get("after"),
+                source=source.get("deck"), source_slide=source.get("slide"))), status_code=201)
+        except KeyError:
+            raise HTTPException(404, "no such deck or slide to copy from")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    @app.get("/api/decks/{name}/slides/{slide}/export.svg")
+    async def export_slide(name: str, slide: str, dpi: int = 300):
+        """One slide as a standalone SVG: media and fonts embedded (svgdeck.slide_export)."""
+        deck_dir(name)
+        if not 36 <= dpi <= 1200:
+            raise HTTPException(400, "dpi must be from 36 to 1200")
+        try:
+            data, ver = await to_thread.run_sync(store.export_slide, name, slide, dpi, limiter=media_limiter)
+        except KeyError:
+            raise HTTPException(404, "no such slide")
+        except (ValueError, ElementTree.ParseError) as e:
+            raise HTTPException(400, f"the slide cannot be exported: {e}")
+        return Response(data, media_type="image/svg+xml",
+                        headers={"ETag": f'"{ver}"', "X-Slide-Version": ver, "Cache-Control": "no-cache", **SVG_HEADERS})
 
     @app.get("/api/decks/{name}/slides/{slide}/revisions")
     async def slide_revisions(name: str, slide: str):

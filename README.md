@@ -356,6 +356,41 @@ The editor is laid out for an iPad in landscape:
   If recovery cannot reach the server, it downloads the local SVG as a fallback.
   Revisions cover slide artwork.
 
+## Figure mode
+
+`/edit/<deck>?mode=figures` opens the editor as a workshop for the figures of
+a document (a writing app opens it this way; the deck format is in
+[docs/format.md](docs/format.md), "Kinds and sizes of slides"). Without
+`mode=figures` the editor and the presenter are exactly as described above.
+
+- Nothing about presenting shows: no **Present**, no Builds tab or build
+  steps, no speaker view, offline export or PDF in the deck menu.
+- The strip has two lists: **Figures**, in the document's order and named by
+  its numbers and labels (`&figs=<slide>~<number>~<label>,…` in the address,
+  which the writing app adds), and **Material**: boards and every other
+  slide. `&slide=<id>` opens that slide first. **+ Board** adds a material
+  board of the deck size.
+- **A figure** is as wide as the document's text and measured in points, so
+  sizes are true to print. With nothing selected the Design tab shows its
+  width, its **Height** (type it) and **Fit height to content**, and the
+  panel letters: **Add letter** puts the next free letter (bold, the
+  document's letter size) at the corner of the selection, **Renumber** letters
+  the panels a, b, c… in reading order and makes them all alike. **Letter** in
+  the selection bar and the actions menu do the same. New text on a figure
+  starts at the document's figure text size.
+- **A board** can be any size (type W × H, or **Fit to content**); pan and
+  zoom reach from a whole large board to a detail. Pictures go on it as
+  anywhere (Media, paste, drag and drop).
+- **Copy to figure** (the selection bar's **To figure**, or the actions menu
+  on a board) copies the selection into a figure you choose, as one group
+  ("Panel") scaled to fit the figure, and opens the figure. The board keeps
+  the original. If texts came along, a bar offers **Set sizes**: every text
+  in the copy at the document's size, whatever the scaling.
+- **Copy to another deck…** in the slide menu (the ⋯ beside + Board) copies
+  the whole slide; in the actions menu it copies the selection as a new board.
+  Media and fonts go with it; nothing here changes. That is how material
+  moves between documents' decks.
+
 ## Presenting
 
 The controls are a small bar of icons (previous, slide number, next,

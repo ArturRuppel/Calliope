@@ -90,6 +90,8 @@ def _asset(name: str) -> str:
 # A deck's font entry: {"family", "file", "weight", "style"} (docs/format.md).
 FONT_FILE = re.compile(r"^fonts/(?!\.)[A-Za-z0-9_.-]{1,200}$")
 FONT_WEIGHT_WORDS = {"normal", "bold"}
+# A variable font covers a range of weights: "100 900", as CSS writes it.
+FONT_WEIGHT_RANGE = re.compile(r"^(\d{1,4}) (\d{1,4})$")
 FONT_STYLES = {"normal", "italic"}
 _FAMILY_FORBIDDEN = re.compile(r"[<>{};\\\x00-\x1f\x7f]")
 
@@ -105,8 +107,10 @@ def font_problem(font) -> str | None:
     if not (isinstance(file, str) and FONT_FILE.match(file)):
         return "a font file must be fonts/<name> (letters, digits, - _ and .)"
     weight = font.get("weight", 400)
-    if not ((type(weight) is int and 1 <= weight <= 1000) or weight in FONT_WEIGHT_WORDS):
-        return "a font weight must be a number from 1 to 1000, normal or bold"
+    span = FONT_WEIGHT_RANGE.match(weight) if isinstance(weight, str) else None
+    if not ((type(weight) is int and 1 <= weight <= 1000) or weight in FONT_WEIGHT_WORDS
+            or (span and 1 <= int(span[1]) <= int(span[2]) <= 1000)):
+        return "a font weight must be a number from 1 to 1000, normal, bold or a range such as \"100 900\""
     if font.get("style", "normal") not in FONT_STYLES:
         return "a font style must be normal or italic"
     return None

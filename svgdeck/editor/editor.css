@@ -320,3 +320,25 @@ body.no-strip .strip, body.no-panel .inspector { visibility: hidden; }
 .movie-trim input[type=number] { width: 120px; }
 .movie-trim input[type=range] { width: 100%; min-height: 40px; accent-color: var(--accent); }
 .movie-trim .buttons { flex-wrap: wrap; margin-top: 16px; }
+
+/* — figure mode (?mode=figures, figures.js): no presenting, two lists — */
+body.figure-mode #present, body.figure-mode #inspector-tabs [data-tab="builds"] { display: none; }
+.thumbs .strip-head { display: flex; align-items: baseline; justify-content: space-between; cursor: default;
+  margin: 10px 0 6px 4px; padding-bottom: 4px; border-bottom: 2px solid var(--ink);
+  font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.thumbs .strip-head:first-child { margin-top: 2px; }
+.thumbs .strip-head small { font-weight: 600; color: var(--n700); letter-spacing: 0; }
+.thumbs .strip-empty { cursor: default; margin: 0 0 8px 4px; font-size: 12px; color: var(--n700); }
+.thumbs li.named { padding-left: 4px; }
+.thumbs .thumb-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.thumbs li.named .thumb { flex: none; width: 100%; }
+.thumbs .thumb-name { font-size: 11px; line-height: 1.25; color: var(--n800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thumbs li.named.current .thumb-name { color: var(--a700); font-weight: 800; }
+.figure-offer { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 61; display: flex;
+  align-items: center; gap: 10px; flex-wrap: wrap; max-width: min(620px, calc(100% - 24px)); padding: 10px 12px;
+  background: var(--surface); border: 2px solid var(--ink); box-shadow: var(--shadow-md); }
+.figure-offer span { flex: 1 1 240px; }
+.figure-offer .btn.primary { min-width: 0; }
+.choose-list { display: flex; flex-direction: column; gap: 4px; min-width: min(420px, 80vw); }
+.choose-item { justify-content: space-between; height: auto; min-height: 44px; padding: 8px 12px; border: 2px solid var(--line); text-align: left; }
+.choose-item small { color: var(--n700); font-weight: 400; }

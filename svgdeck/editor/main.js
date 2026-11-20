@@ -9,6 +9,7 @@ import { installCommits } from "./commits.js";
 import { createColorControl } from "./colors.js";
 import { IMAGE_ADJUSTMENTS, adjustmentValue, setImageAdjustment, resetImageAdjustments, upgradeImageAdjustments } from "./image-adjustments.js";
 import { openMovieTrim } from "./movie-trim.js";
+import { FIGURE_MODE, START_SLIDE, installFigureMode, kindOf } from "./figures.js";
 
 const DECK = document.body.dataset.deck;
 // The browser build (web/runtime.js) runs the service in a worker; it hands out
@@ -108,6 +109,7 @@ const state = {
   prefs: loadPrefs(),
 };
 let objectPanels = null, mediaTools = null, recovery = null, commits = null;
+let fig = null;  // figure mode (figures.js), or null: the editor as it always was
 
 function loadPrefs() {
   const defaults = { fill: "#92b1e5", stroke: "none", strokeWidth: 4, textFill: "#000000", family: null,
@@ -184,9 +186,15 @@ const editor = new SlideEditor($("stage"), {
   },
   toast,
   hrefIn, hrefOut,
-  shapeStyle: () => ({ fill: state.prefs.fill, stroke: state.prefs.stroke, strokeWidth: state.prefs.strokeWidth }),
-  textStyle: () => ({ family: state.prefs.family || defaultFamily(), weight: state.prefs.weight,
-                      size: state.prefs.size, fill: state.prefs.textFill }),
+  shapeStyle: () => {
+    const s = { fill: state.prefs.fill, stroke: state.prefs.stroke, strokeWidth: state.prefs.strokeWidth };
+    return fig ? fig.shapeStyle(s) : s;
+  },
+  textStyle: () => {
+    const s = { family: state.prefs.family || defaultFamily(), weight: state.prefs.weight,
+                size: state.prefs.size, fill: state.prefs.textFill };
+    return fig ? fig.textStyle(s) : s;
+  },
   ensureFont: (family) => ensureFamily(family),
   toolDone: (slot) => setTool("select", { keepEdit: true, slot }),
   inputChanged: () => { updateToolButtons(); renderPanel(); updateSelBar(); },
@@ -534,6 +542,7 @@ const thumbObserver = new IntersectionObserver((entries) => {
 }, { root: $("thumbs"), rootMargin: "300px" });
 
 function paintSlidePos() {
+  if (fig) { $("slide-pos").textContent = fig.position(); return; }
   $("slide-pos").textContent = state.current ? `Slide ${index() + 1} of ${state.deck.slides.length}` : "";
 }
 
@@ -542,6 +551,20 @@ function renderStrip() {
   thumbObserver.disconnect();
   const ol = $("thumbs");
   ol.replaceChildren();
+  if (fig) {
+    // Figure mode: two lists, Figures then Material, each thumbnail named.
+    fig.renderStrip(ol, (s, label) => {
+      const li = document.createElement("li");
+      li.dataset.id = s.id;
+      li.className = "named" + (s.id === state.current ? " current" : "");
+      li.innerHTML = `<div class="thumb-col"><div class="thumb"></div><span class="thumb-name"></span></div>`;
+      li.querySelector(".thumb-name").textContent = label;
+      li.addEventListener("click", () => openSlideSafely(s.id));
+      thumbObserver.observe(li);
+      return li;
+    });
+    return;
+  }
   state.deck.slides.forEach((s, i) => {
     const li = document.createElement("li");
     li.dataset.id = s.id;
@@ -991,7 +1014,7 @@ function selBarItems() {
   const fit = editor.canFitToLayout()
     ? [barButton("Fit to box", "Fill the layout box around it, keeping its proportions, and centre it there (text is only centred)",
       () => editor.fitToLayout(), { id: "fit-layout" }), barSep()] : [];
-  const tail = [barSep(), ...fit, alignBtn, more];
+  const tail = [barSep(), ...fit, ...(fig ? [...fig.barButtons(barButton), barSep()] : []), alignBtn, more];
 
   // Point editing takes over the bar while a shape shows its points.
   const model = editor.usesTool("nodes") && sel.length === 1 && editor.nodeModel(first);
@@ -1274,6 +1297,7 @@ function showContextMenu(x, y) {
     action("Lock", () => editor.lock());
     action("Delete", () => editor.deleteSelection(), { key: "⌫", danger: true });
   }
+  if (fig) { sep(); fig.menuActions(action, count); }
   if (count < 2) menu.append(el("p", { class: "menu-hint", role: "presentation" }, "To group: choose Select several, tap each object, then Group."));
   menu.addEventListener("keydown", (e) => {
     if (e.key === "Escape") { e.preventDefault(); closeContextMenu(true); }
@@ -1332,12 +1356,13 @@ function buildDocMenu() {
   menu.replaceChildren(
     item("commit-deck", "M12 8a4 4 0 1 0 0 8a4 4 0 1 0 0-8M2 12h6M16 12h6", "Commit snapshot…", "An immutable copy of the whole deck", () => commits?.open()),
     item(null, "M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l4 2", "History and recovery", "Slide revisions, deleted slides", () => recovery?.open()),
-    sep(),
+    // Figure mode leaves out what belongs to presenting.
+    ...(fig ? [] : [sep(),
     item("export", "M12 3v12M7 10l5 5 5-5M5 21h14", "Export offline copy", "A .zip that plays without network", guard(exportDeck, "Could not export")),
     RT ? item("download-pdf", "M6 9V3h12v6M6 18H4v-7h16v7h-2M8 14h8v7H8z", "Print or save as PDF",
       "The browser's print dialog, one page per slide", guard(printDeck, "Could not print"))
       : download("download-pdf", "Download PDF", "One page per slide", `/api/decks/${DECK}/pdf`),
-    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Next slide, timer, audience window", guard(() => present(true), "Could not open speaker view")),
+    item(null, "M3 4h18v12H3zM8 20h8M12 16v4", "Speaker view", "Next slide, timer, audience window", guard(() => present(true), "Could not open speaker view"))]),
     sep(),
     item("deck-settings", "M4 6h16M4 12h16M4 18h16", "Deck settings…", `Title, size, background, fonts · ${state.deck.size?.join(" × ") || "1920 × 1080"}`, () => openSettings("deck")),
     item("pen-status", "M4 20l1-5L16 4l4 4L9 19z", "Pencil and controller",
@@ -1464,7 +1489,9 @@ function resizedSlide(text, w, h) {
 /** Give every slide a new size, each as one undo step of its own, after a
  *  confirmation; then the deck's size. */
 async function resizeSlides(w, h) {
-  const n = state.deck.slides.length;
+  // Boards and figures have sizes of their own; the deck size is that of its slides.
+  const plain = state.deck.slides.filter((s) => kindOf(s) === "slide");
+  const n = plain.length;
   const [w0, h0] = state.deck.size || [1920, 1080];
   if (w === w0 && h === h0) { toast(`The slides are already ${w} × ${h} pixels.`); return; }
   if (!confirm(`Change the size of all ${n} slide${n === 1 ? "" : "s"} from ${w0} × ${h0} to ${w} × ${h} pixels? ` +
@@ -1472,7 +1499,7 @@ async function resizeSlides(w, h) {
   // An open text box or crop ends first, so its edit is part of what is resized.
   settleCurrentSlide();
   await flush();
-  const ids = state.deck.slides.map((s) => s.id);
+  const ids = plain.map((s) => s.id);
   const recs = await Promise.all(ids.map((id) => slideRecord(id)));
   if (recs.some((rec) => rec.conflict)) throw new Error("a slide has a save conflict; resolve it under History and recovery first");
   const changed = recs.map((rec) => resizedSlide(rec.text, w, h));  // all or nothing: a bad slide stops here
@@ -1727,7 +1754,8 @@ function drawPanel() {
   if (!sel.length) {
     const svg = editor.svg;
     const bg = svg && (svg.querySelector('[data-label="background"]') || svg.querySelector("[data-locked='true']"));
-    parts.unshift(heading(`Slide ${index() + 1}`, "Nothing selected"));
+    parts.unshift(heading(fig ? fig.position() : `Slide ${index() + 1}`, "Nothing selected"));
+    if (fig) parts.push(...fig.slideSections());
     if (bg) parts.push(section("Background", colorControl(getComputedStyle(bg).fill, (c) => editor.setStyle("fill", c, [bg]), false)));
     const grid = state.prefs.grid;
     const check = (on, text, fn) => el("label", { class: "check" },
@@ -1859,7 +1887,14 @@ function drawPanel() {
       editor.setStyle("font-family", cssFamily(famSelect.value), texts);
       state.prefs.family = famSelect.value; savePrefs();
     });
-    const weights = [...new Set(state.faces.filter((f) => f.family === family && f.style === "normal").map((f) => f.weight))].sort((a, b) => a - b);
+    // A variable face ("100 900") offers every hundred in its range.
+    const weights = [...new Set(state.faces.filter((f) => f.family === family && f.style === "normal").flatMap((f) => {
+      const span = /^(\d+) (\d+)$/.exec(String(f.weight));
+      if (!span) return [f.weight];
+      const out = [];
+      for (let w = Math.ceil(+span[1] / 100) * 100; w <= +span[2]; w += 100) out.push(w);
+      return out;
+    }))].sort((a, b) => a - b);
     const weight = parseInt(tcs.fontWeight, 10) || 400;
     const weightSelect = el("select", {}, [...new Set([weight, ...(weights.length ? weights : [400, 700])])].sort((a, b) => a - b).map((w) =>
       el("option", { value: w, selected: w === weight }, `${w} ${weightName(w)}`)));
@@ -1916,6 +1951,7 @@ function drawPanel() {
         iconButton("Flip vertical", "M3 12h3M10.5 12h3M18 12h3M6 9l12-6v6zM6 15l12 6v-6z", () => editor.flip("y")))));
   }
 
+  if (fig) { panel.replaceChildren(...parts.filter(Boolean)); return; }  // figure mode: no build steps
   const steps = new Set(sel.map((e) => Number.parseInt(e.getAttribute("data-step") || "0", 10) || 0));
   const step = steps.size === 1 ? [...steps][0] : 0;
   const setStep = (n) => editor.setAttr("data-step", n > 0 ? String(n) : null);
@@ -2737,7 +2773,7 @@ function wire() {
     e.preventDefault();
     leave($("back").getAttribute("href"));
   };
-  $("slide-add").onclick = guard(() => addSlide(blankSlide()), "Could not add a slide");
+  $("slide-add").onclick = guard(() => (fig ? fig.addBoard() : addSlide(blankSlide())), "Could not add a slide");
   $("slide-dup").onclick = guard(duplicateSlide, "Could not duplicate the slide");
   $("slide-up").onclick = guard(() => moveSlide(-1), "Could not move the slide");
   $("slide-down").onclick = guard(() => moveSlide(1), "Could not move the slide");
@@ -2798,6 +2834,16 @@ async function duplicateSlide() {
 }
 
 async function main() {
+  if (FIGURE_MODE) {
+    fig = installFigureMode({ editor, state, api, DECK, el, section, row, buttonRow, numberControl, toast, guard,
+      settle: settleCurrentSlide, flush, openSlide, markDirty, renderPanel, renderStrip, deckWrite, resizedSlide,
+      cssFamily, defaultFamily, ensureFamily });
+    $("slide-add").lastChild.textContent = "Board";
+    $("slide-add").title = "New material board after this one";
+    const copy = el("button", { role: "menuitem", id: "slide-copy-deck" }, "Copy to another deck…");
+    copy.onclick = guard(() => fig.slideMenu(), "Could not copy the slide");
+    $("slide-dup").after(copy);
+  }
   wire();
   const objects = installObjects({editor,state,toast,settle:settleCurrentSlide,mount:$("objects-mount")});
   // Objects and builds opened from anywhere show in the inspector's tabs.
@@ -2834,7 +2880,8 @@ async function main() {
     return;
   }
   const m = /^#(\d+)$/.exec(location.hash);
-  const start = m ? Math.max(0, Math.min(+m[1] - 1, slides.length - 1)) : 0;
+  const asked = !m && START_SLIDE ? slides.findIndex((s) => s.id === START_SLIDE) : -1;
+  const start = m ? Math.max(0, Math.min(+m[1] - 1, slides.length - 1)) : Math.max(0, asked);
   // A slide that cannot be opened is skipped for the next one that can.
   for (const s of [...slides.slice(start), ...slides.slice(0, start)]) {
     if (await openSlide(s.id)) break;
@@ -2845,5 +2892,5 @@ async function main() {
 }
 
 main();
-window.svgdeckEditor = { editor, state, openSlide, undo, redo, flush, putDeck, controller, runAction, setTool, exportDeck, copySelection, pasteText,
+window.svgdeckEditor = { editor, state, openSlide, get fig() { return fig; }, undo, redo, flush, putDeck, controller, runAction, setTool, exportDeck, copySelection, pasteText,
   get objectPanels() {return objectPanels;}, get mediaTools() {return mediaTools;}, get recovery() {return recovery;}, get commits() {return commits;} };

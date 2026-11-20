@@ -408,7 +408,9 @@ export class SlideEditor {
   zoomAt(clientX, clientY, factor) {
     const r = this.host.getBoundingClientRect();
     const x = clientX - r.left, y = clientY - r.top;
-    const zoom = Math.max(0.05, Math.min(8, this.zoom * factor));
+    // A large board fits below 5 %; a figure a few hundred points wide fits near 200 %.
+    const fitted = Math.min(this.host.clientWidth / this.size[0], this.host.clientHeight / this.size[1]) || 1;
+    const zoom = Math.max(Math.min(0.05, fitted / 2), Math.min(Math.max(8, fitted * 16), this.zoom * factor));
     factor = zoom / this.zoom;
     this.pan = { x: x - (x - this.pan.x) * factor, y: y - (y - this.pan.y) * factor };
     this.zoom = zoom;

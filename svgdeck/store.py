@@ -36,6 +36,13 @@ DECK_TRASH_TOKEN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.-]{0,99})\.(\d{8}T\d{6}
 COMMIT_ID = re.compile(r"^[0-9a-f]{20}$")
 REVISION_LIMIT = 30
 
+# A slide's kind (deck.json slide entry "kind"): absent or "slide" is a slide
+# as always; "material" is a board for collecting things; "figure" is a figure
+# for a document (docs/format.md). Only figure mode in the editor tells them apart.
+SLIDE_KINDS = {"slide", "material", "figure"}
+MAX_SLIDE_SIDE = 100000   # a slide's own size (its viewBox); boards may be large
+FIGURE_STYLE_KEYS = {"width", "unit", "textSize", "letterSize", "font"}
+
 BLANK_SLIDE = """<?xml version="1.0" encoding="utf-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="{w}" height="{h}" xml:space="preserve">
 <defs/>
@@ -128,6 +135,53 @@ def check_deck_fields(meta: dict) -> None:
             raise ValueError("background must be a CSS colour of at most 64 characters")
     if "fonts" in meta:
         check_fonts(meta["fonts"])
+    if "figureStyle" in meta:
+        check_figure_style(meta["figureStyle"])
+    for entry in meta.get("slides", []) if isinstance(meta.get("slides"), list) else []:
+        check_slide_entry(entry)
+
+
+def _number(value, low, high) -> bool:
+    return type(value) in (int, float) and low <= value <= high
+
+
+def check_slide_entry(entry) -> None:
+    """A deck.json slide entry: an id, and optionally a kind and a name."""
+    if not isinstance(entry, dict):
+        raise ValueError("a slide entry must be an object")
+    if "kind" in entry and entry["kind"] not in SLIDE_KINDS:
+        raise ValueError("a slide kind is slide, material or figure")
+    if "name" in entry and not (isinstance(entry["name"], str) and len(entry["name"]) <= 200
+                                and "<" not in entry["name"]):
+        raise ValueError("a slide name is a string of at most 200 characters, without <")
+
+
+def check_figure_style(style) -> None:
+    """deck.json "figureStyle": how figure slides are sized and lettered."""
+    if not isinstance(style, dict) or set(style) - FIGURE_STYLE_KEYS:
+        raise ValueError(f"figureStyle takes {', '.join(sorted(FIGURE_STYLE_KEYS))}")
+    if "width" in style and not _number(style["width"], 16, MAX_SLIDE_SIDE):
+        raise ValueError("figureStyle.width must be a number from 16 to 100000")
+    if "unit" in style and style["unit"] != "pt":
+        raise ValueError("figureStyle.unit must be pt")
+    for key in ("textSize", "letterSize"):
+        if key in style and not _number(style[key], 1, 200):
+            raise ValueError(f"figureStyle.{key} must be a number from 1 to 200")
+    if "font" in style and not (isinstance(style["font"], str) and 0 < len(style["font"]) <= 200
+                                and not re.search(r"[<>{};\\\x00-\x1f]", style["font"])):
+        raise ValueError("figureStyle.font must be a font family name")
+
+
+def check_slide_size(size) -> tuple[float, float]:
+    """A slide's own size: two numbers from 1 to 100000 (fractions allowed)."""
+    if not (isinstance(size, (list, tuple)) and len(size) == 2 and all(_number(n, 1, MAX_SLIDE_SIDE) for n in size)):
+        raise ValueError("a slide size is two numbers from 1 to 100000")
+    return float(size[0]), float(size[1])
+
+
+def size_text(n: float) -> str:
+    """A length as a slide writes it: no needless decimals."""
+    return f"{round(float(n), 3):g}"
 
 
 def check_fonts(fonts) -> None:
@@ -183,8 +237,14 @@ class Store:
                for meta in sorted(self.decks.glob("*/deck.json")) if self.decks.is_dir()]
         return sorted(out, key=lambda d: -d["modified"])
 
-    def create_deck(self, name: str, title: str, size=(1920, 1080)) -> dict:
+    def create_deck(self, name: str, title: str, size=(1920, 1080), figure_style: dict | None = None) -> dict:
+        """A new deck with one blank slide. With `figure_style` it is a figures
+        deck (docs/format.md): the style is kept and the first slide is a
+        material board of the deck's size."""
         check_name(name)
+        check_deck_fields({"size": list(size) if isinstance(size, (list, tuple)) else size})
+        if figure_style is not None:
+            check_figure_style(figure_style)
         path = self.decks / name
         if path.exists():
             raise FileExistsError(name)
@@ -192,8 +252,11 @@ class Store:
             (path / sub).mkdir(parents=True)
         slide = "s" + os.urandom(4).hex()
         write_atomic(path / "slides" / f"{slide}.svg", BLANK_SLIDE.format(w=size[0], h=size[1]).encode())
+        entry = {"id": slide} if figure_style is None else {"id": slide, "kind": "material", "name": "Board 1"}
         meta = {"format": FORMAT, "title": title or name, "size": list(size), "background": "#000000",
-                "slides": [{"id": slide}], "fonts": []}
+                "slides": [entry], "fonts": []}
+        if figure_style is not None:
+            meta["figureStyle"] = figure_style
         write_atomic(path / "deck.json", (json.dumps(meta, indent=2) + "\n").encode())
         return self.get_deck(name)
 
@@ -385,6 +448,109 @@ class Store:
                 self._checkpoint(name, slide, path.read_bytes())
             write_atomic(path, data)
             return version(data)
+
+    def add_slide(self, name: str, *, svg: bytes | None = None, kind: str | None = None,
+                  slide_name: str | None = None, size=None, after: str | None = None,
+                  source: str | None = None, source_slide: str | None = None) -> dict:
+        """Add a slide to a deck and return its id and version, with the new
+        deck.json. The slide is `svg`, or a copy of `source_slide` of deck
+        `source`, or a blank one of `size` (default: the deck's size). With
+        `source`, the media and fonts the slide uses are copied from that deck
+        (copies: nothing in the source changes). It goes after slide `after`,
+        or at the end. `kind` and `slide_name` set the entry's kind and name;
+        a copied slide keeps its own unless they are given."""
+        entry: dict = {}
+        if source_slide is not None and source is None:
+            raise ValueError("a copied slide needs its deck")
+        if source is not None:
+            check_name(source)
+        with self._lock_both(name, source or name):
+            root = self.deck_dir(name)
+            if source_slide is not None:
+                svg, _ = self.get_slide(source, source_slide)
+                old = next((s for s in json.loads((self.deck_dir(source) / "deck.json").read_bytes())["slides"]
+                            if s.get("id") == source_slide), None)
+                if old is None:
+                    raise KeyError(source_slide)
+                entry.update({k: v for k, v in old.items() if k in ("kind", "name")})
+            if svg is None:
+                meta = json.loads((root / "deck.json").read_bytes())
+                w, h = check_slide_size(size if size is not None else meta.get("size") or [1920, 1080])
+                svg = BLANK_SLIDE.format(w=size_text(w), h=size_text(h)).encode()
+            check_safe_svg(svg)
+            if kind is not None:
+                entry["kind"] = kind
+            if slide_name is not None:
+                entry["name"] = slide_name
+            if entry.get("kind") == "slide":
+                del entry["kind"]
+            current = (root / "deck.json").read_bytes()
+            meta = json.loads(current)
+            ids = [s.get("id") for s in meta.get("slides", [])]
+            if after is not None and after not in ids:
+                raise ValueError(f"no slide {after} in the deck")
+            slide = self._new_slide_id(root, "s")
+            entry = {"id": slide, **entry}
+            check_slide_entry(entry)
+            if source is not None and source != name:
+                self._copy_assets(source, name, svg)
+                meta = json.loads((root / "deck.json").read_bytes())
+            self._ensure_baseline(name)
+            write_atomic(root / "slides" / f"{slide}.svg", svg)
+            slides = list(meta.get("slides", []))
+            slides.insert(ids.index(after) + 1 if after is not None else len(slides), entry)
+            meta["slides"] = slides
+            data = (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode()
+            try:
+                write_atomic(root / "deck.json", data)
+            except BaseException:
+                (root / "slides" / f"{slide}.svg").unlink(missing_ok=True)
+                raise
+            return {"id": slide, "version": version(svg), "deck": meta, "deckVersion": version(data)}
+
+    def _copy_assets(self, source: str, target: str, svg: bytes) -> None:
+        """Copy into `target` the media files `svg` refers to and the font
+        faces of `source` it lacks. Media names carry a hash of their content,
+        so a name both decks have is the same file and is left alone."""
+        origin, root = self.deck_dir(source), self.deck_dir(target)
+        for rel in media_references(svg):
+            src = (origin / rel).resolve()
+            if not src.is_relative_to((origin / "media").resolve()) or not src.is_file():
+                continue
+            dst = root / rel
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+        theirs = json.loads((origin / "deck.json").read_bytes()).get("fonts", [])
+        meta = json.loads((root / "deck.json").read_bytes())
+        have = {(f.get("family"), str(f.get("weight", 400)), f.get("style", "normal")) for f in meta.get("fonts", [])}
+        added = False
+        for font in theirs:
+            key = (font.get("family"), str(font.get("weight", 400)), font.get("style", "normal"))
+            if font_problem(font) or key in have or font["family"] not in svg.decode("utf-8", "replace"):
+                continue
+            src, dst = origin / font["file"], root / font["file"]
+            if not src.is_file() or (dst.exists() and dst.read_bytes() != src.read_bytes()):
+                continue
+            if not dst.exists():
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dst)
+            meta.setdefault("fonts", []).append(dict(font))
+            have.add(key)
+            added = True
+        if added:
+            self._ensure_baseline(target)
+            write_atomic(root / "deck.json", (json.dumps(meta, indent=2, ensure_ascii=False) + "\n").encode())
+
+    def export_slide(self, name: str, slide: str, dpi: int = 300) -> tuple[bytes, str]:
+        """One slide as a standalone SVG (svgdeck.slide_export) and the
+        version of the slide it was made from."""
+        from .slide_export import standalone_svg
+        with self._lock(name):
+            data, ver = self.get_slide(name, slide)
+            deck = Deck.load(self.deck_dir(name))
+        entry = next((s for s in deck.meta["slides"] if s.get("id") == slide), {"id": slide})
+        return standalone_svg(deck, data, kind=entry.get("kind"), dpi=dpi), ver
 
     # --- explicit deck commits ----------------------------------------------
     def _commit_root(self, name: str) -> Path:
@@ -888,6 +1054,28 @@ class Store:
         return {"deck": meta, "version": version(data)}
 
 
+def media_references(svg: bytes) -> list[str]:
+    """Deck-relative paths (media/...) of the files a slide refers to."""
+    from .deck import REFERENCE_ATTRIBUTES, _normalize
+    from urllib.parse import unquote, urlsplit
+    out = []
+    root = ElementTree.fromstring(svg)
+    for element in root.iter():
+        for attribute, ref in element.attrib.items():
+            if attribute not in REFERENCE_ATTRIBUTES:
+                continue
+            url = urlsplit(ref)
+            if not url.path or url.scheme or url.netloc or url.path.startswith("/"):
+                continue
+            try:
+                rel = _normalize("slides/" + unquote(url.path))
+            except ValueError:
+                continue
+            if rel.startswith("media/") and rel not in out:
+                out.append(rel)
+    return out
+
+
 def file_digest(path: Path) -> str:
     h = hashlib.sha1()
     with open(path, "rb") as f:
@@ -900,7 +1088,12 @@ def face_info(path: Path) -> dict:
     font = TTFont(path, lazy=True)
     name = font["name"]
     family = (name.getDebugName(16) or name.getDebugName(1)).strip()
-    return {"family": family, "weight": font["OS/2"].usWeightClass,
+    weight = font["OS/2"].usWeightClass
+    # A variable font with a weight axis is one face for the whole range.
+    axis = next((a for a in font["fvar"].axes if a.axisTag == "wght"), None) if "fvar" in font else None
+    if axis and 1 <= axis.minValue <= axis.maxValue <= 1000:
+        weight = f"{round(axis.minValue)} {round(axis.maxValue)}"
+    return {"family": family, "weight": weight,
             "style": "italic" if font["OS/2"].fsSelection & 1 else "normal",
             "name": (name.getDebugName(4) or family).strip()}
 

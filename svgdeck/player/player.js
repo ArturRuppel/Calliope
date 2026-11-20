@@ -380,7 +380,7 @@
     });
 
     const faces = (deck.fonts || []).map((f) =>
-      document.fonts.load(`${f.style || "normal"} ${f.weight || 400} 32px "${f.family}"`).catch(() => {}));
+      document.fonts.load(`${f.style || "normal"} ${String(f.weight || 400).split(" ")[0]} 32px "${f.family}"`).catch(() => {}));
     const timeout = new Promise((resolve) => setTimeout(resolve, 3000));
     const ready = Promise.race([Promise.all(faces), timeout])
       .then(() => document.fonts.ready)
@@ -1085,7 +1085,7 @@
 
     fit();
     const faces = (deck.fonts || []).map((f) =>
-      document.fonts.load(`${f.style || "normal"} ${f.weight || 400} 32px "${f.family}"`).catch(() => {}));
+      document.fonts.load(`${f.style || "normal"} ${String(f.weight || 400).split(" ")[0]} 32px "${f.family}"`).catch(() => {}));
     const timeout = new Promise((resolve) => setTimeout(resolve, 3000));
     const ready = Promise.race([Promise.all(faces), timeout]).then(() => {
       root.classList.add("svgdeck-ready");
